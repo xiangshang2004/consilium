@@ -1,0 +1,643 @@
+"""Sandbox-native kqueue VNODE wakeup, AF_UNIX broker, and safe macOS cold fallback."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import select
+import socket
+import subprocess
+import threading
+import time
+import urllib.parse
+from typing import Any, Dict, List, Optional
+
+from deskbell.models import VALID_PEERS, resolve_home_dir, validate_peer
+from deskbell.store import BusStore
+
+MAX_UNIX_PATH_BYTES = 96
+
+
+def resolve_socket_path(home_dir: str) -> str:
+    """Resolve an AF_UNIX socket path safely below macOS's 104-byte sun_path limit."""
+    resolved_home = os.path.abspath(os.path.expanduser(home_dir))
+    candidate = os.path.join(resolved_home, "wake.sock")
+    if len(candidate.encode("utf-8")) <= MAX_UNIX_PATH_BYTES:
+        return candidate
+    digest = hashlib.sha256(resolved_home.encode("utf-8")).hexdigest()[:10]
+    return f"/tmp/deskbell-{os.getuid()}-{digest}.sock"
+
+
+def _is_dry_run(dry_run: bool = False) -> bool:
+    return bool(dry_run or os.environ.get("DESKBELL_DRY_RUN") == "1")
+
+
+def _send_json_line(sock: socket.socket, payload: Dict[str, Any]) -> None:
+    data = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+    sock.sendall(data)
+
+
+def _read_json_line(file_obj: Any) -> Optional[Dict[str, Any]]:
+    raw = file_obj.readline()
+    if not raw:
+        return None
+    text = raw.decode("utf-8", errors="replace").strip()
+    if not text:
+        return None
+    return json.loads(text)
+
+
+def _signal_path(home_dir: str, peer_id: str) -> str:
+    sig_dir = os.path.join(home_dir, "signals")
+    os.makedirs(sig_dir, mode=0o700, exist_ok=True)
+    return os.path.join(sig_dir, f"{peer_id}.sig")
+
+
+def _ensure_signal_file(home_dir: str, peer_id: str) -> str:
+    path = _signal_path(home_dir, peer_id)
+    if not os.path.exists(path):
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        os.close(fd)
+    return path
+
+
+def _pulse_signal_file(home_dir: str, peer_id: str) -> None:
+    path = _signal_path(home_dir, peer_id)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.write(fd, f"{time.time_ns()}\n".encode("ascii"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _waiter_dir(home_dir: str, peer_id: str) -> str:
+    path = os.path.join(home_dir, "waiters", peer_id)
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    return path
+
+
+def _write_lease(home_dir: str, peer_id: str, expires_at: float) -> str:
+    wdir = _waiter_dir(home_dir, peer_id)
+    tid = threading.get_ident()
+    lease_path = os.path.join(wdir, f"{os.getpid()}-{tid}.json")
+    payload = json.dumps({"pid": os.getpid(), "expires_at": expires_at})
+    fd = os.open(lease_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(payload)
+    return lease_path
+
+
+def _remove_lease(lease_path: Optional[str]) -> None:
+    if not lease_path:
+        return
+    try:
+        os.unlink(lease_path)
+    except OSError:
+        pass
+
+
+def _is_pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _count_live_leases(home_dir: str, peer_id: str) -> int:
+    wdir = os.path.join(home_dir, "waiters", peer_id)
+    if not os.path.isdir(wdir):
+        return 0
+    now = time.time()
+    live = 0
+    for name in os.listdir(wdir):
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(wdir, name)
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            expires_at = float(data.get("expires_at", 0.0))
+            pid = int(data.get("pid", 0))
+        except (OSError, ValueError, TypeError):
+            _remove_lease(path)
+            continue
+        if expires_at <= now or not _is_pid_alive(pid):
+            _remove_lease(path)
+            continue
+        live += 1
+    return live
+
+
+class _WaiterEntry:
+    """Single connected waiter tracked by WakeBrokerServer."""
+
+    def __init__(self, peer_id: str) -> None:
+        self.peer_id = peer_id
+        self.read_fd, self.write_fd = os.pipe()
+        self.reason = "timeout"
+        self.woke = False
+        self._closed = False
+        self._lock = threading.Lock()
+
+    def signal(self, reason: str = "notify") -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self.reason = reason
+            self.woke = reason == "notify"
+            try:
+                os.write(self.write_fd, b"1")
+            except OSError:
+                pass
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            for fd in (self.read_fd, self.write_fd):
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+
+class WakeBrokerServer:
+    """Threaded AF_UNIX socket broker holding zero-CPU standby waiters."""
+
+    def __init__(self, home_dir: Optional[str] = None) -> None:
+        self.home_dir = resolve_home_dir(home_dir)
+        self.sock_path = resolve_socket_path(self.home_dir)
+        self._lock = threading.Lock()
+        self._waiters: Dict[str, List[_WaiterEntry]] = {p: [] for p in VALID_PEERS}
+        self._server_sock: Optional[socket.socket] = None
+        self._accept_thread: Optional[threading.Thread] = None
+        self._running = False
+
+    def start(self) -> str:
+        """Bind the AF_UNIX socket and start the accept loop thread."""
+        if self._running:
+            return self.sock_path
+        if os.path.exists(self.sock_path):
+            try:
+                os.unlink(self.sock_path)
+            except OSError:
+                pass
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.bind(self.sock_path)
+        try:
+            os.chmod(self.sock_path, 0o600)
+        except OSError:
+            pass
+        sock.listen(64)
+        sock.settimeout(0.5)
+        self._server_sock = sock
+        self._running = True
+        self._accept_thread = threading.Thread(
+            target=self._accept_loop, name="deskbell-wake-accept", daemon=True
+        )
+        self._accept_thread.start()
+        return self.sock_path
+
+    def stop(self) -> None:
+        """Stop the broker, wake any pending waiters, and remove the socket."""
+        self._running = False
+        with self._lock:
+            for entries in self._waiters.values():
+                for entry in list(entries):
+                    entry.signal(reason="shutdown")
+            self._waiters = {p: [] for p in VALID_PEERS}
+        if self._server_sock is not None:
+            try:
+                self._server_sock.close()
+            except OSError:
+                pass
+            self._server_sock = None
+        if self._accept_thread is not None:
+            self._accept_thread.join(timeout=2.0)
+            self._accept_thread = None
+        if os.path.exists(self.sock_path):
+            try:
+                os.unlink(self.sock_path)
+            except OSError:
+                pass
+
+    def __enter__(self) -> "WakeBrokerServer":
+        self.start()
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self.stop()
+
+    def active_counts(self) -> Dict[str, int]:
+        """Return active waiter counts keyed by peer_id."""
+        with self._lock:
+            return {p: len(self._waiters.get(p, [])) for p in VALID_PEERS}
+
+    def notify(self, target_peer: str) -> int:
+        """Wake all active waiters for target_peer (or '*' for all peers)."""
+        if target_peer == "*":
+            peers = list(VALID_PEERS)
+        else:
+            peers = [validate_peer(target_peer)]
+
+        to_wake: List[_WaiterEntry] = []
+        with self._lock:
+            for peer in peers:
+                entries = self._waiters.get(peer, [])
+                to_wake.extend(entries)
+                self._waiters[peer] = []
+
+        for entry in to_wake:
+            entry.signal(reason="notify")
+        return len(to_wake)
+
+    def _accept_loop(self) -> None:
+        while self._running and self._server_sock is not None:
+            try:
+                conn, _ = self._server_sock.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            worker = threading.Thread(
+                target=self._handle_client,
+                args=(conn,),
+                name="deskbell-wake-client",
+                daemon=True,
+            )
+            worker.start()
+
+    def _handle_client(self, conn: socket.socket) -> None:
+        entry: Optional[_WaiterEntry] = None
+        try:
+            conn.settimeout(5.0)
+            reader = conn.makefile("rb")
+            req = _read_json_line(reader)
+            if not isinstance(req, dict):
+                _send_json_line(conn, {"ok": False, "error": "invalid request"})
+                return
+            op = req.get("op")
+            if op == "status":
+                _send_json_line(
+                    conn, {"ok": True, "active_waiters": self.active_counts()}
+                )
+                return
+            if op == "notify":
+                count = self.notify(str(req.get("peer", "")))
+                _send_json_line(conn, {"ok": True, "woken_count": count})
+                return
+            if op == "wait":
+                peer = validate_peer(str(req.get("peer", "")))
+                timeout_sec = max(0.1, float(req.get("timeout_sec", 300.0)))
+                entry = _WaiterEntry(peer)
+                with self._lock:
+                    self._waiters[peer].append(entry)
+                conn.settimeout(None)
+                _send_json_line(conn, {"ok": True, "state": "registered"})
+
+                readable, _, _ = select.select([conn, entry.read_fd], [], [], timeout_sec)
+                if entry.read_fd in readable:
+                    payload = {"ok": True, "woke": entry.woke, "reason": entry.reason}
+                    _send_json_line(conn, payload)
+                elif conn in readable:
+                    pass
+                else:
+                    _send_json_line(conn, {"ok": True, "woke": False, "reason": "timeout"})
+                return
+
+            _send_json_line(conn, {"ok": False, "error": f"unknown op: {op!r}"})
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+        finally:
+            if entry is not None:
+                with self._lock:
+                    entries = self._waiters.get(entry.peer_id, [])
+                    if entry in entries:
+                        entries.remove(entry)
+                entry.close()
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+
+def _broker_rpc(home_dir: str, request: Dict[str, Any], timeout: float = 1.5) -> Optional[Dict[str, Any]]:
+    sock_path = resolve_socket_path(home_dir)
+    if not os.path.exists(sock_path):
+        return None
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        sock.connect(sock_path)
+        _send_json_line(sock, request)
+        reader = sock.makefile("rb")
+        return _read_json_line(reader)
+    except OSError:
+        return None
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
+def notify_peer(home_dir: str, peer_id: str) -> int:
+    """Wake standby waiters via kqueue signal pulse + optional AF_UNIX broker."""
+    resolved = resolve_home_dir(home_dir)
+    peers = list(VALID_PEERS) if peer_id == "*" else [validate_peer(peer_id)]
+    lease_count = 0
+    for p in peers:
+        lease_count += _count_live_leases(resolved, p)
+        _pulse_signal_file(resolved, p)
+
+    target = "*" if peer_id == "*" else peers[0]
+    resp = _broker_rpc(resolved, {"op": "notify", "peer": target}, timeout=1.0)
+    sock_woken = int(resp.get("woken_count", 0)) if (resp and resp.get("ok")) else 0
+    return max(lease_count, sock_woken)
+
+
+def query_active_waiters(home_dir: str) -> Dict[str, int]:
+    """Query active standby waiter counts across lease files and WakeBrokerServer."""
+    resolved = resolve_home_dir(home_dir)
+    lease_counts = {p: _count_live_leases(resolved, p) for p in VALID_PEERS}
+    resp = _broker_rpc(resolved, {"op": "status"}, timeout=1.0)
+    sock_counts = resp.get("active_waiters", {}) if (resp and resp.get("ok")) else {}
+    return {p: max(lease_counts[p], int(sock_counts.get(p, 0))) for p in VALID_PEERS}
+
+
+def _wait_via_kqueue(
+    store: BusStore,
+    home_dir: str,
+    peer: str,
+    timeout_sec: float,
+) -> tuple:
+    sig_path = _ensure_signal_file(home_dir, peer)
+    fd = os.open(sig_path, os.O_RDONLY)
+    kq = select.kqueue()
+    try:
+        kev = select.kevent(
+            fd,
+            filter=select.KQ_FILTER_VNODE,
+            flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+            fflags=select.KQ_NOTE_WRITE | select.KQ_NOTE_EXTEND | select.KQ_NOTE_ATTRIB,
+        )
+        kq.control([kev], 0)
+        # Re-check DB after kernel watch registration to eliminate TOCTOU gap.
+        if store.count_unacked_events(peer) > 0:
+            return True, "immediate_after_register"
+        events = kq.control(None, 1, timeout_sec)
+        if events:
+            return True, "kqueue"
+        return False, "timeout"
+    finally:
+        try:
+            kq.close()
+        except OSError:
+            pass
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def _wait_via_unix_or_poll(
+    store: BusStore,
+    home_dir: str,
+    peer: str,
+    timeout_sec: float,
+    poll_fallback_sec: float,
+) -> tuple:
+    sock_path = resolve_socket_path(home_dir)
+    woke = False
+    source = "timeout"
+    sock_failed = not os.path.exists(sock_path)
+
+    if not sock_failed:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.settimeout(5.0)
+            sock.connect(sock_path)
+            _send_json_line(
+                sock, {"op": "wait", "peer": peer, "timeout_sec": timeout_sec}
+            )
+            reader = sock.makefile("rb")
+            reg = _read_json_line(reader)
+            if reg and reg.get("state") == "registered":
+                if store.count_unacked_events(peer) > 0:
+                    woke = True
+                    source = "immediate_after_register"
+                else:
+                    sock.settimeout(timeout_sec + 2.0)
+                    msg = _read_json_line(reader)
+                    if msg and msg.get("woke"):
+                        woke = True
+                        source = "socket"
+                    elif msg:
+                        source = str(msg.get("reason", "timeout"))
+            else:
+                sock_failed = True
+        except OSError:
+            sock_failed = True
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    if not woke and sock_failed:
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            if store.count_unacked_events(peer) > 0:
+                woke = True
+                source = "poll_fallback"
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(poll_fallback_sec, remaining))
+    return woke, source
+
+
+def wait_for_doorbell(
+    store: BusStore,
+    home_dir: str,
+    peer_id: str,
+    timeout_sec: float = 45.0,
+    poll_fallback_sec: float = 0.5,
+    session_label: str = "",
+    auto_pickup: bool = False,
+) -> Dict[str, Any]:
+    """Block with zero CPU until peer_id receives an event or timeout expires."""
+    resolved = resolve_home_dir(home_dir)
+    peer = validate_peer(peer_id)
+    capped_timeout = max(0.1, float(timeout_sec))
+
+    if store.count_unacked_events(peer) > 0:
+        inbox = (
+            store.pickup_inbox(peer, session_label=session_label, claim_tasks=True)
+            if auto_pickup
+            else None
+        )
+        return {
+            "peer_id": peer,
+            "woke": True,
+            "source": "immediate",
+            "unacked_events": store.count_unacked_events(peer),
+            "inbox": inbox,
+        }
+
+    lease_path: Optional[str] = None
+    woke = False
+    source = "timeout"
+    store.upsert_peer(peer, session_label=session_label, status="standby", waiter_active=True)
+
+    try:
+        lease_path = _write_lease(resolved, peer, time.time() + capped_timeout + 5.0)
+        if hasattr(select, "kqueue"):
+            woke, source = _wait_via_kqueue(store, resolved, peer, capped_timeout)
+        else:
+            woke, source = _wait_via_unix_or_poll(
+                store, resolved, peer, capped_timeout, poll_fallback_sec
+            )
+    finally:
+        _remove_lease(lease_path)
+        store.upsert_peer(
+            peer,
+            session_label=session_label,
+            status="active" if woke else "standby",
+            waiter_active=False,
+        )
+
+    inbox = None
+    if woke and auto_pickup:
+        inbox = store.pickup_inbox(peer, session_label=session_label, claim_tasks=True)
+
+    return {
+        "peer_id": peer,
+        "woke": woke,
+        "source": source,
+        "unacked_events": store.count_unacked_events(peer),
+        "inbox": inbox,
+    }
+
+
+class ColdDoorbell:
+    """Safe, non-focus-stealing macOS notification and deep-link fallback."""
+
+    @staticmethod
+    def build_deeplink(
+        peer_id: str,
+        pickup_prompt: str,
+        workspace_path: str = "",
+    ) -> str:
+        """Build a concise native desktop deep-link URL referencing the MCP task."""
+        peer = validate_peer(peer_id)
+        short_prompt = (pickup_prompt or "Check deskbell inbox").strip()[:180]
+        encoded_q = urllib.parse.quote(short_prompt, safe="")
+        if peer == "claude":
+            if workspace_path:
+                encoded_folder = urllib.parse.quote(workspace_path, safe="")
+                url = f"claude://code/new?q={encoded_q}&folder={encoded_folder}"
+                if len(url) <= 295:
+                    return url
+            return f"claude://new?q={encoded_q}"[:295]
+        if peer == "chatgpt":
+            return f"codex://new?q={encoded_q}"[:295]
+        return "antigravity://"
+
+    @classmethod
+    def ring_cold(
+        cls,
+        peer_id: str,
+        title: str,
+        body: str,
+        pickup_prompt: str,
+        workspace_path: str = "",
+        open_deeplink: bool = False,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        """Emit an argv-safe macOS notification (and optional deep link) without keystrokes."""
+        peer = validate_peer(peer_id)
+        deeplink = cls.build_deeplink(peer, pickup_prompt, workspace_path=workspace_path)
+        effective_dry_run = _is_dry_run(dry_run)
+        subtitle = f"Target: {peer}"
+        notified = False
+        opened = False
+
+        if not effective_dry_run:
+            cmd = [
+                "osascript",
+                "-e",
+                "on run argv",
+                "-e",
+                (
+                    "display notification (item 1 of argv) "
+                    "with title (item 2 of argv) "
+                    "subtitle (item 3 of argv) "
+                    'sound name "Glass"'
+                ),
+                "-e",
+                "end run",
+                "--",
+                body[:240],
+                title[:100],
+                subtitle,
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            notified = res.returncode == 0
+            if open_deeplink:
+                open_res = subprocess.run(
+                    ["open", deeplink], capture_output=True, text=True, check=False
+                )
+                opened = open_res.returncode == 0
+
+        return {
+            "delivery": "cold_notification",
+            "peer_id": peer,
+            "deeplink": deeplink,
+            "pickup_prompt": pickup_prompt,
+            "dry_run": effective_dry_run,
+            "notified": notified,
+            "opened": opened,
+        }
+
+
+def ring_peer(
+    store: BusStore,
+    home_dir: str,
+    peer_id: str,
+    title: str,
+    body: str,
+    pickup_prompt: str,
+    workspace_path: str = "",
+    open_deeplink: bool = False,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Ring peer_id via hot kqueue/socket wakeup if active, else fall back to ColdDoorbell."""
+    peer = validate_peer(peer_id)
+    woken_count = notify_peer(home_dir, peer)
+    if woken_count > 0:
+        return {
+            "delivery": "hot_wakeup",
+            "peer_id": peer,
+            "woken_count": woken_count,
+        }
+    return ColdDoorbell.ring_cold(
+        peer_id=peer,
+        title=title,
+        body=body,
+        pickup_prompt=pickup_prompt,
+        workspace_path=workspace_path,
+        open_deeplink=open_deeplink,
+        dry_run=dry_run,
+    )
