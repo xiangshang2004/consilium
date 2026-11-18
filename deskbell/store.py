@@ -11,16 +11,20 @@ from typing import Any, Dict, Iterator, List, Optional
 import uuid
 
 from deskbell.models import (
+    DEFAULT_CLAIM_TIMEOUT_SEC,
+    NON_TERMINAL_TASK_STATUSES,
     TERMINAL_TASK_STATUSES,
     VALID_ISOLATION,
+    VALID_MISSION_CLOSE_STATUSES,
     VALID_MODEL_TIERS,
     VALID_PEERS,
-    VALID_TASK_STATUSES,
-    resolve_home_dir,
+    resolve_rendezvous_dir,
+    resolve_state_dir,
     utc_now_iso,
     validate_choice,
     validate_peer,
 )
+from deskbell.wakeup import query_active_waiters, write_peer_seq
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS peers (
@@ -58,6 +62,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     prompt TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'queued',
     claimed_by_session TEXT NOT NULL DEFAULT '',
+    claimed_at TEXT NOT NULL DEFAULT '',
     progress_note TEXT NOT NULL DEFAULT '',
     result_summary TEXT NOT NULL DEFAULT '',
     artifacts_json TEXT NOT NULL DEFAULT '[]',
@@ -133,8 +138,13 @@ def _format_countdown(seconds: Optional[int]) -> str:
 class BusStore:
     """Transactional SQLite WAL store for deskbell coordination state."""
 
-    def __init__(self, home_dir: Optional[str] = None) -> None:
-        self.home_dir = resolve_home_dir(home_dir)
+    def __init__(
+        self,
+        home_dir: Optional[str] = None,
+        rendezvous_dir: Optional[str] = None,
+    ) -> None:
+        self.home_dir = resolve_state_dir(home_dir)
+        self.rendezvous_dir = resolve_rendezvous_dir(rendezvous_dir or home_dir)
         self.db_path = os.path.join(self.home_dir, "bus.db")
         self._init_schema()
 
@@ -170,10 +180,35 @@ class BusStore:
         with self._connect() as conn:
             # executescript manages its own implicit transaction in Python sqlite3.
             conn.executescript(SCHEMA_SQL)
+            try:
+                conn.execute("ALTER TABLE tasks ADD COLUMN claimed_at TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
         try:
             os.chmod(self.db_path, 0o600)
         except OSError:
             pass
+
+    def _sync_peer_seq(self, conn: sqlite3.Connection, peer_id: str) -> None:
+        peer = validate_peer(peer_id)
+        row = conn.execute(
+            """
+            SELECT
+                COALESCE(MAX(event_id), 0) AS max_id,
+                SUM(CASE WHEN acked_at = '' THEN 1 ELSE 0 END) AS unacked_cnt
+            FROM events
+            WHERE to_peer = ?
+            """,
+            (peer,),
+        ).fetchone()
+        max_id = int(row["max_id"] or 0) if row else 0
+        unacked = int(row["unacked_cnt"] or 0) if row else 0
+        write_peer_seq(self.rendezvous_dir, peer, seq=max_id, unacked=unacked, pulse=False)
+
+    def _sync_peers_seq(self, conn: sqlite3.Connection, peers: Any) -> None:
+        for peer in sorted(set(peers)):
+            if peer in VALID_PEERS:
+                self._sync_peer_seq(conn, peer)
 
     def _insert_event(
         self,
@@ -208,13 +243,25 @@ class BusStore:
             "acked_at": "",
         }
 
-    def _decode_task(self, row: sqlite3.Row) -> Dict[str, Any]:
+    def _decode_task(
+        self, row: sqlite3.Row, now_dt: Optional[datetime] = None
+    ) -> Dict[str, Any]:
         data = _row_to_dict(row)
         raw_artifacts = data.pop("artifacts_json", "[]")
         try:
             data["artifacts"] = json.loads(raw_artifacts)
         except ValueError:
             data["artifacts"] = []
+        claim_age: Optional[int] = None
+        claim_stale = False
+        if data.get("status") in ("claimed", "running") and data.get("claimed_at"):
+            cdt = _parse_iso(data["claimed_at"])
+            if cdt is not None:
+                ref = now_dt or datetime.now(timezone.utc)
+                claim_age = max(0, int((ref - cdt).total_seconds()))
+                claim_stale = claim_age > DEFAULT_CLAIM_TIMEOUT_SEC
+        data["claim_age_seconds"] = claim_age
+        data["claim_stale"] = claim_stale
         return data
 
     def _decode_event(self, row: sqlite3.Row) -> Dict[str, Any]:
@@ -284,30 +331,32 @@ class BusStore:
         return data
 
     def list_peers(self, stale_seconds: int = 600) -> List[Dict[str, Any]]:
-        """List all known peers plus placeholder entries for uninitialized peers."""
+        """List all known peers overlaid with live flock waiter lease status."""
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM peers ORDER BY peer_id").fetchall()
         by_id = {
             row["peer_id"]: self._decode_peer(row, stale_seconds=stale_seconds)
             for row in rows
         }
+        live_waiters = query_active_waiters(self.rendezvous_dir)
         result: List[Dict[str, Any]] = []
         for peer in VALID_PEERS:
-            if peer in by_id:
-                result.append(by_id[peer])
-            else:
-                result.append(
-                    {
-                        "peer_id": peer,
-                        "session_label": "",
-                        "status": "offline",
-                        "supported_models": [],
-                        "waiter_active": False,
-                        "last_seen_at": "",
-                        "age_seconds": None,
-                        "stale": True,
-                    }
-                )
+            entry = by_id.get(peer) or {
+                "peer_id": peer,
+                "session_label": "",
+                "status": "offline",
+                "supported_models": [],
+                "waiter_active": False,
+                "last_seen_at": "",
+                "age_seconds": None,
+                "stale": True,
+            }
+            if live_waiters.get(peer, 0) > 0:
+                entry = dict(entry)
+                entry["waiter_active"] = True
+                entry["status"] = "standby"
+                entry["stale"] = False
+            result.append(entry)
         return result
 
     def create_mission(
@@ -330,6 +379,7 @@ class BusStore:
         now = utc_now_iso()
         created_tasks: List[Dict[str, Any]] = []
         created_events: List[Dict[str, Any]] = []
+        touched_peers: List[str] = []
 
         with self._connect() as conn:
             with self._tx(conn):
@@ -369,10 +419,12 @@ class BusStore:
                     )
                     created_tasks.append(task_obj)
                     created_events.append(event_obj)
+                    touched_peers.append(task_obj["assignee_peer"])
 
                 mission_row = conn.execute(
                     "SELECT * FROM missions WHERE mission_id = ?", (mission_id,)
                 ).fetchone()
+            self._sync_peers_seq(conn, touched_peers)
 
         return {
             "mission": _row_to_dict(mission_row),
@@ -451,7 +503,7 @@ class BusStore:
         parallel_fanout: int = 1,
         worktree_branch: str = "",
     ) -> Dict[str, Any]:
-        """Dispatch an additional task on an existing mission."""
+        """Dispatch an additional task on an existing open mission."""
         now = utc_now_iso()
         with self._connect() as conn:
             with self._tx(conn):
@@ -460,6 +512,10 @@ class BusStore:
                 ).fetchone()
                 if mission is None:
                     raise KeyError(f"Unknown mission_id: {mission_id}")
+                if mission["status"] in VALID_MISSION_CLOSE_STATUSES:
+                    raise ValueError(
+                        f"Cannot dispatch task on closed mission {mission_id} (status={mission['status']})"
+                    )
                 task_obj, event_obj = self._insert_task_locked(
                     conn,
                     mission_id=mission_id,
@@ -472,10 +528,17 @@ class BusStore:
                     worktree_branch=worktree_branch,
                     now=now,
                 )
-                conn.execute(
-                    "UPDATE missions SET updated_at = ? WHERE mission_id = ?",
-                    (now, mission_id),
+                next_status = (
+                    "active" if mission["status"] == "ready_to_report" else mission["status"]
                 )
+                conn.execute(
+                    "UPDATE missions SET status = ?, updated_at = ? WHERE mission_id = ?",
+                    (next_status, now, mission_id),
+                )
+                mission = conn.execute(
+                    "SELECT * FROM missions WHERE mission_id = ?", (mission_id,)
+                ).fetchone()
+            self._sync_peer_seq(conn, task_obj["assignee_peer"])
         return {"task": task_obj, "event": event_obj, "mission": _row_to_dict(mission)}
 
     def count_unacked_events(self, peer_id: str) -> int:
@@ -487,6 +550,16 @@ class BusStore:
                 (peer,),
             ).fetchone()
         return int(row["cnt"]) if row else 0
+
+    def is_event_acked(self, event_id: int) -> bool:
+        """Return True when an event has been acknowledged or no longer exists."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT acked_at FROM events WHERE event_id = ?", (int(event_id),)
+            ).fetchone()
+        if row is None:
+            return True
+        return bool(row["acked_at"])
 
     def pickup_inbox(
         self,
@@ -538,17 +611,19 @@ class BusStore:
                             UPDATE tasks
                             SET status = 'claimed',
                                 claimed_by_session = ?,
+                                claimed_at = ?,
                                 updated_at = ?
                             WHERE task_id IN ({placeholders})
                               AND status = 'queued'
                             """,
-                            [session_label, now] + task_ids,
+                            [session_label, now, now] + task_ids,
                         )
                         refreshed = conn.execute(
                             f"SELECT * FROM tasks WHERE task_id IN ({placeholders}) ORDER BY created_at ASC",
                             task_ids,
                         ).fetchall()
                         claimed_tasks = [self._decode_task(r) for r in refreshed]
+            self._sync_peer_seq(conn, peer)
 
         return {
             "peer_id": peer,
@@ -556,6 +631,59 @@ class BusStore:
             "claimed_tasks": claimed_tasks,
             "picked_up_at": now,
         }
+
+    def release_stale_claims(
+        self, timeout_sec: int = DEFAULT_CLAIM_TIMEOUT_SEC
+    ) -> List[Dict[str, Any]]:
+        """Re-queue claimed tasks whose claimed_at exceeded timeout_sec."""
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        released: List[Dict[str, Any]] = []
+        touched_peers: List[str] = []
+
+        with self._connect() as conn:
+            with self._tx(conn):
+                rows = conn.execute(
+                    "SELECT * FROM tasks WHERE status = 'claimed' AND claimed_at != ''"
+                ).fetchall()
+                for row in rows:
+                    cdt = _parse_iso(row["claimed_at"])
+                    if cdt is None:
+                        continue
+                    age = (now_dt - cdt).total_seconds()
+                    if age > timeout_sec:
+                        conn.execute(
+                            """
+                            UPDATE tasks
+                            SET status = 'queued',
+                                claimed_by_session = '',
+                                claimed_at = '',
+                                updated_at = ?
+                            WHERE task_id = ? AND status = 'claimed'
+                            """,
+                            (now, row["task_id"]),
+                        )
+                        self._insert_event(
+                            conn,
+                            mission_id=row["mission_id"],
+                            task_id=row["task_id"],
+                            from_peer=row["assignee_peer"],
+                            to_peer=row["assignee_peer"],
+                            kind="task_released",
+                            payload={
+                                "task_id": row["task_id"],
+                                "reason": f"claim timeout exceeded ({int(age)}s > {timeout_sec}s)",
+                            },
+                            created_at=now,
+                        )
+                        updated = conn.execute(
+                            "SELECT * FROM tasks WHERE task_id = ?", (row["task_id"],)
+                        ).fetchone()
+                        if updated is not None:
+                            released.append(self._decode_task(updated, now_dt=now_dt))
+                            touched_peers.append(row["assignee_peer"])
+            self._sync_peers_seq(conn, touched_peers)
+        return released
 
     def report_progress(
         self,
@@ -566,9 +694,11 @@ class BusStore:
         worktree_branch: Optional[str] = None,
         notify_coordinator: bool = False,
     ) -> Dict[str, Any]:
-        """Update task progress and optionally notify the mission coordinator."""
+        """Update non-terminal task progress and optionally notify the mission coordinator."""
         peer = validate_peer(peer_id)
-        normalized_status = validate_choice(status, VALID_TASK_STATUSES, "status")
+        normalized_status = validate_choice(
+            status, NON_TERMINAL_TASK_STATUSES, "non-terminal status"
+        )
         now = utc_now_iso()
         emitted_event: Optional[Dict[str, Any]] = None
 
@@ -579,6 +709,14 @@ class BusStore:
                 ).fetchone()
                 if task is None:
                     raise KeyError(f"Unknown task_id: {task_id}")
+                if task["assignee_peer"] != peer:
+                    raise ValueError(
+                        f"Peer {peer!r} cannot update task {task_id} assigned to {task['assignee_peer']!r}"
+                    )
+                if task["status"] in TERMINAL_TASK_STATUSES:
+                    raise ValueError(
+                        f"Task {task_id} is already terminal (status={task['status']})"
+                    )
                 mission = conn.execute(
                     "SELECT * FROM missions WHERE mission_id = ?", (task["mission_id"],)
                 ).fetchone()
@@ -619,6 +757,8 @@ class BusStore:
                 updated_row = conn.execute(
                     "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
                 ).fetchone()
+            if emitted_event is not None and mission is not None:
+                self._sync_peer_seq(conn, mission["coordinator_peer"])
 
         return {
             "task": self._decode_task(updated_row),
@@ -647,6 +787,14 @@ class BusStore:
                 ).fetchone()
                 if task is None:
                     raise KeyError(f"Unknown task_id: {task_id}")
+                if task["assignee_peer"] != peer:
+                    raise ValueError(
+                        f"Peer {peer!r} cannot complete task {task_id} assigned to {task['assignee_peer']!r}"
+                    )
+                if task["status"] in TERMINAL_TASK_STATUSES:
+                    raise ValueError(
+                        f"Task {task_id} is already terminal (status={task['status']})"
+                    )
                 mission = conn.execute(
                     "SELECT * FROM missions WHERE mission_id = ?", (task["mission_id"],)
                 ).fetchone()
@@ -661,12 +809,13 @@ class BusStore:
                     """,
                     (terminal_status, result_summary, artifacts_json, now, task_id),
                 )
+                placeholders = ",".join("?" for _ in TERMINAL_TASK_STATUSES)
                 remaining_row = conn.execute(
-                    """
+                    f"""
                     SELECT COUNT(*) AS cnt FROM tasks
-                    WHERE mission_id = ? AND status NOT IN ('done', 'failed', 'blocked')
+                    WHERE mission_id = ? AND status NOT IN ({placeholders})
                     """,
-                    (task["mission_id"],),
+                    (task["mission_id"],) + TERMINAL_TASK_STATUSES,
                 ).fetchone()
                 remaining = int(remaining_row["cnt"]) if remaining_row else 0
                 all_finished = remaining == 0
@@ -701,6 +850,7 @@ class BusStore:
                 updated_row = conn.execute(
                     "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
                 ).fetchone()
+            self._sync_peer_seq(conn, mission["coordinator_peer"])
 
         return {
             "task": self._decode_task(updated_row),
@@ -756,7 +906,8 @@ class BusStore:
                         "UPDATE missions SET updated_at = ? WHERE mission_id = ?",
                         (now, mission_id),
                     )
-                    return {
+                    sync_target = mission["coordinator_peer"]
+                    res_payload = {
                         "allowed": False,
                         "round": current_round,
                         "max_rounds": max_rounds,
@@ -767,44 +918,56 @@ class BusStore:
                             "escalating back to coordinator/human."
                         ),
                     }
-
-                new_round = current_round + 1
-                conn.execute(
-                    "UPDATE missions SET current_round = ?, updated_at = ? WHERE mission_id = ?",
-                    (new_round, now, mission_id),
-                )
-                review_event = self._insert_event(
-                    conn,
-                    mission_id=mission_id,
-                    task_id=task_id or "",
-                    from_peer=sender,
-                    to_peer=recipient,
-                    kind="review_request",
-                    payload={
+                else:
+                    new_round = current_round + 1
+                    conn.execute(
+                        "UPDATE missions SET current_round = ?, updated_at = ? WHERE mission_id = ?",
+                        (new_round, now, mission_id),
+                    )
+                    review_event = self._insert_event(
+                        conn,
+                        mission_id=mission_id,
+                        task_id=task_id or "",
+                        from_peer=sender,
+                        to_peer=recipient,
+                        kind="review_request",
+                        payload={
+                            "round": new_round,
+                            "max_rounds": max_rounds,
+                            "summary": summary,
+                            "question": question,
+                        },
+                        created_at=now,
+                    )
+                    sync_target = recipient
+                    res_payload = {
+                        "allowed": True,
                         "round": new_round,
                         "max_rounds": max_rounds,
-                        "summary": summary,
-                        "question": question,
-                    },
-                    created_at=now,
-                )
+                        "to_peer": recipient,
+                        "event": review_event,
+                    }
+            self._sync_peer_seq(conn, sync_target)
 
-        return {
-            "allowed": True,
-            "round": new_round,
-            "max_rounds": max_rounds,
-            "to_peer": recipient,
-            "event": review_event,
-        }
+        return res_payload
 
     def close_mission(
         self,
         mission_id: str,
         final_summary: str,
+        peer_id: Optional[str] = None,
         status: str = "completed",
+        force: bool = False,
     ) -> Dict[str, Any]:
-        """Record the coordinator's synthesized final summary and close a mission."""
+        """Record final summary and close a mission with coordinator/state validation."""
+        close_status = validate_choice(
+            status, VALID_MISSION_CLOSE_STATUSES, "mission close status"
+        )
         now = utc_now_iso()
+        cancelled_task_ids: List[str] = []
+        emitted_events: List[Dict[str, Any]] = []
+        touched_peers: List[str] = []
+
         with self._connect() as conn:
             with self._tx(conn):
                 mission = conn.execute(
@@ -812,18 +975,68 @@ class BusStore:
                 ).fetchone()
                 if mission is None:
                     raise KeyError(f"Unknown mission_id: {mission_id}")
+                if peer_id is not None:
+                    caller = validate_peer(peer_id)
+                    if caller != mission["coordinator_peer"]:
+                        raise ValueError(
+                            f"Only coordinator {mission['coordinator_peer']!r} can close mission {mission_id}, got {caller!r}"
+                        )
+                if mission["status"] in VALID_MISSION_CLOSE_STATUSES:
+                    raise ValueError(
+                        f"Mission {mission_id} is already closed (status={mission['status']})"
+                    )
+
+                placeholders = ",".join("?" for _ in NON_TERMINAL_TASK_STATUSES)
+                open_rows = conn.execute(
+                    f"SELECT * FROM tasks WHERE mission_id = ? AND status IN ({placeholders})",
+                    (mission_id,) + NON_TERMINAL_TASK_STATUSES,
+                ).fetchall()
+                if open_rows and not force:
+                    raise ValueError(
+                        f"Mission {mission_id} has {len(open_rows)} non-terminal task(s); pass force=True to cancel them"
+                    )
+                if open_rows and force:
+                    for row in open_rows:
+                        conn.execute(
+                            "UPDATE tasks SET status = 'cancelled', updated_at = ? WHERE task_id = ?",
+                            (now, row["task_id"]),
+                        )
+                        cancelled_task_ids.append(row["task_id"])
+                        evt = self._insert_event(
+                            conn,
+                            mission_id=mission_id,
+                            task_id=row["task_id"],
+                            from_peer=mission["coordinator_peer"],
+                            to_peer=row["assignee_peer"],
+                            kind="mission_closed",
+                            payload={
+                                "mission_id": mission_id,
+                                "task_id": row["task_id"],
+                                "close_status": close_status,
+                                "final_summary": final_summary[:200],
+                            },
+                            created_at=now,
+                        )
+                        emitted_events.append(evt)
+                        touched_peers.append(row["assignee_peer"])
+
                 conn.execute(
                     """
                     UPDATE missions
                     SET final_summary = ?, status = ?, updated_at = ?
                     WHERE mission_id = ?
                     """,
-                    (final_summary, status, now, mission_id),
+                    (final_summary, close_status, now, mission_id),
                 )
                 updated = conn.execute(
                     "SELECT * FROM missions WHERE mission_id = ?", (mission_id,)
                 ).fetchone()
-        return _row_to_dict(updated)
+            self._sync_peers_seq(conn, touched_peers)
+
+        out = _row_to_dict(updated)
+        out["cancelled_task_ids"] = cancelled_task_ids
+        out["events"] = emitted_events
+        return out
 
     def get_mission_snapshot(self, mission_id: Optional[str] = None) -> Dict[str, Any]:
         """Return full mission details (with tasks and recent events) or mission list."""

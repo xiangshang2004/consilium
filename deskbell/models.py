@@ -1,4 +1,4 @@
-"""Shared constants, validation helpers, and home/token paths for deskbell."""
+"""Shared constants, validation helpers, and split state/rendezvous paths for deskbell."""
 
 from __future__ import annotations
 
@@ -6,14 +6,26 @@ from datetime import datetime, timezone
 import os
 import secrets
 import stat
+import tempfile
 from typing import Optional
 
 VALID_PEERS = ("chatgpt", "claude", "antigravity")
 VALID_ISOLATION = ("worktree", "read_only", "shared")
 VALID_MODEL_TIERS = ("pro_reasoning", "balanced", "fast", "custom")
-VALID_TASK_STATUSES = ("queued", "claimed", "running", "done", "failed", "blocked")
-TERMINAL_TASK_STATUSES = ("done", "failed", "blocked")
+VALID_TASK_STATUSES = (
+    "queued",
+    "claimed",
+    "running",
+    "done",
+    "failed",
+    "blocked",
+    "cancelled",
+)
+NON_TERMINAL_TASK_STATUSES = ("queued", "claimed", "running")
+TERMINAL_TASK_STATUSES = ("done", "failed", "blocked", "cancelled")
+VALID_MISSION_CLOSE_STATUSES = ("completed", "cancelled", "failed")
 
+DEFAULT_CLAIM_TIMEOUT_SEC = 1800
 DEFAULT_HTTP_HOST = "127.0.0.1"
 DEFAULT_HTTP_PORT = 18920
 
@@ -41,33 +53,52 @@ def validate_choice(value: str, allowed: tuple, label: str) -> str:
     return normalized
 
 
-def resolve_home_dir(override: Optional[str] = None) -> str:
-    """Resolve and privately create the deskbell state directory (mode 0700).
-
-    Defaults to /tmp/deskbell-<uid> so both host MCP servers and macOS
-    Seatbelt-sandboxed desktop commands can share SQLite WAL and kqueue signals.
-    """
-    default_dir = f"/tmp/deskbell-{os.getuid()}"
-    raw = override or os.environ.get("DESKBELL_HOME") or default_dir
-    home_dir = os.path.abspath(os.path.expanduser(raw))
-    os.makedirs(home_dir, mode=0o700, exist_ok=True)
-    st = os.lstat(home_dir)
+def _ensure_private_dir(raw_path: str, label: str) -> str:
+    """Create a private 0700 directory and reject symlinks or foreign UID ownership."""
+    resolved = os.path.abspath(os.path.expanduser(raw_path))
+    os.makedirs(resolved, mode=0o700, exist_ok=True)
+    st = os.lstat(resolved)
     if stat.S_ISLNK(st.st_mode):
-        raise PermissionError(f"Refusing symlinked deskbell home directory: {home_dir}")
+        raise PermissionError(f"Refusing symlinked deskbell {label} directory: {resolved}")
     if st.st_uid != os.getuid():
         raise PermissionError(
-            f"Refusing deskbell home directory owned by uid {st.st_uid}: {home_dir}"
+            f"Refusing deskbell {label} directory owned by uid {st.st_uid}: {resolved}"
         )
     try:
-        os.chmod(home_dir, 0o700)
+        os.chmod(resolved, 0o700)
     except OSError:
         pass
-    return home_dir
+    return resolved
 
 
-def ensure_auth_token(home_dir: str) -> str:
-    """Return the local Bearer token stored in $DESKBELL_HOME/auth.token (0600)."""
-    token_path = os.path.join(home_dir, "auth.token")
+def resolve_state_dir(override: Optional[str] = None) -> str:
+    """Resolve the persistent state directory (defaults to ~/Library/Application Support/deskbell)."""
+    default_dir = os.path.join("~", "Library", "Application Support", "deskbell")
+    raw = (
+        override
+        or os.environ.get("DESKBELL_STATE_DIR")
+        or os.environ.get("DESKBELL_HOME")
+        or default_dir
+    )
+    return _ensure_private_dir(raw, "state")
+
+
+def resolve_home_dir(override: Optional[str] = None) -> str:
+    """Backward-compatible alias to resolve_state_dir."""
+    return resolve_state_dir(override)
+
+
+def resolve_rendezvous_dir(override: Optional[str] = None) -> str:
+    """Resolve the ephemeral /tmp rendezvous directory for kqueue signals, leases, and wake.sock."""
+    default_dir = f"/tmp/deskbell-{os.getuid()}"
+    raw = override or os.environ.get("DESKBELL_RENDEZVOUS_DIR") or default_dir
+    return _ensure_private_dir(raw, "rendezvous")
+
+
+def ensure_auth_token(state_dir: str) -> str:
+    """Return the local Bearer token stored in <state_dir>/auth.token (0600)."""
+    resolved_dir = resolve_state_dir(state_dir)
+    token_path = os.path.join(resolved_dir, "auth.token")
     if os.path.exists(token_path):
         with open(token_path, "r", encoding="utf-8") as handle:
             existing = handle.read().strip()
@@ -75,9 +106,20 @@ def ensure_auth_token(home_dir: str) -> str:
             return existing
 
     token = secrets.token_hex(32)
-    fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(token + "\n")
+    fd, tmp_path = tempfile.mkstemp(prefix=".auth.token.", dir=resolved_dir)
+    try:
+        os.chmod(tmp_path, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(token + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, token_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
     try:
         os.chmod(token_path, 0o600)
     except OSError:

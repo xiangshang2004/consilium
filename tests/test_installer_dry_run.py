@@ -1,4 +1,4 @@
-"""Tests for scripts/install.py dry-run safety, idempotent apply, backups, and uninstall."""
+"""Tests for scripts/install.py dry-run, claude CLI sync, duplicate TOML guard, and safe uninstall."""
 
 from __future__ import annotations
 
@@ -15,8 +15,10 @@ class InstallerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp_home = tempfile.mkdtemp(prefix="dbell-inst-", dir="/tmp")
         self.repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        os.environ["DESKBELL_RENDEZVOUS_DIR"] = tempfile.mkdtemp(
+            prefix="dbell-irv-", dir="/tmp"
+        )
 
-        # Seed existing configs that must be preserved untouched around deskbell entries.
         gemini_cfg = os.path.join(self.tmp_home, ".gemini", "config", "mcp_config.json")
         os.makedirs(os.path.dirname(gemini_cfg), exist_ok=True)
         with open(gemini_cfg, "w", encoding="utf-8") as handle:
@@ -28,6 +30,9 @@ class InstallerTests(unittest.TestCase):
             handle.write('model = "gpt-5"\n')
 
     def tearDown(self) -> None:
+        rv = os.environ.pop("DESKBELL_RENDEZVOUS_DIR", None)
+        if rv:
+            shutil.rmtree(rv, ignore_errors=True)
         shutil.rmtree(self.tmp_home, ignore_errors=True)
 
     def test_dry_run_does_not_mutate_files(self) -> None:
@@ -42,11 +47,16 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.tmp_home, ".claude.json")))
         self.assertFalse(
             os.path.exists(
+                os.path.join(self.tmp_home, "Library", "Application Support", "deskbell", "auth.token")
+            )
+        )
+        self.assertFalse(
+            os.path.exists(
                 os.path.join(self.tmp_home, "Library", "LaunchAgents", "com.up.deskbell.plist")
             )
         )
 
-    def test_apply_idempotency_backup_and_uninstall(self) -> None:
+    def test_apply_idempotency_token_paths_and_safe_uninstall(self) -> None:
         first = run_installer(
             mode="apply",
             target_home=self.tmp_home,
@@ -54,18 +64,63 @@ class InstallerTests(unittest.TestCase):
             port=18920,
         )
         self.assertTrue(os.path.isdir(first["backup_root"]))
+        token_path = os.path.join(
+            self.tmp_home, "Library", "Application Support", "deskbell", "auth.token"
+        )
+        self.assertTrue(os.path.exists(token_path))
+        with open(token_path, "r", encoding="utf-8") as handle:
+            token = handle.read().strip()
+        self.assertTrue(os.path.isdir(os.path.join(self.tmp_home, "Library", "Logs", "deskbell")))
 
         gemini_cfg = os.path.join(self.tmp_home, ".gemini", "config", "mcp_config.json")
         with open(gemini_cfg, "r", encoding="utf-8") as handle:
             gemini_data = json.load(handle)
         self.assertIn("keep-me", gemini_data["mcpServers"])
-        self.assertIn("deskbell", gemini_data["mcpServers"])
+        self.assertEqual(
+            gemini_data["mcpServers"]["deskbell"]["url"],
+            f"http://127.0.0.1:18920/mcp?token={token}",
+        )
 
+        # Claude Code config written via `claude mcp add -s user`
+        claude_json = os.path.join(self.tmp_home, ".claude.json")
+        self.assertTrue(os.path.exists(claude_json))
+        with open(claude_json, "r", encoding="utf-8") as handle:
+            claude_data = json.load(handle)
+        self.assertEqual(
+            claude_data["mcpServers"]["deskbell"],
+            {
+                "type": "http",
+                "url": "http://127.0.0.1:18920/mcp",
+                "headers": {"Authorization": f"Bearer {token}"},
+            },
+        )
+
+        # Codex TOML includes tool_timeout_sec and http_headers
         codex_cfg = os.path.join(self.tmp_home, ".codex", "config.toml")
         with open(codex_cfg, "r", encoding="utf-8") as handle:
             toml_text = handle.read()
         self.assertIn('model = "gpt-5"', toml_text)
         self.assertIn("[mcp_servers.deskbell]", toml_text)
+        self.assertIn("tool_timeout_sec = 330", toml_text)
+        self.assertIn(f'http_headers = {{ Authorization = "Bearer {token}" }}', toml_text)
+
+        # Claude agent templates: opus only, no sonnet/haiku
+        agents_dir = os.path.join(self.tmp_home, ".claude", "agents")
+        agent_files = sorted(os.listdir(agents_dir))
+        self.assertEqual(
+            agent_files,
+            ["opus-architect.md", "opus-builder.md", "opus-scout.md"],
+        )
+
+        # launchd plist points logs to ~/Library/Logs/deskbell and passes --require-token
+        plist_path = os.path.join(
+            self.tmp_home, "Library", "LaunchAgents", "com.up.deskbell.plist"
+        )
+        with open(plist_path, "r", encoding="utf-8") as handle:
+            plist_text = handle.read()
+        self.assertIn("--require-token", plist_text)
+        self.assertIn("<key>ThrottleInterval</key>", plist_text)
+        self.assertIn("Library/Logs/deskbell/deskbell.out.log", plist_text)
 
         # Second apply must be completely idempotent.
         second = run_installer(
@@ -76,27 +131,49 @@ class InstallerTests(unittest.TestCase):
         )
         self.assertTrue(all(op["action"] == "unchanged" for op in second["operations"]))
 
-        # Uninstall must remove deskbell while preserving user configs.
-        run_installer(
+        # Modify claude skill file to verify --uninstall skips user-modified files.
+        claude_skill = os.path.join(
+            self.tmp_home, ".claude", "skills", "deskbell-collab", "SKILL.md"
+        )
+        with open(claude_skill, "a", encoding="utf-8") as handle:
+            handle.write("\n# User customization\n")
+
+        uninstall_report = run_installer(
             mode="uninstall",
             target_home=self.tmp_home,
             repo_dir=self.repo_dir,
             port=18920,
         )
+        ops_by_target = {op["target"]: op for op in uninstall_report["operations"]}
+        self.assertEqual(ops_by_target["claude_skill"]["action"], "skipped_modified")
+        self.assertTrue(os.path.exists(claude_skill))
+
         with open(gemini_cfg, "r", encoding="utf-8") as handle:
             gemini_after = json.load(handle)
         self.assertIn("keep-me", gemini_after["mcpServers"])
         self.assertNotIn("deskbell", gemini_after["mcpServers"])
 
+        with open(claude_json, "r", encoding="utf-8") as handle:
+            claude_after = json.load(handle)
+        self.assertNotIn("deskbell", claude_after.get("mcpServers", {}))
+
         with open(codex_cfg, "r", encoding="utf-8") as handle:
             toml_after = handle.read()
         self.assertIn('model = "gpt-5"', toml_after)
         self.assertNotIn("[mcp_servers.deskbell]", toml_after)
-        self.assertFalse(
-            os.path.exists(
-                os.path.join(self.tmp_home, "Library", "LaunchAgents", "com.up.deskbell.plist")
+        self.assertFalse(os.path.exists(plist_path))
+
+    def test_duplicate_codex_toml_table_outside_block_rejected(self) -> None:
+        codex_cfg = os.path.join(self.tmp_home, ".codex", "config.toml")
+        with open(codex_cfg, "a", encoding="utf-8") as handle:
+            handle.write('\n[mcp_servers.deskbell]\nurl = "http://127.0.0.1:9999/mcp"\n')
+        with self.assertRaises(ValueError):
+            run_installer(
+                mode="dry-run",
+                target_home=self.tmp_home,
+                repo_dir=self.repo_dir,
+                port=18920,
             )
-        )
 
 
 if __name__ == "__main__":

@@ -1,32 +1,44 @@
-"""Sandbox-native kqueue VNODE wakeup, AF_UNIX broker, and safe macOS cold fallback."""
+"""DB-free kqueue VNODE wakeup, flock leases, AF_UNIX broker, and safe macOS cold fallback."""
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import select
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.parse
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
-from deskbell.models import VALID_PEERS, resolve_home_dir, validate_peer
-from deskbell.store import BusStore
+from deskbell.models import (
+    VALID_PEERS,
+    _ensure_private_dir,
+    resolve_rendezvous_dir,
+    validate_peer,
+)
+
+if TYPE_CHECKING:
+    from deskbell.store import BusStore
 
 MAX_UNIX_PATH_BYTES = 96
+DEFAULT_DEEPLINK_MAX_LEN = 2000
+DEFAULT_ESCALATION_SEC = 60.0
 
 
-def resolve_socket_path(home_dir: str) -> str:
-    """Resolve an AF_UNIX socket path safely below macOS's 104-byte sun_path limit."""
-    resolved_home = os.path.abspath(os.path.expanduser(home_dir))
-    candidate = os.path.join(resolved_home, "wake.sock")
+def resolve_socket_path(rendezvous_dir: str) -> str:
+    """Resolve an AF_UNIX socket path inside a private 0700 directory below 104 bytes."""
+    resolved_rv = resolve_rendezvous_dir(rendezvous_dir)
+    candidate = os.path.join(resolved_rv, "wake.sock")
     if len(candidate.encode("utf-8")) <= MAX_UNIX_PATH_BYTES:
         return candidate
-    digest = hashlib.sha256(resolved_home.encode("utf-8")).hexdigest()[:10]
-    return f"/tmp/deskbell-{os.getuid()}-{digest}.sock"
+    sock_dir = _ensure_private_dir(f"/tmp/deskbell-{os.getuid()}/sock", "socket")
+    digest = hashlib.sha256(resolved_rv.encode("utf-8")).hexdigest()[:10]
+    return os.path.join(sock_dir, f"{digest}.sock")
 
 
 def _is_dry_run(dry_run: bool = False) -> bool:
@@ -48,22 +60,28 @@ def _read_json_line(file_obj: Any) -> Optional[Dict[str, Any]]:
     return json.loads(text)
 
 
-def _signal_path(home_dir: str, peer_id: str) -> str:
-    sig_dir = os.path.join(home_dir, "signals")
-    os.makedirs(sig_dir, mode=0o700, exist_ok=True)
-    return os.path.join(sig_dir, f"{peer_id}.sig")
+def _signals_dir(rendezvous_dir: str) -> str:
+    return _ensure_private_dir(os.path.join(rendezvous_dir, "signals"), "signals")
 
 
-def _ensure_signal_file(home_dir: str, peer_id: str) -> str:
-    path = _signal_path(home_dir, peer_id)
+def _signal_path(rendezvous_dir: str, peer_id: str) -> str:
+    return os.path.join(_signals_dir(rendezvous_dir), f"{peer_id}.sig")
+
+
+def _seq_path(rendezvous_dir: str, peer_id: str) -> str:
+    return os.path.join(_signals_dir(rendezvous_dir), f"{peer_id}.seq")
+
+
+def _ensure_signal_file(rendezvous_dir: str, peer_id: str) -> str:
+    path = _signal_path(rendezvous_dir, peer_id)
     if not os.path.exists(path):
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         os.close(fd)
     return path
 
 
-def _pulse_signal_file(home_dir: str, peer_id: str) -> None:
-    path = _signal_path(home_dir, peer_id)
+def _pulse_signal_file(rendezvous_dir: str, peer_id: str) -> None:
+    path = _signal_path(rendezvous_dir, peer_id)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
         os.write(fd, f"{time.time_ns()}\n".encode("ascii"))
@@ -72,68 +90,164 @@ def _pulse_signal_file(home_dir: str, peer_id: str) -> None:
         os.close(fd)
 
 
-def _waiter_dir(home_dir: str, peer_id: str) -> str:
-    path = os.path.join(home_dir, "waiters", peer_id)
-    os.makedirs(path, mode=0o700, exist_ok=True)
-    return path
+def write_peer_seq(
+    rendezvous_dir: str,
+    peer_id: str,
+    seq: int,
+    unacked: int,
+    *,
+    pulse: bool = False,
+) -> None:
+    """Atomically write signals/<peer>.seq so sandboxed waiters never need bus.db."""
+    peer = validate_peer(peer_id)
+    resolved_rv = resolve_rendezvous_dir(rendezvous_dir)
+    sig_dir = _signals_dir(resolved_rv)
+    target = os.path.join(sig_dir, f"{peer}.seq")
+    prev = read_peer_seq(resolved_rv, peer)
+    monotonic_seq = max(int(seq), int(prev.get("seq", 0)))
+    payload = json.dumps(
+        {"seq": monotonic_seq, "unacked": int(unacked), "updated_at": time.time()}
+    )
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{peer}.seq.", dir=sig_dir)
+    try:
+        os.chmod(tmp_path, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, target)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    if pulse:
+        _pulse_signal_file(resolved_rv, peer)
 
 
-def _write_lease(home_dir: str, peer_id: str, expires_at: float) -> str:
-    wdir = _waiter_dir(home_dir, peer_id)
+def read_peer_seq(rendezvous_dir: str, peer_id: str) -> Dict[str, Any]:
+    """Read the latest signals/<peer>.seq state without touching SQLite."""
+    peer = validate_peer(peer_id)
+    resolved_rv = resolve_rendezvous_dir(rendezvous_dir)
+    target = _seq_path(resolved_rv, peer)
+    if not os.path.exists(target):
+        return {"seq": 0, "unacked": 0, "updated_at": 0.0}
+    try:
+        with open(target, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        return {
+            "seq": int(data.get("seq", 0)),
+            "unacked": int(data.get("unacked", 0)),
+            "updated_at": float(data.get("updated_at", 0.0)),
+        }
+    except (OSError, ValueError, TypeError):
+        return {"seq": 0, "unacked": 0, "updated_at": 0.0}
+
+
+def _waiter_dir(rendezvous_dir: str, peer_id: str) -> str:
+    return _ensure_private_dir(os.path.join(rendezvous_dir, "waiters", peer_id), "waiters")
+
+
+def _acquire_lease(
+    rendezvous_dir: str,
+    peer_id: str,
+    expires_at: float,
+    session_label: str = "",
+) -> Tuple[int, str]:
+    """Create and exclusively flock a standby waiter lease file."""
+    wdir = _waiter_dir(rendezvous_dir, peer_id)
     tid = threading.get_ident()
-    lease_path = os.path.join(wdir, f"{os.getpid()}-{tid}.json")
-    payload = json.dumps({"pid": os.getpid(), "expires_at": expires_at})
-    fd = os.open(lease_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(payload)
-    return lease_path
-
-
-def _remove_lease(lease_path: Optional[str]) -> None:
-    if not lease_path:
-        return
+    lease_path = os.path.join(wdir, f"{os.getpid()}-{tid}.lease")
+    fd = os.open(lease_path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        os.unlink(lease_path)
-    except OSError:
-        pass
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        payload = json.dumps(
+            {
+                "pid": os.getpid(),
+                "session_label": session_label,
+                "expires_at": float(expires_at),
+            }
+        ).encode("utf-8")
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, payload)
+        os.fsync(fd)
+        return fd, lease_path
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
 
 
-def _is_pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
+def _release_lease(lease_fd: Optional[int], lease_path: Optional[str]) -> None:
+    """Remove lease file while still holding flock, then unlock and close fd."""
+    if lease_path:
+        try:
+            os.unlink(lease_path)
+        except OSError:
+            pass
+    if lease_fd is not None:
+        try:
+            fcntl.flock(lease_fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            os.close(lease_fd)
+        except OSError:
+            pass
 
 
-def _count_live_leases(home_dir: str, peer_id: str) -> int:
-    wdir = os.path.join(home_dir, "waiters", peer_id)
+def _count_live_leases(rendezvous_dir: str, peer_id: str) -> int:
+    """Count waiter leases guarded by active kernel flock; prune dead or expired ones."""
+    wdir = os.path.join(rendezvous_dir, "waiters", peer_id)
     if not os.path.isdir(wdir):
         return 0
     now = time.time()
     live = 0
     for name in os.listdir(wdir):
-        if not name.endswith(".json"):
+        if not (name.endswith(".lease") or name.endswith(".json")):
             continue
         path = os.path.join(wdir, name)
         try:
-            with open(path, "r", encoding="utf-8") as handle:
-                data = json.load(handle)
-            expires_at = float(data.get("expires_at", 0.0))
-            pid = int(data.get("pid", 0))
-        except (OSError, ValueError, TypeError):
-            _remove_lease(path)
+            fd = os.open(path, os.O_RDWR)
+        except OSError:
             continue
-        if expires_at <= now or not _is_pid_alive(pid):
-            _remove_lease(path)
-            continue
-        live += 1
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                # An active process holds the exclusive flock; check expiry only.
+                try:
+                    with open(path, "r", encoding="utf-8") as handle:
+                        data = json.load(handle)
+                    expires_at = float(data.get("expires_at", 0.0))
+                except (OSError, ValueError, TypeError):
+                    expires_at = now + 1.0
+                if expires_at <= now:
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        pass
+                else:
+                    live += 1
+            else:
+                # Lock acquired => previous owner exited/crashed (even if PID was reused).
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
     return live
 
 
@@ -174,9 +288,10 @@ class _WaiterEntry:
 class WakeBrokerServer:
     """Threaded AF_UNIX socket broker holding zero-CPU standby waiters."""
 
-    def __init__(self, home_dir: Optional[str] = None) -> None:
-        self.home_dir = resolve_home_dir(home_dir)
-        self.sock_path = resolve_socket_path(self.home_dir)
+    def __init__(self, rendezvous_dir: Optional[str] = None) -> None:
+        self.rendezvous_dir = resolve_rendezvous_dir(rendezvous_dir)
+        self.home_dir = self.rendezvous_dir
+        self.sock_path = resolve_socket_path(self.rendezvous_dir)
         self._lock = threading.Lock()
         self._waiters: Dict[str, List[_WaiterEntry]] = {p: [] for p in VALID_PEERS}
         self._server_sock: Optional[socket.socket] = None
@@ -331,8 +446,12 @@ class WakeBrokerServer:
                 pass
 
 
-def _broker_rpc(home_dir: str, request: Dict[str, Any], timeout: float = 1.5) -> Optional[Dict[str, Any]]:
-    sock_path = resolve_socket_path(home_dir)
+def _broker_rpc(
+    rendezvous_dir: str,
+    request: Dict[str, Any],
+    timeout: float = 1.5,
+) -> Optional[Dict[str, Any]]:
+    sock_path = resolve_socket_path(rendezvous_dir)
     if not os.path.exists(sock_path):
         return None
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -351,37 +470,44 @@ def _broker_rpc(home_dir: str, request: Dict[str, Any], timeout: float = 1.5) ->
             pass
 
 
-def notify_peer(home_dir: str, peer_id: str) -> int:
+def notify_peer(rendezvous_dir: str, peer_id: str) -> int:
     """Wake standby waiters via kqueue signal pulse + optional AF_UNIX broker."""
-    resolved = resolve_home_dir(home_dir)
+    resolved_rv = resolve_rendezvous_dir(rendezvous_dir)
     peers = list(VALID_PEERS) if peer_id == "*" else [validate_peer(peer_id)]
     lease_count = 0
     for p in peers:
-        lease_count += _count_live_leases(resolved, p)
-        _pulse_signal_file(resolved, p)
+        lease_count += _count_live_leases(resolved_rv, p)
+        cur = read_peer_seq(resolved_rv, p)
+        write_peer_seq(
+            resolved_rv,
+            p,
+            seq=cur["seq"] + 1,
+            unacked=cur["unacked"],
+            pulse=True,
+        )
 
     target = "*" if peer_id == "*" else peers[0]
-    resp = _broker_rpc(resolved, {"op": "notify", "peer": target}, timeout=1.0)
+    resp = _broker_rpc(resolved_rv, {"op": "notify", "peer": target}, timeout=1.0)
     sock_woken = int(resp.get("woken_count", 0)) if (resp and resp.get("ok")) else 0
     return max(lease_count, sock_woken)
 
 
-def query_active_waiters(home_dir: str) -> Dict[str, int]:
-    """Query active standby waiter counts across lease files and WakeBrokerServer."""
-    resolved = resolve_home_dir(home_dir)
-    lease_counts = {p: _count_live_leases(resolved, p) for p in VALID_PEERS}
-    resp = _broker_rpc(resolved, {"op": "status"}, timeout=1.0)
+def query_active_waiters(rendezvous_dir: str) -> Dict[str, int]:
+    """Query active standby waiter counts across flock leases and WakeBrokerServer."""
+    resolved_rv = resolve_rendezvous_dir(rendezvous_dir)
+    lease_counts = {p: _count_live_leases(resolved_rv, p) for p in VALID_PEERS}
+    resp = _broker_rpc(resolved_rv, {"op": "status"}, timeout=1.0)
     sock_counts = resp.get("active_waiters", {}) if (resp and resp.get("ok")) else {}
     return {p: max(lease_counts[p], int(sock_counts.get(p, 0))) for p in VALID_PEERS}
 
 
 def _wait_via_kqueue(
-    store: BusStore,
-    home_dir: str,
+    rendezvous_dir: str,
     peer: str,
     timeout_sec: float,
-) -> tuple:
-    sig_path = _ensure_signal_file(home_dir, peer)
+    initial_seq: int,
+) -> Tuple[bool, str]:
+    sig_path = _ensure_signal_file(rendezvous_dir, peer)
     fd = os.open(sig_path, os.O_RDONLY)
     kq = select.kqueue()
     try:
@@ -392,13 +518,21 @@ def _wait_via_kqueue(
             fflags=select.KQ_NOTE_WRITE | select.KQ_NOTE_EXTEND | select.KQ_NOTE_ATTRIB,
         )
         kq.control([kev], 0)
-        # Re-check DB after kernel watch registration to eliminate TOCTOU gap.
-        if store.count_unacked_events(peer) > 0:
+        cur = read_peer_seq(rendezvous_dir, peer)
+        if cur["unacked"] > 0 or cur["seq"] > initial_seq:
             return True, "immediate_after_register"
-        events = kq.control(None, 1, timeout_sec)
-        if events:
-            return True, "kqueue"
-        return False, "timeout"
+
+        deadline = time.monotonic() + timeout_sec
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False, "timeout"
+            events = kq.control(None, 1, remaining)
+            if not events:
+                return False, "timeout"
+            cur = read_peer_seq(rendezvous_dir, peer)
+            if cur["unacked"] > 0 or cur["seq"] > initial_seq:
+                return True, "kqueue"
     finally:
         try:
             kq.close()
@@ -411,13 +545,13 @@ def _wait_via_kqueue(
 
 
 def _wait_via_unix_or_poll(
-    store: BusStore,
-    home_dir: str,
+    rendezvous_dir: str,
     peer: str,
     timeout_sec: float,
     poll_fallback_sec: float,
-) -> tuple:
-    sock_path = resolve_socket_path(home_dir)
+    initial_seq: int,
+) -> Tuple[bool, str]:
+    sock_path = resolve_socket_path(rendezvous_dir)
     woke = False
     source = "timeout"
     sock_failed = not os.path.exists(sock_path)
@@ -433,7 +567,8 @@ def _wait_via_unix_or_poll(
             reader = sock.makefile("rb")
             reg = _read_json_line(reader)
             if reg and reg.get("state") == "registered":
-                if store.count_unacked_events(peer) > 0:
+                cur = read_peer_seq(rendezvous_dir, peer)
+                if cur["unacked"] > 0 or cur["seq"] > initial_seq:
                     woke = True
                     source = "immediate_after_register"
                 else:
@@ -457,7 +592,8 @@ def _wait_via_unix_or_poll(
     if not woke and sock_failed:
         deadline = time.monotonic() + timeout_sec
         while time.monotonic() < deadline:
-            if store.count_unacked_events(peer) > 0:
+            cur = read_peer_seq(rendezvous_dir, peer)
+            if cur["unacked"] > 0 or cur["seq"] > initial_seq:
                 woke = True
                 source = "poll_fallback"
                 break
@@ -469,66 +605,99 @@ def _wait_via_unix_or_poll(
 
 
 def wait_for_doorbell(
-    store: BusStore,
-    home_dir: str,
-    peer_id: str,
+    store: Optional["BusStore"] = None,
+    home_dir: Optional[str] = None,
+    peer_id: str = "",
     timeout_sec: float = 45.0,
     poll_fallback_sec: float = 0.5,
     session_label: str = "",
     auto_pickup: bool = False,
+    rendezvous_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Block with zero CPU until peer_id receives an event or timeout expires."""
-    resolved = resolve_home_dir(home_dir)
+    """Block silently with zero DB writes using signals/<peer>.seq + flock leases."""
     peer = validate_peer(peer_id)
-    capped_timeout = max(0.1, float(timeout_sec))
+    if rendezvous_dir:
+        resolved_rv = resolve_rendezvous_dir(rendezvous_dir)
+    elif store is not None:
+        resolved_rv = store.rendezvous_dir
+    else:
+        resolved_rv = resolve_rendezvous_dir(home_dir)
 
-    if store.count_unacked_events(peer) > 0:
+    capped_timeout = max(0.1, float(timeout_sec))
+    seq_before = read_peer_seq(resolved_rv, peer)
+    if seq_before["unacked"] == 0 and store is not None:
+        db_unacked = store.count_unacked_events(peer)
+        if db_unacked > 0:
+            write_peer_seq(resolved_rv, peer, seq=seq_before["seq"] + 1, unacked=db_unacked)
+            seq_before = read_peer_seq(resolved_rv, peer)
+
+    if seq_before["unacked"] > 0:
         inbox = (
             store.pickup_inbox(peer, session_label=session_label, claim_tasks=True)
-            if auto_pickup
+            if (auto_pickup and store is not None)
             else None
         )
         return {
             "peer_id": peer,
             "woke": True,
             "source": "immediate",
-            "unacked_events": store.count_unacked_events(peer),
+            "unacked_events": read_peer_seq(resolved_rv, peer)["unacked"],
             "inbox": inbox,
         }
 
+    lease_fd: Optional[int] = None
     lease_path: Optional[str] = None
     woke = False
     source = "timeout"
-    store.upsert_peer(peer, session_label=session_label, status="standby", waiter_active=True)
 
     try:
-        lease_path = _write_lease(resolved, peer, time.time() + capped_timeout + 5.0)
+        lease_fd, lease_path = _acquire_lease(
+            resolved_rv,
+            peer,
+            time.time() + capped_timeout + 5.0,
+            session_label=session_label,
+        )
         if hasattr(select, "kqueue"):
-            woke, source = _wait_via_kqueue(store, resolved, peer, capped_timeout)
+            woke, source = _wait_via_kqueue(
+                resolved_rv, peer, capped_timeout, initial_seq=seq_before["seq"]
+            )
         else:
             woke, source = _wait_via_unix_or_poll(
-                store, resolved, peer, capped_timeout, poll_fallback_sec
+                resolved_rv,
+                peer,
+                capped_timeout,
+                poll_fallback_sec,
+                initial_seq=seq_before["seq"],
             )
     finally:
-        _remove_lease(lease_path)
-        store.upsert_peer(
-            peer,
-            session_label=session_label,
-            status="active" if woke else "standby",
-            waiter_active=False,
-        )
+        _release_lease(lease_fd, lease_path)
 
     inbox = None
-    if woke and auto_pickup:
+    if woke and auto_pickup and store is not None:
         inbox = store.pickup_inbox(peer, session_label=session_label, claim_tasks=True)
 
     return {
         "peer_id": peer,
         "woke": woke,
         "source": source,
-        "unacked_events": store.count_unacked_events(peer),
+        "unacked_events": read_peer_seq(resolved_rv, peer)["unacked"],
         "inbox": inbox,
     }
+
+
+def _truncate_pre_encode(text: str, max_encoded_chars: int) -> str:
+    """Truncate text BEFORE URL encoding so multi-byte UTF-8 %XX sequences are never split."""
+    if max_encoded_chars <= 0 or not text:
+        return ""
+    out: List[str] = []
+    used = 0
+    for ch in text:
+        enc = urllib.parse.quote(ch, safe="")
+        if used + len(enc) > max_encoded_chars:
+            break
+        out.append(ch)
+        used += len(enc)
+    return "".join(out)
 
 
 class ColdDoorbell:
@@ -539,20 +708,33 @@ class ColdDoorbell:
         peer_id: str,
         pickup_prompt: str,
         workspace_path: str = "",
+        max_url_len: int = DEFAULT_DEEPLINK_MAX_LEN,
     ) -> str:
-        """Build a concise native desktop deep-link URL referencing the MCP task."""
+        """Build a valid native desktop deep-link URL truncated safely before percent-encoding."""
         peer = validate_peer(peer_id)
-        short_prompt = (pickup_prompt or "Check deskbell inbox").strip()[:180]
-        encoded_q = urllib.parse.quote(short_prompt, safe="")
+        clean = (pickup_prompt or "").strip().lstrip("/").strip() or "Check deskbell inbox"
+
         if peer == "claude":
             if workspace_path:
-                encoded_folder = urllib.parse.quote(workspace_path, safe="")
-                url = f"claude://code/new?q={encoded_q}&folder={encoded_folder}"
-                if len(url) <= 295:
-                    return url
-            return f"claude://new?q={encoded_q}"[:295]
+                folder_param = "&folder=" + urllib.parse.quote(workspace_path, safe="")
+                prefix = "claude://code/new?q="
+                budget = max(32, max_url_len - len(prefix) - len(folder_param))
+                safe_q = _truncate_pre_encode(clean, budget)
+                return f"{prefix}{urllib.parse.quote(safe_q, safe='')}{folder_param}"
+            prefix = "claude://new?q="
+            budget = max(32, max_url_len - len(prefix))
+            safe_q = _truncate_pre_encode(clean, budget)
+            return f"{prefix}{urllib.parse.quote(safe_q, safe='')}"
+
         if peer == "chatgpt":
-            return f"codex://new?q={encoded_q}"[:295]
+            prompt_text = clean
+            if workspace_path and workspace_path not in prompt_text:
+                prompt_text = f"{prompt_text} [cwd: {workspace_path}]"
+            prefix = "codex://new?prompt="
+            budget = max(32, max_url_len - len(prefix))
+            safe_prompt = _truncate_pre_encode(prompt_text, budget)
+            return f"{prefix}{urllib.parse.quote(safe_prompt, safe='')}"
+
         return "antigravity://"
 
     @classmethod
@@ -613,7 +795,7 @@ class ColdDoorbell:
 
 
 def ring_peer(
-    store: BusStore,
+    store: Optional["BusStore"],
     home_dir: str,
     peer_id: str,
     title: str,
@@ -622,15 +804,51 @@ def ring_peer(
     workspace_path: str = "",
     open_deeplink: bool = False,
     dry_run: bool = False,
+    event_ids: Optional[List[int]] = None,
+    escalation_delay_sec: Optional[float] = None,
+    on_escalate: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
-    """Ring peer_id via hot kqueue/socket wakeup if active, else fall back to ColdDoorbell."""
+    """Ring peer_id via hot kqueue/socket wakeup, escalating to cold if unacked."""
     peer = validate_peer(peer_id)
-    woken_count = notify_peer(home_dir, peer)
+    rv_dir = store.rendezvous_dir if store is not None else resolve_rendezvous_dir(home_dir)
+    woken_count = notify_peer(rv_dir, peer)
     if woken_count > 0:
+        delay = (
+            float(escalation_delay_sec)
+            if escalation_delay_sec is not None
+            else float(os.environ.get("DESKBELL_ESCALATION_SEC", str(DEFAULT_ESCALATION_SEC)))
+        )
+        escalation_scheduled = False
+        if store is not None and event_ids and delay > 0:
+            tracked_ids = list(event_ids)
+            escalation_scheduled = True
+
+            def _escalate_if_unacked() -> None:
+                try:
+                    if any(not store.is_event_acked(eid) for eid in tracked_ids):
+                        cold_res = ColdDoorbell.ring_cold(
+                            peer_id=peer,
+                            title=f"{title} (Escalated)",
+                            body=body,
+                            pickup_prompt=pickup_prompt,
+                            workspace_path=workspace_path,
+                            open_deeplink=open_deeplink,
+                            dry_run=dry_run,
+                        )
+                        if on_escalate is not None:
+                            on_escalate(cold_res)
+                except Exception:
+                    pass
+
+            timer = threading.Timer(delay, _escalate_if_unacked)
+            timer.daemon = True
+            timer.start()
+
         return {
             "delivery": "hot_wakeup",
             "peer_id": peer,
             "woken_count": woken_count,
+            "escalation_scheduled": escalation_scheduled,
         }
     return ColdDoorbell.ring_cold(
         peer_id=peer,

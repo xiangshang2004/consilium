@@ -2,7 +2,7 @@
 
 Local MCP collaboration bus and zero-CLI doorbell wakeup bridge connecting **ChatGPT.app (Codex Desktop)**, **Claude.app (Claude Desktop)**, and **Antigravity.app** on macOS.
 
-> Status: **MVP built & tested; awaiting Claude cross-review before applying live user configurations.** See [reviews/R001-mvp-design-and-impl.md](reviews/R001-mvp-design-and-impl.md) and [docs/README.md](docs/README.md).
+> Status: **R002 audit fixes implemented & verified in isolated `--target-home`; awaiting R004 verification and Codex R003 review before applying live user configurations.** See [reviews/R002-claude-audit.md](reviews/R002-claude-audit.md), [reviews/R004-antigravity-r002-fixes.md](reviews/R004-antigravity-r002-fixes.md), and [docs/README.md](docs/README.md).
 
 ## Why `deskbell`?
 
@@ -26,9 +26,9 @@ When running three separate AI desktop apps on one Mac, you shouldn't have to co
                  │
    ┌─────────────┴──────────────┐
    ▼                            ▼
-Truth Layer                 Doorbell Layer
-/tmp/deskbell-<uid>/bus.db  /tmp/deskbell-<uid>/signals/<peer>.sig
-(SQLite WAL + Loop Guard)   + waiters/<peer>/*.json (PID/expiry leases)
+Truth Layer                                      Doorbell Layer
+~/Library/Application Support/deskbell/bus.db    /tmp/deskbell-<uid>/signals/<peer>.{sig,seq}
+(SQLite WAL + Loop Guard + auth.token)           + waiters/<peer>/*.lease (flock kernel leases)
                                 │
           ┌─────────────────────┴─────────────────────┐
           ▼ (live lease > 0)                          ▼ (no active waiter)
@@ -71,6 +71,6 @@ DESKBELL_DRY_RUN=1 /usr/bin/python3 scripts/install.py --dry-run
 
 ## Security Model
 
-- Runtime directory (`/tmp/deskbell-<uid>`) is verified with `os.lstat()` to reject symlinks and foreign UIDs (`0o700`); DB, signal files, leases, and `auth.token` use `0o600`.
-- HTTP transport binds strictly to `127.0.0.1`, validates `Host`, rejects cross-origin `Origin` headers with `403`, and supports `Authorization: Bearer` tokens.
-- Cold notifications pass untrusted text via `osascript` `argv` (`on run argv`), eliminating AppleScript string interpolation injection, and never simulate keystrokes.
+- Persistent state (`~/Library/Application Support/deskbell/`) and ephemeral rendezvous (`/tmp/deskbell-<uid>/`) are strictly split so macOS 3-day `tmp_cleaner` never deletes `bus.db` or `auth.token`. Both directories are verified with `os.lstat()` to reject symlinks and foreign UIDs (`0o700`); DB, signal files, leases, and `auth.token` use `0o600`.
+- HTTP transport binds strictly to `127.0.0.1`, enables Bearer/query token authentication by default (`--require-token`), validates `Host`, rejects cross-origin `Origin` headers with `403`, and returns `405 Allow: POST` on `GET /mcp`.
+- Cold notifications pass untrusted text via `osascript` `argv` (`on run argv`), strip leading `/` from deep-link prompts, truncate safely before UTF-8 percent-encoding, and never simulate keystrokes.

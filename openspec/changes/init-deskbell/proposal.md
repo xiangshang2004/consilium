@@ -6,8 +6,8 @@ The local workstation runs three distinct AI desktop applications (`ChatGPT.app`
 `deskbell` lets the user issue a single command in **any** of the three desktop apps. The receiving session becomes the round coordinator, shares task context via a unified local MCP bus, rings the other desktop apps via a zero-CPU wakeup doorbell (with non-intrusive cold notification + deep-link fallback), lets each app invoke its own native subagent harness with dynamic model selection and parallel fan-out, and collects a unified final report.
 
 ## Scope (MVP)
-- Local `SQLite` (WAL) + `AF_UNIX` wake broker (`deskbell` Python 3.9 stdlib package, zero third-party deps).
-- Dual-transport MCP server (`stdio` and `127.0.0.1` Streamable HTTP) exposing 9 coordination & quota tools.
+- Split persistent state (`~/Library/Application Support/deskbell/`) and ephemeral `/tmp/deskbell-<uid>` rendezvous (`signals/<peer>.seq`, `flock` leases, `wake.sock`) (`deskbell` Python 3.9 stdlib package, zero third-party deps).
+- Dual-transport MCP server (`stdio` and token-protected `127.0.0.1` Streamable HTTP) exposing 10 coordination, quota, and mission-close tools.
 - Zero-token local quota & reset-time harvesting (`Cockpit Tools` SQLite/JSON caches, Codex `rollout-*.jsonl` `rate_limits`, Claude local usage caches, plus `deskbell_quota` reporting).
 - Hot standby wakeup (`deskbell wait` / `deskbell_wait`) plus safe cold-start macOS notification & deep-link fallback (`claude://`, `codex://`, `antigravity://`).
 - Loop guard (`max_rounds`) preventing infinite cross-app ping-pong.

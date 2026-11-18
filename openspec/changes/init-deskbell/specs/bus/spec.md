@@ -32,7 +32,16 @@
 `resolve_home_dir` MUST reject symlinked directories and directories not owned by the current UID (`os.lstat` check) and enforce `0o700` permissions.
 
 ### Requirement: Localhost HTTP Transport Hardening
-The Streamable HTTP server MUST bind to `127.0.0.1` by default, validate the `Host` header, reject non-local `Origin` headers with `403`, and enforce `Authorization: Bearer` when `require_token=True`.
+The Streamable HTTP server MUST bind to `127.0.0.1` by default, enable Bearer/query token authentication by default (`require_token=True`), validate the `Host` header, reject non-local `Origin` headers with `403`, and return `405 Allow: POST` on `GET /mcp`.
+
+### Requirement: Strict Mission & Task State Machine
+- `report_progress` MUST accept non-terminal task statuses only and reject callers other than `assignee_peer`.
+- `complete_task` MUST reject callers other than `assignee_peer` and reject already-terminal tasks.
+- `dispatch_task` MUST reject closed missions and transition `ready_to_report` missions back to `active`.
+- `close_mission` (`deskbell_close_mission`) MUST validate close status (`completed` | `cancelled` | `failed`), enforce `peer_id == coordinator_peer`, and cancel open tasks only when `force=True`.
+
+### Requirement: Kernel `flock` Leases & Unacked Cold Escalation
+Waiter leases MUST be guarded by `fcntl.flock(LOCK_EX | LOCK_NB)` so dead processes are pruned regardless of PID reuse, and hot wakeups MUST schedule cold fallback escalation if tracked events remain unacknowledged.
 
 ### Requirement: Multi-Source Local Quota & Reset Extraction
 `sync_local_quotas` MUST best-effort extract remaining quota percentages and normalized UTC `reset_at` timestamps from local Cockpit Tools SQLite/JSON caches, Codex `rollout-*.jsonl` `rate_limits` events, and Claude local usage caches without throwing on sandbox `PermissionError` or missing files, and `list_quota_windows` MUST compute `exhausted`, `low_quota`, `dispatch_recommended`, and `reset_in_human`.

@@ -17,10 +17,12 @@ from deskbell.models import (
     DEFAULT_HTTP_HOST,
     DEFAULT_HTTP_PORT,
     VALID_ISOLATION,
+    VALID_MISSION_CLOSE_STATUSES,
     VALID_MODEL_TIERS,
     VALID_PEERS,
     ensure_auth_token,
-    resolve_home_dir,
+    resolve_rendezvous_dir,
+    resolve_state_dir,
 )
 from deskbell.quota import sync_local_quotas
 from deskbell.store import BusStore
@@ -32,6 +34,7 @@ from deskbell.wakeup import (
 )
 
 SUPPORTED_PROTOCOL_VERSION = "2025-03-26"
+SUPPORTED_PROTOCOL_VERSIONS = ("2025-03-26", "2024-11-05")
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
 
 TOOL_DEFINITIONS: List[Dict[str, Any]] = [
@@ -197,16 +200,41 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "deskbell_close_mission",
+        "description": "Record final summary and close a mission (coordinator only; validates open tasks unless force=true).",
+        "inputSchema": {
+            "type": "object",
+            "required": ["mission_id", "peer_id", "final_summary"],
+            "properties": {
+                "mission_id": {"type": "string"},
+                "peer_id": {"type": "string", "enum": list(VALID_PEERS)},
+                "final_summary": {"type": "string"},
+                "status": {
+                    "type": "string",
+                    "enum": list(VALID_MISSION_CLOSE_STATUSES),
+                    "default": "completed",
+                },
+                "force": {"type": "boolean", "default": False},
+            },
+        },
+    },
 ]
 
 
 class DeskBellMCPDispatcher:
     """Routes MCP JSON-RPC 2.0 requests to BusStore and wakeup doorbell logic."""
 
-    def __init__(self, home_dir: Optional[str] = None, default_peer: str = "") -> None:
-        self.home_dir = resolve_home_dir(home_dir)
+    def __init__(
+        self,
+        home_dir: Optional[str] = None,
+        default_peer: str = "",
+        rendezvous_dir: Optional[str] = None,
+    ) -> None:
+        self.home_dir = resolve_state_dir(home_dir)
+        self.rendezvous_dir = resolve_rendezvous_dir(rendezvous_dir or home_dir)
         self.default_peer = default_peer
-        self.store = BusStore(self.home_dir)
+        self.store = BusStore(self.home_dir, rendezvous_dir=self.rendezvous_dir)
 
     def handle_payload(self, payload: Any) -> Optional[Any]:
         """Handle a single JSON-RPC object or batch; return None for pure notifications."""
@@ -230,11 +258,16 @@ class DeskBellMCPDispatcher:
             return None
 
         if method == "initialize":
-            client_proto = str(params.get("protocolVersion") or SUPPORTED_PROTOCOL_VERSION)
+            requested_proto = str(params.get("protocolVersion") or SUPPORTED_PROTOCOL_VERSION)
+            negotiated = (
+                requested_proto
+                if requested_proto in SUPPORTED_PROTOCOL_VERSIONS
+                else SUPPORTED_PROTOCOL_VERSION
+            )
             return self._result(
                 req_id,
                 {
-                    "protocolVersion": client_proto,
+                    "protocolVersion": negotiated,
                     "capabilities": {"tools": {"listChanged": False}},
                     "serverInfo": {"name": "deskbell", "version": __version__},
                 },
@@ -281,7 +314,7 @@ class DeskBellMCPDispatcher:
             snapshot = self.store.get_mission_snapshot(mission_id=mission_id)
             return {
                 "peers": self.store.list_peers(),
-                "active_waiters": query_active_waiters(self.home_dir),
+                "active_waiters": query_active_waiters(self.rendezvous_dir),
                 "quotas": self.store.list_quota_windows()["peers"],
                 **snapshot,
             }
@@ -299,15 +332,18 @@ class DeskBellMCPDispatcher:
             mission = created["mission"]
             open_deeplink = bool(args.get("open_deeplink", False))
             tasks_by_peer: Dict[str, List[Dict[str, Any]]] = {}
+            events_by_peer: Dict[str, List[int]] = {}
             for task in created["tasks"]:
                 tasks_by_peer.setdefault(task["assignee_peer"], []).append(task)
+            for evt in created["events"]:
+                events_by_peer.setdefault(evt["to_peer"], []).append(int(evt["event_id"]))
             deliveries = []
             for assignee, peer_tasks in tasks_by_peer.items():
                 task_ids = ", ".join(t["task_id"] for t in peer_tasks)
                 tiers = ", ".join(sorted({t["model_tier"] for t in peer_tasks}))
                 receipt = ring_peer(
                     store=self.store,
-                    home_dir=self.home_dir,
+                    home_dir=self.rendezvous_dir,
                     peer_id=assignee,
                     title=f"DeskBell: {mission['title']}",
                     body=f"New task(s) {task_ids} ({tiers})",
@@ -317,6 +353,7 @@ class DeskBellMCPDispatcher:
                     ),
                     workspace_path=mission.get("workspace_path", ""),
                     open_deeplink=open_deeplink,
+                    event_ids=events_by_peer.get(assignee, []),
                 )
                 deliveries.append(receipt)
             return {**created, "deliveries": deliveries}
@@ -333,9 +370,10 @@ class DeskBellMCPDispatcher:
             )
             mission = dispatched["mission"]
             task = dispatched["task"]
+            evt_id = int(dispatched["event"]["event_id"])
             delivery = ring_peer(
                 store=self.store,
-                home_dir=self.home_dir,
+                home_dir=self.rendezvous_dir,
                 peer_id=task["assignee_peer"],
                 title=f"DeskBell: {mission['title']}",
                 body=f"Task {task['task_id']} ({task['model_tier']})",
@@ -345,6 +383,7 @@ class DeskBellMCPDispatcher:
                 ),
                 workspace_path=mission.get("workspace_path", ""),
                 open_deeplink=bool(args.get("open_deeplink", False)),
+                event_ids=[evt_id],
             )
             return {**dispatched, "delivery": delivery}
 
@@ -369,7 +408,7 @@ class DeskBellMCPDispatcher:
             if res.get("event") and res.get("coordinator_peer"):
                 res["delivery"] = ring_peer(
                     store=self.store,
-                    home_dir=self.home_dir,
+                    home_dir=self.rendezvous_dir,
                     peer_id=res["coordinator_peer"],
                     title="DeskBell Progress",
                     body=f"{args['peer_id']} updated {args['task_id']}",
@@ -377,6 +416,7 @@ class DeskBellMCPDispatcher:
                         f"Use deskbell_pickup_inbox(peer_id={res['coordinator_peer']!r}) "
                         f"to read progress on {args['task_id']}."
                     ),
+                    event_ids=[int(res["event"]["event_id"])],
                 )
             return res
 
@@ -391,7 +431,7 @@ class DeskBellMCPDispatcher:
             coord = res["coordinator_peer"]
             res["delivery"] = ring_peer(
                 store=self.store,
-                home_dir=self.home_dir,
+                home_dir=self.rendezvous_dir,
                 peer_id=coord,
                 title="DeskBell Task Done",
                 body=(
@@ -402,6 +442,7 @@ class DeskBellMCPDispatcher:
                     f"Use deskbell_pickup_inbox(peer_id={coord!r}) to collect results "
                     f"from {args['peer_id']} on {args['task_id']}."
                 ),
+                event_ids=[int(res["event"]["event_id"])],
             )
             return res
 
@@ -423,7 +464,7 @@ class DeskBellMCPDispatcher:
             )
             res["delivery"] = ring_peer(
                 store=self.store,
-                home_dir=self.home_dir,
+                home_dir=self.rendezvous_dir,
                 peer_id=target,
                 title=title,
                 body=body,
@@ -431,6 +472,7 @@ class DeskBellMCPDispatcher:
                     f"Use deskbell_pickup_inbox(peer_id={target!r}) to handle {title} "
                     f"for mission {args['mission_id']}."
                 ),
+                event_ids=[int(res["event"]["event_id"])],
             )
             return res
 
@@ -439,11 +481,12 @@ class DeskBellMCPDispatcher:
             timeout_sec = min(300.0, max(0.1, float(args.get("timeout_sec", 45.0))))
             return wait_for_doorbell(
                 store=self.store,
-                home_dir=self.home_dir,
+                home_dir=self.rendezvous_dir,
                 peer_id=peer,
                 timeout_sec=timeout_sec,
                 session_label=str(args.get("session_label", "")),
                 auto_pickup=bool(args.get("auto_pickup", True)),
+                rendezvous_dir=self.rendezvous_dir,
             )
 
         if name == "deskbell_quota":
@@ -458,6 +501,33 @@ class DeskBellMCPDispatcher:
             if bool(args.get("sync_local", True)):
                 sync_local_quotas(self.store, user_home=args.get("user_home"))
             return self.store.list_quota_windows(peer_id=args.get("peer_id"))
+
+        if name == "deskbell_close_mission":
+            res = self.store.close_mission(
+                mission_id=str(args["mission_id"]),
+                final_summary=str(args["final_summary"]),
+                peer_id=str(args["peer_id"]),
+                status=str(args.get("status", "completed")),
+                force=bool(args.get("force", False)),
+            )
+            deliveries = []
+            for evt in res.get("events", []):
+                deliveries.append(
+                    ring_peer(
+                        store=self.store,
+                        home_dir=self.rendezvous_dir,
+                        peer_id=evt["to_peer"],
+                        title="DeskBell Mission Closed",
+                        body=f"Mission {res['mission_id']} closed ({res['status']})",
+                        pickup_prompt=(
+                            f"Use deskbell_pickup_inbox(peer_id={evt['to_peer']!r}) "
+                            f"for closed mission {res['mission_id']}."
+                        ),
+                        event_ids=[int(evt["event_id"])],
+                    )
+                )
+            res["deliveries"] = deliveries
+            return res
 
         raise ValueError(f"Unknown tool: {name}")
 
@@ -491,11 +561,16 @@ def run_stdio_server(
     default_peer: str = "",
     stdin: Any = None,
     stdout: Any = None,
+    rendezvous_dir: Optional[str] = None,
 ) -> None:
     """Run a newline-delimited JSON-RPC 2.0 MCP server over stdio."""
     in_stream = stdin if stdin is not None else sys.stdin
     out_stream = stdout if stdout is not None else sys.stdout
-    dispatcher = DeskBellMCPDispatcher(home_dir=home_dir, default_peer=default_peer)
+    dispatcher = DeskBellMCPDispatcher(
+        home_dir=home_dir,
+        default_peer=default_peer,
+        rendezvous_dir=rendezvous_dir,
+    )
 
     for raw_line in in_stream:
         line = raw_line.strip()
@@ -543,15 +618,19 @@ class DeskBellDaemon:
         home_dir: Optional[str] = None,
         host: str = DEFAULT_HTTP_HOST,
         port: int = DEFAULT_HTTP_PORT,
-        require_token: bool = False,
+        require_token: bool = True,
+        rendezvous_dir: Optional[str] = None,
     ) -> None:
-        self.home_dir = resolve_home_dir(home_dir)
+        self.home_dir = resolve_state_dir(home_dir)
+        self.rendezvous_dir = resolve_rendezvous_dir(rendezvous_dir or home_dir)
         self.host = host
         self.port = int(port)
         self.require_token = bool(require_token)
         self.auth_token = ensure_auth_token(self.home_dir) if self.require_token else ""
-        self.dispatcher = DeskBellMCPDispatcher(home_dir=self.home_dir)
-        self.wake_broker = WakeBrokerServer(home_dir=self.home_dir)
+        self.dispatcher = DeskBellMCPDispatcher(
+            home_dir=self.home_dir, rendezvous_dir=self.rendezvous_dir
+        )
+        self.wake_broker = WakeBrokerServer(rendezvous_dir=self.rendezvous_dir)
         self._httpd: Optional[ThreadingHTTPServer] = None
         self._http_thread: Optional[threading.Thread] = None
 
@@ -575,18 +654,34 @@ class DeskBellDaemon:
                     return False
                 if daemon.require_token:
                     auth_hdr = self.headers.get("Authorization", "")
-                    expected = f"Bearer {daemon.auth_token}"
-                    if not hmac.compare_digest(auth_hdr, expected):
+                    expected_hdr = f"Bearer {daemon.auth_token}"
+                    query_token = ""
+                    parsed = urllib.parse.urlparse(self.path)
+                    if parsed.query:
+                        query_token = urllib.parse.parse_qs(parsed.query).get("token", [""])[0]
+                    hdr_ok = hmac.compare_digest(auth_hdr, expected_hdr)
+                    qry_ok = bool(query_token) and hmac.compare_digest(
+                        query_token, daemon.auth_token
+                    )
+                    if not (hdr_ok or qry_ok):
                         self._send_json(401, {"error": "Unauthorized"})
                         return False
                 return True
 
-            def _send_json(self, status: int, body: Any) -> None:
+            def _send_json(
+                self,
+                status: int,
+                body: Any,
+                extra_headers: Optional[Dict[str, str]] = None,
+            ) -> None:
                 encoded = json.dumps(body, ensure_ascii=False).encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(encoded)))
                 self.send_header("Cache-Control", "no-store")
+                if extra_headers:
+                    for hk, hv in extra_headers.items():
+                        self.send_header(hk, hv)
                 if self.close_connection:
                     self.send_header("Connection", "close")
                 self.end_headers()
@@ -595,16 +690,22 @@ class DeskBellDaemon:
             def do_GET(self) -> None:
                 if not self._check_security():
                     return
-                if self.path.split("?", 1)[0] == "/health":
+                route = self.path.split("?", 1)[0]
+                if route == "/health":
                     self._send_json(
                         200,
                         {
                             "ok": True,
                             "version": __version__,
-                            "home_dir": daemon.home_dir,
-                            "socket_path": daemon.wake_broker.sock_path,
-                            "active_waiters": query_active_waiters(daemon.home_dir),
+                            "active_waiters": query_active_waiters(daemon.rendezvous_dir),
                         },
+                    )
+                    return
+                if route == "/mcp":
+                    self._send_json(
+                        405,
+                        {"error": "Method Not Allowed; SSE stream not offered on GET /mcp"},
+                        extra_headers={"Allow": "POST"},
                     )
                     return
                 self._send_json(404, {"error": "Not found"})

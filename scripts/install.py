@@ -1,4 +1,4 @@
-"""Safe, idempotent installer for deskbell desktop MCP configs, skills, agents, and launchd."""
+"""Safe, idempotent, atomic installer for deskbell desktop MCP configs, skills, agents, and launchd."""
 
 from __future__ import annotations
 
@@ -8,8 +8,16 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 from typing import Any, Dict, List, Optional, Tuple
+
+REPO_DIR_DEFAULT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO_DIR_DEFAULT not in sys.path:
+    sys.path.insert(0, REPO_DIR_DEFAULT)
+
+from deskbell.models import ensure_auth_token
 
 BEGIN_MARKER = "# BEGIN DESKBELL MCP"
 END_MARKER = "# END DESKBELL MCP"
@@ -17,6 +25,25 @@ END_MARKER = "# END DESKBELL MCP"
 
 def _timestamp_tag() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _atomic_write_text(path: str, content: str, mode: int = 0o600) -> None:
+    parent = os.path.dirname(path)
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".deskbell-tmp-", dir=parent)
+    try:
+        os.chmod(tmp_path, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _backup_file(target_path: str, home_dir: str, backup_root: str) -> Optional[str]:
@@ -82,19 +109,110 @@ def _update_json_mcp(
 
     if apply_changes:
         _backup_file(path, home_dir, backup_root)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as handle:
-            json.dump(data, handle, indent=2, ensure_ascii=False)
-            handle.write("\n")
+        serialized = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+        _atomic_write_text(path, serialized, mode=0o600)
     return action, "deskbell entry " + ("removed" if remove else "configured")
 
 
-def _render_codex_block(port: int) -> str:
+def _find_claude_cli() -> str:
+    return shutil.which("claude") or "/opt/homebrew/bin/claude"
+
+
+def _sync_claude_code_mcp(
+    path: str,
+    port: int,
+    token: str,
+    *,
+    remove: bool,
+    apply_changes: bool,
+    home_dir: str,
+    backup_root: str,
+) -> Tuple[str, str]:
+    """Manage ~/.claude.json via `claude mcp add/remove -s user` to avoid clobbering concurrent writes."""
+    exists = os.path.exists(path)
+    if remove and not exists:
+        return "unchanged", "not present"
+
+    data = _load_json_dict(path)
+    servers = data.get("mcpServers")
+    if servers is None:
+        servers = {}
+    elif not isinstance(servers, dict):
+        raise ValueError(f"Expected 'mcpServers' object in {path}")
+
+    url = f"http://127.0.0.1:{port}/mcp"
+    desired = {
+        "type": "http",
+        "url": url,
+        "headers": {"Authorization": f"Bearer {token}"},
+    }
+    current = servers.get("deskbell")
+
+    if remove:
+        if "deskbell" not in servers:
+            return "unchanged", "deskbell key absent"
+        action = "remove"
+    else:
+        if current == desired:
+            return "unchanged", "already configured"
+        action = "update" if exists and current is not None else ("update" if exists else "create")
+
+    if apply_changes:
+        claude_bin = _find_claude_cli()
+        if not os.path.exists(claude_bin):
+            raise FileNotFoundError(f"Claude CLI not found at {claude_bin}")
+        _backup_file(path, home_dir, backup_root)
+        env = dict(os.environ)
+        env["HOME"] = home_dir
+        if remove or current is not None:
+            rm_res = subprocess.run(
+                [claude_bin, "mcp", "remove", "-s", "user", "deskbell"],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if remove and rm_res.returncode != 0:
+                raise RuntimeError(
+                    f"claude mcp remove failed ({rm_res.returncode}): {rm_res.stderr or rm_res.stdout}"
+                )
+        if not remove:
+            add_res = subprocess.run(
+                [
+                    claude_bin,
+                    "mcp",
+                    "add",
+                    "-s",
+                    "user",
+                    "-t",
+                    "http",
+                    "deskbell",
+                    url,
+                    "-H",
+                    f"Authorization: Bearer {token}",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if add_res.returncode != 0:
+                raise RuntimeError(
+                    f"claude mcp add failed ({add_res.returncode}): {add_res.stderr or add_res.stdout}"
+                )
+
+    return action, (
+        "removed via claude mcp remove" if remove else "configured via claude mcp add -s user"
+    )
+
+
+def _render_codex_block(port: int, token: str) -> str:
     return (
         f"{BEGIN_MARKER}\n"
-        f"# Verify exact Codex config.toml MCP table key against your Codex Desktop build.\n"
         f"[mcp_servers.deskbell]\n"
         f'url = "http://127.0.0.1:{port}/mcp"\n'
+        f"tool_timeout_sec = 330\n"
+        f'http_headers = {{ Authorization = "Bearer {token}" }}\n'
         f"{END_MARKER}\n"
     )
 
@@ -102,6 +220,7 @@ def _render_codex_block(port: int) -> str:
 def _update_codex_toml(
     path: str,
     port: int,
+    token: str,
     *,
     remove: bool,
     apply_changes: bool,
@@ -121,13 +240,21 @@ def _update_codex_toml(
         re.escape(BEGIN_MARKER) + r".*?" + re.escape(END_MARKER) + r"\n?",
         re.DOTALL,
     )
+    outside = pattern.sub("", original)
+    if not remove:
+        dup_pattern = re.compile(r"(?m)^\s*\[mcp_servers\.deskbell(?:\.[^\]]+)?\]\s*$")
+        if dup_pattern.search(outside):
+            raise ValueError(
+                f"Duplicate [mcp_servers.deskbell] table exists outside managed block in {path}"
+            )
+
     if remove:
-        updated = pattern.sub("", original)
+        updated = outside
         if updated == original:
             return "unchanged", "managed block absent"
         action = "remove"
     else:
-        block = _render_codex_block(port)
+        block = _render_codex_block(port, token)
         if pattern.search(original):
             updated = pattern.sub(block, original)
         else:
@@ -140,9 +267,7 @@ def _update_codex_toml(
 
     if apply_changes:
         _backup_file(path, home_dir, backup_root)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write(updated)
+        _atomic_write_text(path, updated, mode=0o600)
     return action, "managed TOML block " + ("removed" if remove else "configured")
 
 
@@ -154,11 +279,16 @@ def _sync_text_file(
     apply_changes: bool,
     home_dir: str,
     backup_root: str,
+    mode: int = 0o644,
 ) -> Tuple[str, str]:
     exists = os.path.exists(dest_path)
     if remove:
         if not exists:
             return "unchanged", "not present"
+        with open(dest_path, "r", encoding="utf-8") as handle:
+            existing = handle.read()
+        if existing != content:
+            return "skipped_modified", "file modified by user; skipped removal"
         if apply_changes:
             _backup_file(dest_path, home_dir, backup_root)
             os.remove(dest_path)
@@ -174,15 +304,35 @@ def _sync_text_file(
 
     if apply_changes:
         _backup_file(dest_path, home_dir, backup_root)
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        with open(dest_path, "w", encoding="utf-8") as handle:
-            handle.write(content)
+        _atomic_write_text(dest_path, content, mode=mode)
     return action, "synced"
 
 
 def _read_text(path: str) -> str:
     with open(path, "r", encoding="utf-8") as handle:
         return handle.read()
+
+
+def _peek_or_ensure_token(state_dir: str, apply_changes: bool) -> str:
+    token_path = os.path.join(state_dir, "auth.token")
+    if apply_changes:
+        return ensure_auth_token(state_dir)
+    if os.path.exists(token_path):
+        with open(token_path, "r", encoding="utf-8") as handle:
+            existing = handle.read().strip()
+        if existing:
+            return existing
+    return "<generated-on-apply>"
+
+
+def _is_claude_desktop_running() -> Optional[bool]:
+    try:
+        res = subprocess.run(
+            ["pgrep", "-x", "Claude"], capture_output=True, text=True, check=False
+        )
+        return res.returncode == 0
+    except OSError:
+        return None
 
 
 def run_installer(
@@ -195,11 +345,17 @@ def run_installer(
     """Plan, check, apply, or uninstall deskbell configs under target_home."""
     home_dir = os.path.abspath(os.path.expanduser(target_home))
     resolved_repo = os.path.abspath(repo_dir)
-    data_dir = f"/tmp/deskbell-{os.getuid()}"
-    backup_root = os.path.join(home_dir, ".deskbell", "backups", _timestamp_tag())
+    state_dir = os.path.join(home_dir, "Library", "Application Support", "deskbell")
+    rendezvous_dir = os.environ.get("DESKBELL_RENDEZVOUS_DIR") or f"/tmp/deskbell-{os.getuid()}"
+    log_dir = os.path.join(home_dir, "Library", "Logs", "deskbell")
+    backup_root = os.path.join(state_dir, "backups", _timestamp_tag())
 
     apply_changes = mode in ("apply", "uninstall")
     remove = mode == "uninstall"
+
+    if mode == "apply":
+        os.makedirs(log_dir, mode=0o700, exist_ok=True)
+    token = _peek_or_ensure_token(state_dir, apply_changes=(mode == "apply"))
 
     operations: List[Dict[str, str]] = []
 
@@ -216,11 +372,20 @@ def run_installer(
                 raise
             _record(label, path, ("permission_denied", f"unreadable in current sandbox: {exc}"))
 
-    http_entry = {"url": f"http://127.0.0.1:{port}/mcp"}
-    claude_code_http_entry = {"type": "http", "url": f"http://127.0.0.1:{port}/mcp"}
+    antigravity_http_entry = {"url": f"http://127.0.0.1:{port}/mcp?token={token}"}
     claude_desktop_stdio_entry = {
         "command": "/usr/bin/python3",
-        "args": ["-m", "deskbell.cli", "mcp-stdio", "--peer", "claude", "--data-dir", data_dir],
+        "args": [
+            "-m",
+            "deskbell.cli",
+            "mcp-stdio",
+            "--peer",
+            "claude",
+            "--data-dir",
+            state_dir,
+            "--rendezvous-dir",
+            rendezvous_dir,
+        ],
         "env": {"PYTHONPATH": resolved_repo},
     }
 
@@ -229,7 +394,7 @@ def run_installer(
         os.path.join(home_dir, ".gemini", "config", "mcp_config.json"),
         lambda: _update_json_mcp(
             os.path.join(home_dir, ".gemini", "config", "mcp_config.json"),
-            http_entry,
+            antigravity_http_entry,
             remove=remove,
             apply_changes=apply_changes,
             home_dir=home_dir,
@@ -251,9 +416,10 @@ def run_installer(
     _safe_op(
         "claude_code_mcp",
         os.path.join(home_dir, ".claude.json"),
-        lambda: _update_json_mcp(
+        lambda: _sync_claude_code_mcp(
             os.path.join(home_dir, ".claude.json"),
-            claude_code_http_entry,
+            port,
+            token,
             remove=remove,
             apply_changes=apply_changes,
             home_dir=home_dir,
@@ -266,6 +432,7 @@ def run_installer(
         lambda: _update_codex_toml(
             os.path.join(home_dir, ".codex", "config.toml"),
             port,
+            token,
             remove=remove,
             apply_changes=apply_changes,
             home_dir=home_dir,
@@ -334,7 +501,9 @@ def run_installer(
     )
     plist_rendered = (
         plist_tmpl.replace("__PORT__", str(port))
-        .replace("__DATA_DIR__", data_dir)
+        .replace("__STATE_DIR__", state_dir)
+        .replace("__RENDEZVOUS_DIR__", rendezvous_dir)
+        .replace("__LOG_DIR__", log_dir)
         .replace("__REPO_DIR__", resolved_repo)
     )
     plist_dest = os.path.join(home_dir, "Library", "LaunchAgents", "com.up.deskbell.plist")
@@ -348,14 +517,27 @@ def run_installer(
             apply_changes=apply_changes,
             home_dir=home_dir,
             backup_root=backup_root,
+            mode=0o644,
         ),
     )
+
+    warnings: List[str] = []
+    claude_running = _is_claude_desktop_running()
+    if claude_running:
+        warnings.append(
+            "Claude.app appears to be running; quit Claude.app before applying claude_desktop_config.json changes."
+        )
 
     return {
         "mode": mode,
         "target_home": home_dir,
+        "state_dir": state_dir,
+        "rendezvous_dir": rendezvous_dir,
+        "log_dir": log_dir,
         "repo_dir": resolved_repo,
         "port": port,
+        "claude_desktop_running": claude_running,
+        "warnings": warnings,
         "backup_root": backup_root if (apply_changes and os.path.exists(backup_root)) else "",
         "operations": operations,
     }
@@ -369,12 +551,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     group.add_argument("--dry-run", action="store_true", help="Show planned changes without writing (default).")
     group.add_argument("--check", action="store_true", help="Inspect current configuration status without writing.")
     group.add_argument("--apply", action="store_true", help="Write configs/templates with timestamped backups.")
-    group.add_argument("--uninstall", action="store_true", help="Remove deskbell config entries and installed files.")
+    group.add_argument("--uninstall", action="store_true", help="Remove unmodified deskbell config entries and files.")
     parser.add_argument("--target-home", default=os.path.expanduser("~"))
-    parser.add_argument(
-        "--repo-dir",
-        default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    )
+    parser.add_argument("--repo-dir", default=REPO_DIR_DEFAULT)
     parser.add_argument("--port", type=int, default=18920)
     args = parser.parse_args(argv)
 
@@ -394,7 +573,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             repo_dir=args.repo_dir,
             port=args.port,
         )
-    except (ValueError, json.JSONDecodeError) as exc:
+    except (ValueError, json.JSONDecodeError, RuntimeError, FileNotFoundError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
         return 1
 

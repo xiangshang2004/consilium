@@ -15,7 +15,10 @@
         <string>--port</string>
         <string>__PORT__</string>
         <string>--data-dir</string>
-        <string>__DATA_DIR__</string>
+        <string>__STATE_DIR__</string>
+        <string>--rendezvous-dir</string>
+        <string>__RENDEZVOUS_DIR__</string>
+        <string>--require-token</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
@@ -26,9 +29,11 @@
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
     <key>StandardOutPath</key>
-    <string>__DATA_DIR__/deskbell.out.log</string>
+    <string>__LOG_DIR__/deskbell.out.log</string>
     <key>StandardErrorPath</key>
-    <string>__DATA_DIR__/deskbell.err.log</string>
+    <string>__LOG_DIR__/deskbell.err.log</string>
 </dict>
 </plist>

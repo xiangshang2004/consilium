@@ -22,7 +22,7 @@ def _raw_http_roundtrip(
     path: str,
     headers: Dict[str, str],
     body: bytes = b"",
-) -> Tuple[int, bytes]:
+) -> Tuple[int, Dict[str, str], bytes]:
     srv_sock, cli_sock = socket.socketpair()
     srv_thread = threading.Thread(
         target=daemon.handle_socket_once, args=(srv_sock,), daemon=True
@@ -42,7 +42,8 @@ def _raw_http_roundtrip(
         resp = http.client.HTTPResponse(cli_sock)
         resp.begin()
         payload = resp.read()
-        return resp.status, payload
+        resp_headers = {k.lower(): v for k, v in resp.getheaders()}
+        return resp.status, resp_headers, payload
     finally:
         try:
             cli_sock.close()
@@ -53,15 +54,17 @@ def _raw_http_roundtrip(
 
 class MCPTransportsTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp_home = tempfile.mkdtemp(prefix="dbell-mcp-", dir="/tmp")
+        self.tmp_state = tempfile.mkdtemp(prefix="dbell-mstate-", dir="/tmp")
+        self.tmp_rv = tempfile.mkdtemp(prefix="dbell-mrv-", dir="/tmp")
         os.environ["DESKBELL_DRY_RUN"] = "1"
 
     def tearDown(self) -> None:
-        shutil.rmtree(self.tmp_home, ignore_errors=True)
+        shutil.rmtree(self.tmp_state, ignore_errors=True)
+        shutil.rmtree(self.tmp_rv, ignore_errors=True)
 
-    def test_stdio_lifecycle_and_tools(self) -> None:
+    def test_stdio_lifecycle_protocol_negotiation_and_close_mission(self) -> None:
         requests = [
-            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26"}},
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2099-01-01"}},
             {"jsonrpc": "2.0", "method": "notifications/initialized"},
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
             {
@@ -93,38 +96,92 @@ class MCPTransportsTests(unittest.TestCase):
         stdin_buf = io.StringIO("\n".join(json.dumps(r) for r in requests) + "\n")
         stdout_buf = io.StringIO()
 
-        run_stdio_server(home_dir=self.tmp_home, stdin=stdin_buf, stdout=stdout_buf)
+        run_stdio_server(
+            home_dir=self.tmp_state,
+            rendezvous_dir=self.tmp_rv,
+            stdin=stdin_buf,
+            stdout=stdout_buf,
+        )
         lines = [json.loads(line) for line in stdout_buf.getvalue().strip().splitlines()]
 
         self.assertEqual(len(lines), 4)
         self.assertEqual(lines[0]["id"], 1)
         self.assertEqual(lines[0]["result"]["serverInfo"]["name"], "deskbell")
+        # Unknown client protocolVersion must not be blindly echoed.
+        self.assertEqual(lines[0]["result"]["protocolVersion"], "2025-03-26")
 
         tool_names = [t["name"] for t in lines[1]["result"]["tools"]]
-        self.assertEqual(len(tool_names), 9)
+        self.assertEqual(len(tool_names), 10)
         self.assertIn("deskbell_create_mission", tool_names)
         self.assertIn("deskbell_wait", tool_names)
         self.assertIn("deskbell_quota", tool_names)
+        self.assertIn("deskbell_close_mission", tool_names)
 
         mission_payload = lines[2]["result"]["structuredContent"]
         self.assertEqual(mission_payload["deliveries"][0]["delivery"], "cold_notification")
+        mission_id = mission_payload["mission"]["mission_id"]
 
         pickup_payload = lines[3]["result"]["structuredContent"]
         self.assertEqual(len(pickup_payload["claimed_tasks"]), 1)
         self.assertEqual(pickup_payload["claimed_tasks"][0]["status"], "claimed")
 
-    def test_http_security_headers_and_token_enforcement(self) -> None:
-        daemon = DeskBellDaemon(
-            home_dir=self.tmp_home, host="127.0.0.1", port=18920, require_token=True
+        # Complete and close mission via stdio
+        req2 = [
+            {
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {
+                    "name": "deskbell_complete_task",
+                    "arguments": {
+                        "task_id": pickup_payload["claimed_tasks"][0]["task_id"],
+                        "peer_id": "chatgpt",
+                        "result_summary": "Done",
+                    },
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {
+                    "name": "deskbell_close_mission",
+                    "arguments": {
+                        "mission_id": mission_id,
+                        "peer_id": "claude",
+                        "final_summary": "All complete",
+                    },
+                },
+            },
+        ]
+        stdin2 = io.StringIO("\n".join(json.dumps(r) for r in req2) + "\n")
+        stdout2 = io.StringIO()
+        run_stdio_server(
+            home_dir=self.tmp_state,
+            rendezvous_dir=self.tmp_rv,
+            stdin=stdin2,
+            stdout=stdout2,
         )
+        lines2 = [json.loads(line) for line in stdout2.getvalue().strip().splitlines()]
+        self.assertEqual(lines2[1]["result"]["structuredContent"]["status"], "completed")
+
+    def test_http_default_token_security_headers_and_405(self) -> None:
+        # require_token defaults to True!
+        daemon = DeskBellDaemon(
+            home_dir=self.tmp_state,
+            rendezvous_dir=self.tmp_rv,
+            host="127.0.0.1",
+            port=18920,
+        )
+        self.assertTrue(daemon.require_token)
         body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}).encode("utf-8")
 
-        # 1. Missing Bearer token -> 401
-        status1, _ = _raw_http_roundtrip(daemon, "GET", "/health", {})
+        # 1. Missing token -> 401
+        status1, _, _ = _raw_http_roundtrip(daemon, "GET", "/health", {})
         self.assertEqual(status1, 401)
 
         # 2. Cross-origin Origin header -> 403
-        status2, _ = _raw_http_roundtrip(
+        status2, _, _ = _raw_http_roundtrip(
             daemon,
             "POST",
             "/mcp",
@@ -138,7 +195,7 @@ class MCPTransportsTests(unittest.TestCase):
         self.assertEqual(status2, 403)
 
         # 3. Spoofed Host header -> 403
-        status3, _ = _raw_http_roundtrip(
+        status3, _, _ = _raw_http_roundtrip(
             daemon,
             "POST",
             "/mcp",
@@ -151,8 +208,8 @@ class MCPTransportsTests(unittest.TestCase):
         )
         self.assertEqual(status3, 403)
 
-        # 4. Authorized local POST /mcp -> 200
-        status4, raw4 = _raw_http_roundtrip(
+        # 4. Authorized local POST /mcp via Bearer header -> 200
+        status4, _, raw4 = _raw_http_roundtrip(
             daemon,
             "POST",
             "/mcp",
@@ -168,17 +225,39 @@ class MCPTransportsTests(unittest.TestCase):
         self.assertEqual(parsed["id"], 1)
         self.assertEqual(parsed["result"], {})
 
-        # 5. Authorized GET /health -> 200
-        status5, raw5 = _raw_http_roundtrip(
+        # 5. Authorized local POST /mcp via ?token= query param -> 200
+        status5, _, _ = _raw_http_roundtrip(
+            daemon,
+            "POST",
+            f"/mcp?token={daemon.auth_token}",
+            {"Content-Type": "application/json"},
+            body=body,
+        )
+        self.assertEqual(status5, 200)
+
+        # 6. GET /mcp -> 405 with Allow: POST (per Streamable HTTP spec)
+        status6, hdrs6, _ = _raw_http_roundtrip(
+            daemon,
+            "GET",
+            "/mcp",
+            {"Authorization": f"Bearer {daemon.auth_token}"},
+        )
+        self.assertEqual(status6, 405)
+        self.assertEqual(hdrs6.get("allow"), "POST")
+
+        # 7. Authorized GET /health -> 200 without leaking raw filesystem paths
+        status7, _, raw7 = _raw_http_roundtrip(
             daemon,
             "GET",
             "/health",
             {"Authorization": f"Bearer {daemon.auth_token}"},
         )
-        self.assertEqual(status5, 200)
-        health = json.loads(raw5.decode("utf-8"))
+        self.assertEqual(status7, 200)
+        health = json.loads(raw7.decode("utf-8"))
         self.assertTrue(health["ok"])
         self.assertIn("active_waiters", health)
+        self.assertNotIn("home_dir", health)
+        self.assertNotIn("socket_path", health)
 
 
 if __name__ == "__main__":
