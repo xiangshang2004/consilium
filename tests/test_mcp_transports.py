@@ -101,9 +101,10 @@ class MCPTransportsTests(unittest.TestCase):
         self.assertEqual(lines[0]["result"]["serverInfo"]["name"], "deskbell")
 
         tool_names = [t["name"] for t in lines[1]["result"]["tools"]]
-        self.assertEqual(len(tool_names), 8)
+        self.assertEqual(len(tool_names), 9)
         self.assertIn("deskbell_create_mission", tool_names)
         self.assertIn("deskbell_wait", tool_names)
+        self.assertIn("deskbell_quota", tool_names)
 
         mission_payload = lines[2]["result"]["structuredContent"]
         self.assertEqual(mission_payload["deliveries"][0]["delivery"], "cold_notification")

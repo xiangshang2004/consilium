@@ -8,6 +8,7 @@
   - `missions`: Top-level user request, `coordinator_peer`, `workspace_path`, `isolation_policy` (`worktree` | `read_only` | `shared`), `max_rounds`, `current_round`, `status`, and `final_summary`.
   - `tasks`: Sub-assignments with `assignee_peer`, `model_tier` (`pro_reasoning` | `balanced` | `fast` | `custom`), `model_hint`, `parallel_fanout`, `worktree_branch`, `status` (`queued` | `claimed` | `running` | `done` | `failed` | `blocked`), `progress_note`, `result_summary`, and `artifacts_json`.
   - `events`: Directed inbox messages (`task_assigned`, `progress`, `task_done`, `review_request`, `loop_guard_reached`) with `acked_at` semantics.
+  - `quota_windows`: Per-peer and per-account remaining quota percentages (`5h`, `7d`, model groups), UTC `reset_at` timestamps, countdown calculations, and `dispatch_recommended` posture extracted locally by `deskbell/quota.py`.
 - **Doorbell Layer (`kqueue` `KQ_FILTER_VNODE` + Lease Tracking + `AF_UNIX` Broker + Cold Fallback)**:
   - Seatbelt sandboxes inside macOS desktop apps block outbound `socket.connect()` (`EPERM`), whereas kernel `select.kqueue()` (`KQ_FILTER_VNODE` watching `$DESKBELL_HOME/signals/<peer>.sig`) operates with 0% CPU and millisecond wakeup latency inside sandboxes.
   - Active standby waiters write a PID/expiry lease file under `$DESKBELL_HOME/waiters/<peer>/<pid>-<tid>.json`; stale/dead PID leases are automatically pruned via `os.kill(pid, 0)`.

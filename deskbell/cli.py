@@ -10,6 +10,7 @@ from typing import List, Optional
 
 from deskbell.models import DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, VALID_PEERS, resolve_home_dir
 from deskbell.mcp_server import DeskBellDaemon, run_stdio_server
+from deskbell.quota import sync_local_quotas
 from deskbell.store import BusStore
 from deskbell.wakeup import query_active_waiters, wait_for_doorbell
 
@@ -38,9 +39,15 @@ def _build_parser() -> argparse.ArgumentParser:
     wait_p.add_argument("--pickup", action="store_true")
     wait_p.add_argument("--data-dir", default=None)
 
-    status_p = sub.add_parser("status", help="Print peers, active waiters, and missions as JSON.")
+    status_p = sub.add_parser("status", help="Print peers, active waiters, quotas, and missions as JSON.")
     status_p.add_argument("--mission-id", default=None)
     status_p.add_argument("--data-dir", default=None)
+
+    quota_p = sub.add_parser("quota", help="Harvest local quota caches and print remaining quota & reset windows.")
+    quota_p.add_argument("--peer", default=None, choices=VALID_PEERS)
+    quota_p.add_argument("--user-home", default=None)
+    quota_p.add_argument("--data-dir", default=None)
+    quota_p.add_argument("--no-sync", action="store_true")
 
     return parser
 
@@ -86,13 +93,26 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "status":
         store = BusStore(home_dir)
+        try:
+            sync_local_quotas(store)
+        except Exception:
+            pass
         snapshot = store.get_mission_snapshot(mission_id=args.mission_id)
         output = {
             "home_dir": home_dir,
             "peers": store.list_peers(),
             "active_waiters": query_active_waiters(home_dir),
+            "quotas": store.list_quota_windows()["peers"],
             **snapshot,
         }
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "quota":
+        store = BusStore(home_dir)
+        if not args.no_sync:
+            sync_local_quotas(store, user_home=args.user_home)
+        output = store.list_quota_windows(peer_id=args.peer)
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
 

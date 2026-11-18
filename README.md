@@ -13,6 +13,7 @@ When running three separate AI desktop apps on one Mac, you shouldn't have to co
 2. **A zero-CPU hot doorbell (`kqueue` `KQ_FILTER_VNODE`)** that works even inside macOS Seatbelt sandboxes—waking idle standby sessions in milliseconds without polling tokens or stealing keyboard focus.
 3. **A safe cold fallback** (argv-safe `osascript` macOS notification banner + concise `claude://` / `codex://` / `antigravity://` deep link) when a target app has no active standby listener.
 4. **Native in-app subagent fan-out** (`adapters/`), letting each desktop app dynamically pick models (`pro_reasoning` / `balanced` / `fast`) and spawn parallel subagents inside its own native harness and isolated git worktrees.
+5. **Zero-token local quota & reset awareness** (`deskbell/quota.py`, `deskbell_quota`), harvesting cached remaining percentages and reset timestamps from local Cockpit Tools SQLite/JSON caches, Codex `rollout-*.jsonl` `rate_limits`, and Claude local usage caches (plus optional `manual_report`) so the coordinator avoids dispatching heavy work to exhausted accounts.
 
 ## Architecture Overview
 
@@ -53,14 +54,15 @@ DESKBELL_DRY_RUN=1 /usr/bin/python3 -m unittest discover -s tests -v
 # 2. Preview config changes without touching live ~/.claude, ~/.codex, or ~/.gemini
 DESKBELL_DRY_RUN=1 /usr/bin/python3 scripts/install.py --dry-run
 
-# 3. Inspect bus status or run local HTTP + wake daemon manually
+# 3. Inspect bus status, quota windows, or run local HTTP + wake daemon manually
 /usr/bin/python3 -m deskbell.cli status
+/usr/bin/python3 -m deskbell.cli quota
 /usr/bin/python3 -m deskbell.cli serve --host 127.0.0.1 --port 18920
 ```
 
 ## Repository Layout
 
-- `deskbell/`: Pure Python 3.9 stdlib package (`models.py`, `store.py`, `wakeup.py`, `mcp_server.py`, `cli.py`).
+- `deskbell/`: Pure Python 3.9 stdlib package (`models.py`, `store.py`, `quota.py`, `wakeup.py`, `mcp_server.py`, `cli.py`).
 - `adapters/`: Shared skill ([SKILL.md](adapters/skill/deskbell-collab/SKILL.md)), Claude subagent templates, Codex agent TOML profiles, Antigravity MCP snippet, and `launchd` plist template.
 - `scripts/install.py`: Idempotent installer defaulting to `--dry-run` with `--target-home`, timestamped backups, and `--uninstall`.
 - `tests/`: `unittest` suite covering SQLite concurrency, loop guard, `kqueue` hot wakeup, lease pruning, cold fallback, stdio/HTTP MCP transports, security headers, and installer idempotency.

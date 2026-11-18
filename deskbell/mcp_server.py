@@ -22,6 +22,7 @@ from deskbell.models import (
     ensure_auth_token,
     resolve_home_dir,
 )
+from deskbell.quota import sync_local_quotas
 from deskbell.store import BusStore
 from deskbell.wakeup import (
     WakeBrokerServer,
@@ -169,6 +170,33 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "deskbell_quota",
+        "description": "Query or report per-peer remaining account quota percentages and reset times.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "peer_id": {"type": "string", "enum": list(VALID_PEERS)},
+                "sync_local": {"type": "boolean", "default": True},
+                "user_home": {"type": "string"},
+                "report_windows": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["peer_id", "window_key", "remaining_percent"],
+                        "properties": {
+                            "peer_id": {"type": "string", "enum": list(VALID_PEERS)},
+                            "account_id": {"type": "string"},
+                            "window_key": {"type": "string"},
+                            "label": {"type": "string"},
+                            "remaining_percent": {"type": "number", "minimum": 0, "maximum": 100},
+                            "reset_at": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        },
+    },
 ]
 
 
@@ -246,10 +274,15 @@ class DeskBellMCPDispatcher:
     def _dispatch_tool(self, name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if name == "deskbell_status":
             mission_id = args.get("mission_id")
+            try:
+                sync_local_quotas(self.store)
+            except Exception:
+                pass
             snapshot = self.store.get_mission_snapshot(mission_id=mission_id)
             return {
                 "peers": self.store.list_peers(),
                 "active_waiters": query_active_waiters(self.home_dir),
+                "quotas": self.store.list_quota_windows()["peers"],
                 **snapshot,
             }
 
@@ -412,6 +445,19 @@ class DeskBellMCPDispatcher:
                 session_label=str(args.get("session_label", "")),
                 auto_pickup=bool(args.get("auto_pickup", True)),
             )
+
+        if name == "deskbell_quota":
+            report_windows = args.get("report_windows") or []
+            if report_windows:
+                normalized_reports = []
+                for item in report_windows:
+                    entry = dict(item)
+                    entry["source"] = "manual_report"
+                    normalized_reports.append(entry)
+                self.store.upsert_quota_windows(normalized_reports)
+            if bool(args.get("sync_local", True)):
+                sync_local_quotas(self.store, user_home=args.get("user_home"))
+            return self.store.list_quota_windows(peer_id=args.get("peer_id"))
 
         raise ValueError(f"Unknown tool: {name}")
 
@@ -611,6 +657,10 @@ class DeskBellDaemon:
 
     def start(self) -> Tuple[str, int]:
         """Start both AF_UNIX wake broker and Streamable HTTP server."""
+        try:
+            sync_local_quotas(self.dispatcher.store)
+        except Exception:
+            pass
         self.wake_broker.start()
         handler_cls = self._make_handler_class()
 

@@ -78,12 +78,26 @@ CREATE TABLE IF NOT EXISTS events (
     acked_at TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS quota_windows (
+    peer_id TEXT NOT NULL,
+    account_id TEXT NOT NULL DEFAULT 'default',
+    window_key TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    remaining_percent REAL NOT NULL,
+    reset_at TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'manual',
+    observed_at TEXT NOT NULL,
+    PRIMARY KEY (peer_id, account_id, window_key)
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee_status
     ON tasks (assignee_peer, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_mission
     ON tasks (mission_id);
 CREATE INDEX IF NOT EXISTS idx_events_to_acked
     ON events (to_peer, acked_at, event_id);
+CREATE INDEX IF NOT EXISTS idx_quota_peer
+    ON quota_windows (peer_id, remaining_percent);
 """
 
 
@@ -98,6 +112,22 @@ def _parse_iso(ts: str) -> Optional[datetime]:
         return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     except ValueError:
         return None
+
+
+def _format_countdown(seconds: Optional[int]) -> str:
+    """Format remaining seconds until quota reset as a compact human string."""
+    if seconds is None:
+        return ""
+    if seconds <= 0:
+        return "resetting now"
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    if days > 0:
+        return f"{days}d {hours}h"
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
 
 
 class BusStore:
@@ -835,3 +865,148 @@ class BusStore:
                 item["task_counts"] = {c["status"]: c["cnt"] for c in counts}
                 summaries.append(item)
         return {"missions": summaries}
+
+    def _decode_quota_row(
+        self, row: sqlite3.Row, now_dt: Optional[datetime] = None
+    ) -> Dict[str, Any]:
+        data = _row_to_dict(row)
+        now = now_dt or datetime.now(timezone.utc)
+        remaining = round(max(0.0, min(100.0, float(data["remaining_percent"]))), 2)
+        data["remaining_percent"] = remaining
+        reset_dt = _parse_iso(data.get("reset_at", ""))
+        reset_sec: Optional[int] = None
+        if reset_dt is not None:
+            reset_sec = int((reset_dt - now).total_seconds())
+        data["reset_in_seconds"] = reset_sec
+        data["reset_in_human"] = _format_countdown(reset_sec)
+        data["exhausted"] = remaining <= 0.0
+        data["low_quota"] = remaining <= 15.0
+        return data
+
+    def upsert_quota_windows(
+        self, windows: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Insert or update quota window snapshots inside an immediate transaction."""
+        if not windows:
+            return []
+        now = utc_now_iso()
+        keys: List[tuple] = []
+        with self._connect() as conn:
+            with self._tx(conn):
+                for item in windows:
+                    peer = validate_peer(str(item["peer_id"]))
+                    account_id = str(item.get("account_id") or "default").strip() or "default"
+                    window_key = str(item["window_key"]).strip()
+                    if not window_key:
+                        raise ValueError("window_key must not be empty")
+                    label = str(item.get("label") or window_key).strip()
+                    remaining = max(0.0, min(100.0, float(item["remaining_percent"])))
+                    reset_at = str(item.get("reset_at") or "").strip()
+                    source = str(item.get("source") or "manual").strip()
+                    observed_at = str(item.get("observed_at") or now).strip()
+                    conn.execute(
+                        """
+                        INSERT INTO quota_windows (
+                            peer_id, account_id, window_key, label,
+                            remaining_percent, reset_at, source, observed_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(peer_id, account_id, window_key) DO UPDATE SET
+                            label = excluded.label,
+                            remaining_percent = excluded.remaining_percent,
+                            reset_at = CASE
+                                WHEN excluded.reset_at != '' THEN excluded.reset_at
+                                ELSE quota_windows.reset_at
+                            END,
+                            source = excluded.source,
+                            observed_at = excluded.observed_at
+                        WHERE excluded.observed_at >= quota_windows.observed_at
+                           OR excluded.source = 'manual_report'
+                        """,
+                        (
+                            peer,
+                            account_id,
+                            window_key,
+                            label,
+                            remaining,
+                            reset_at,
+                            source,
+                            observed_at,
+                        ),
+                    )
+                    keys.append((peer, account_id, window_key))
+
+                now_dt = datetime.now(timezone.utc)
+                result: List[Dict[str, Any]] = []
+                for peer, account_id, window_key in keys:
+                    row = conn.execute(
+                        """
+                        SELECT * FROM quota_windows
+                        WHERE peer_id = ? AND account_id = ? AND window_key = ?
+                        """,
+                        (peer, account_id, window_key),
+                    ).fetchone()
+                    if row is not None:
+                        result.append(self._decode_quota_row(row, now_dt=now_dt))
+        return result
+
+    def list_quota_windows(self, peer_id: Optional[str] = None) -> Dict[str, Any]:
+        """Return per-peer quota posture and individual reset windows."""
+        target_peers = [validate_peer(peer_id)] if peer_id else list(VALID_PEERS)
+        now_dt = datetime.now(timezone.utc)
+        with self._connect() as conn:
+            if peer_id:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM quota_windows
+                    WHERE peer_id = ?
+                    ORDER BY account_id ASC, window_key ASC
+                    """,
+                    (target_peers[0],),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM quota_windows ORDER BY peer_id ASC, account_id ASC, window_key ASC"
+                ).fetchall()
+
+        grouped: Dict[str, List[Dict[str, Any]]] = {p: [] for p in target_peers}
+        for row in rows:
+            decoded = self._decode_quota_row(row, now_dt=now_dt)
+            if decoded["peer_id"] in grouped:
+                grouped[decoded["peer_id"]].append(decoded)
+
+        peers_out: List[Dict[str, Any]] = []
+        for p in target_peers:
+            windows = grouped[p]
+            if windows:
+                min_rem: Optional[float] = min(w["remaining_percent"] for w in windows)
+                exhausted = any(w["exhausted"] for w in windows)
+                low_quota = any(w["low_quota"] for w in windows)
+                reset_candidates = [w["reset_at"] for w in windows if w["reset_at"]]
+                earliest_reset = min(reset_candidates) if reset_candidates else ""
+                earliest_dt = _parse_iso(earliest_reset)
+                earliest_human = (
+                    _format_countdown(int((earliest_dt - now_dt).total_seconds()))
+                    if earliest_dt is not None
+                    else ""
+                )
+            else:
+                min_rem = None
+                exhausted = False
+                low_quota = False
+                earliest_reset = ""
+                earliest_human = ""
+
+            dispatch_recommended = (not exhausted) and (min_rem is None or min_rem > 5.0)
+            peers_out.append(
+                {
+                    "peer_id": p,
+                    "min_remaining_percent": min_rem,
+                    "exhausted": exhausted,
+                    "low_quota": low_quota,
+                    "dispatch_recommended": dispatch_recommended,
+                    "earliest_reset_at": earliest_reset,
+                    "earliest_reset_in_human": earliest_human,
+                    "windows": windows,
+                }
+            )
+        return {"peers": peers_out, "updated_at": utc_now_iso()}

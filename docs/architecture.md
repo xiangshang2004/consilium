@@ -14,6 +14,7 @@ All persistent state lives in `$DESKBELL_HOME/bus.db` (`SQLite` WAL mode, `busy_
 - **`missions`**: Tracks `title`, `goal`, `coordinator_peer`, `workspace_path`, `isolation_policy` (`worktree` | `read_only` | `shared`), `max_rounds`, `current_round`, `status`, and `final_summary`.
 - **`tasks`**: Tracks `assignee_peer`, `model_tier` (`pro_reasoning` | `balanced` | `fast` | `custom`), `model_hint`, `parallel_fanout`, `worktree_branch`, `status` (`queued` | `claimed` | `running` | `done` | `failed` | `blocked`), `claimed_by_session`, `progress_note`, `result_summary`, and `artifacts_json`.
 - **`events`**: Directed notifications (`task_assigned`, `progress`, `task_done`, `review_request`, `loop_guard_reached`) with `acked_at` timestamps.
+- **`quota_windows`**: Per-peer and per-account rolling quota percentages (`5h`, `7d`, model groups), normalized UTC `reset_at` timestamps, countdown calculation (`reset_in_human`), and `dispatch_recommended` posture.
 
 ### Key Invariants
 - **Atomic Claiming**: `pickup_inbox` runs inside `BEGIN IMMEDIATE` and updates `WHERE status = 'queued'`, preventing two concurrent standby sessions from claiming the same task.
@@ -48,3 +49,13 @@ Exposed identically over `deskbell mcp-stdio` and `POST /mcp` (`127.0.0.1:18920`
 6. `deskbell_complete_task`
 7. `deskbell_request_review`
 8. `deskbell_wait`
+9. `deskbell_quota`
+
+## 5. Multi-Source Quota Extraction (`deskbell/quota.py`)
+
+`sync_local_quotas` aggregates quota remaining % and reset times locally (zero LLM token cost, best-effort under Seatbelt):
+1. `~/.antigravity_cockpit/platform-quota-history-v1.sqlite` & `codex-quota-history-v1.sqlite` (read-only URI SQLite queries)
+2. `~/.antigravity_cockpit/{codex,claude,google,accounts}_accounts.json` (JSON quota/reset fields)
+3. `~/.codex/sessions/**/rollout-*.jsonl` (tail scan for latest `rate_limits.primary` 5h & `rate_limits.secondary` 7d `used_percent` + `resets_at`)
+4. `~/.claude/{usage-latest,quota}.json` (structured windows or cached `anthropic-ratelimit-unified-*` headers)
+5. Direct peer reporting via `deskbell_quota(report_windows=[...])`.

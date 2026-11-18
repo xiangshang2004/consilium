@@ -33,3 +33,6 @@
 
 ### Requirement: Localhost HTTP Transport Hardening
 The Streamable HTTP server MUST bind to `127.0.0.1` by default, validate the `Host` header, reject non-local `Origin` headers with `403`, and enforce `Authorization: Bearer` when `require_token=True`.
+
+### Requirement: Multi-Source Local Quota & Reset Extraction
+`sync_local_quotas` MUST best-effort extract remaining quota percentages and normalized UTC `reset_at` timestamps from local Cockpit Tools SQLite/JSON caches, Codex `rollout-*.jsonl` `rate_limits` events, and Claude local usage caches without throwing on sandbox `PermissionError` or missing files, and `list_quota_windows` MUST compute `exhausted`, `low_quota`, `dispatch_recommended`, and `reset_in_human`.
