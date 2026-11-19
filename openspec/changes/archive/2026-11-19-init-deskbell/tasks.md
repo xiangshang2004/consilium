@@ -6,4 +6,4 @@
 - [x] 4. Write and pass `unittest` suite covering atomic claiming, loop guard, `kqueue` hot wakeup, lease pruning, dry-run cold fallback, stdio/socketpair HTTP MCP transports, HTTP security headers, and installer idempotency.
 - [x] 5. Write documentation (`README.md`, `docs/`) and Claude audit handover (`reviews/R001-mvp-design-and-impl.md`).
 - [x] 6. Register repo in `/Users/up/code/README.md` and commit cleanly on `main`.
-- [ ] 7. Hand off `reviews/R001-mvp-design-and-impl.md` to `Claude.app` for review before applying live user config changes.
+- [x] 7. Hand off `reviews/R001-mvp-design-and-impl.md` to `Claude.app` for review before applying live user config changes (completed via R002–R005; superseded by `consilium-v1`).
