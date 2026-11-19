@@ -11,5 +11,6 @@
 - [R007: Antigravity Stage 2 Consilium Live Dashboard](./R007-antigravity-dashboard.md) — 实现离线单页 `/ui` 看板、`/api/state`、`/api/stream`（SSE）、`consilium ui` 一次性票据一键免密登录与双确认操作，40 项测试通过并完成浅色/深色截图及实时录屏；★ 等待用户确认看板视觉效果。
 - [R008: Claude Review of R006/R007](./R008-claude-r006-r007-review.md) — 关口 1：Claude 侧通过（40 项测试、实时配置未动），P2 三项（删除 `?token=`、`running` 超时不自动入队、Claude.app 运行时可装其余部分）；关口 2：看板好看、免密登录实测通过，建议先改“工作中”状态误显示、任务看板拥挤、时间线截断、重录录屏；新产品方向：菜单栏 App 提前到群聊之前做，本地历史只做单向只读镜像，群聊参与者只要原生 App（用户 11-19 定）；Codex 复核写 R009。
 - [R009 Codex Independent Review of R006/R007](./R009-codex-review.md) — 40 项隔离测试通过；复核 R005 七项、R003 遗留和 R008 逐条意见，记录安装、交付及看板鉴权缺口。
+- [R010: Antigravity R008/R009 Remediation & Closed-Loop Verification](./R010-antigravity-r009-fixes.md) — 闭环整改 R008（P2-1..3、P3、A1–A4、B5–B10）与 R009（15 项）全部审查发现：`<rv>/.<peer>.seq.lock` 与单快照重建、`running` 超时标记 `task_stale`、提交后 `delivery.warnings` 隔离、`attempt_id` 防串改、`Origin`/JSON/`X-Consilium-CSRF` 校验、随机会话与 `token_version` 票据/SSE 吊销、作用域幂等 `409`、严格只读 `wait`、移除 `?token=`、`nosniff`/`frame-ancestors`、SSE 16 上限与 `external_change`、原子 `.lease`、按目标安装/`TokenRotationError`、`REQUEUEABLE_TASK_STATUSES`、`claim_latency_ms`/冷通知三事实/5 态指示灯及 `2026-11-19` 复录（1440×1000 @10fps 35s）；59 项单测与 `openspec validate consilium-v1` 全绿；★ 仍停在关口 1 与关口 2 待复核确认。
 - [Architecture Doc](../docs/architecture.md)
 - [Project README](../README.md)

@@ -2,7 +2,7 @@
 
 Local MCP collaboration bus and zero-CLI doorbell wakeup bridge connecting **ChatGPT.app (Codex Desktop)**, **Claude.app (Claude Desktop)**, and **Antigravity.app** on macOS.
 
-> Status: **Stage 0 (`consilium-v1` OpenSpec), Stage 1 (R006 fixes for all 7 R005 P1s), and Stage 2 (R007 offline `/ui` live dashboard + SSE + one-command `consilium ui` auto-login) implemented and verified (40 unit tests OK); paused at ★ Gates 1 & 2 awaiting Claude/Codex review of R006 and user approval of dashboard visuals before touching live configs.** See [reviews/R006-antigravity-r005-fixes.md](reviews/R006-antigravity-r005-fixes.md), [reviews/R007-antigravity-dashboard.md](reviews/R007-antigravity-dashboard.md), and [docs/README.md](docs/README.md).
+> Status: **Stage 0 (`consilium-v1` OpenSpec), Stage 1 (R006 fixes), Stage 2 (R007 live `/ui` dashboard + SSE + `consilium ui`), and R010 closed-loop remediation for [R008](reviews/R008-claude-r006-r007-review.md) / [R009](reviews/R009-codex-review.md) verified (`59` unit tests OK, `openspec validate consilium-v1` valid); still paused at ★ Gates 1 & 2 awaiting Claude/Codex re-review and user visual sign-off before touching live configs.** See [reviews/R010-antigravity-r009-fixes.md](reviews/R010-antigravity-r009-fixes.md), [reviews/README.md](reviews/README.md), and [docs/README.md](docs/README.md).
 
 ## Why `consilium`?
 
@@ -48,8 +48,8 @@ Requirements: **macOS `/usr/bin/python3` (`Python 3.9+`)**, zero external `pip` 
 ```bash
 cd /Users/up/code/github/consilium
 
-# 1. Run full unit & wire-level test suite (dry-run GUI notifications)
-CONSILIUM_DRY_RUN=1 /usr/bin/python3 -m unittest discover -s tests -v
+# 1. Run full unit & wire-level test suite (dry-run GUI notifications, isolated home/quota)
+env -u CLAUDE_CONFIG_DIR CONSILIUM_DRY_RUN=1 CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC=1 /usr/bin/python3 -B -W default -m unittest discover -s tests -v
 
 # 2. Preview config changes without touching live ~/.claude, ~/.codex, or ~/.gemini
 CONSILIUM_DRY_RUN=1 /usr/bin/python3 scripts/install.py --dry-run
@@ -64,13 +64,16 @@ CONSILIUM_DRY_RUN=1 /usr/bin/python3 scripts/install.py --dry-run
 
 - `consilium/`: Pure Python 3.9 stdlib package (`models.py`, `store.py`, `quota.py`, `wakeup.py`, `dashboard.py`, `mcp_server.py`, `cli.py`).
 - `adapters/`: Shared skill ([SKILL.md](adapters/skill/consilium-collab/SKILL.md)), Claude subagent templates, Codex agent TOML profiles, Antigravity MCP snippet, and `launchd` plist template.
-- `scripts/install.py`: Two-phase idempotent installer defaulting to `--dry-run` with `--target-home`, `--rendezvous-dir`, timestamped backups, `rotate-token`, and `--uninstall`.
-- `tests/`: `unittest` suite (40 tests) covering SQLite concurrency, loop guard, `kqueue` hot wakeup, lease pruning, cold fallback, stdio/HTTP MCP transports, R005 P1/P2 regressions, dashboard `/ui` & cookie/one-time-ticket auth, ordered SSE `/api/stream`, and installer atomicity.
+- `scripts/install.py`: Two-phase idempotent installer defaulting to `--dry-run` with `--target-home`, `--rendezvous-dir`, `--targets`, `--skip-claude-desktop` (allowing non-desktop targets while `Claude.app` runs), timestamped backups, verified Claude MCP rollback, `rotate-token` (raising structured `TokenRotationError` on mid-rotation failure), and `--uninstall`.
+- `tests/`: `unittest` suite (`59` tests across 8 modules including `test_r010_regressions.py`) covering SQLite concurrency, loop guard, `attempt_id` fencing, `task_stale` / `consilium_requeue_task`, strictly read-only `wait`, `kqueue` hot wakeup & `signals/` deletion recovery, atomic `.lease`, 3-fact cold fallback, stdio/HTTP MCP transports, `delivery.warnings` fault isolation, scoped idempotency (`409`), R006/R010 regressions, 5-state dashboard `/ui`, `SessionStore` / `LoginTicketStore` / CSRF / `Origin` / SSE 16-cap & token-rotation revocation, and installer rollback/`TokenRotationError`.
 - `openspec/`: OpenSpec baseline and roadmap under [openspec/changes/consilium-v1/](openspec/changes/consilium-v1/proposal.md) (legacy `init-deskbell` archived).
-- `docs/` & `reviews/`: Architecture notes and cross-agent audit packets (`R001`–`R007`).
+- `docs/` & `reviews/`: Architecture notes and cross-agent audit packets (`R001`–`R010`).
 
 ## Security Model
 
 - Persistent state (`~/Library/Application Support/consilium/`) and ephemeral rendezvous (`/tmp/consilium-<uid>/`) are strictly split so macOS 3-day `tmp_cleaner` never deletes `bus.db` or `auth.token`. Both directories are verified with `os.lstat()` to reject symlinks and foreign UIDs (`0o700`); DB, signal files, leases, and `auth.token` use `0o600`.
-- HTTP transport binds strictly to `127.0.0.1`, enables Bearer token authentication by default (`--require-token`) plus `HttpOnly; SameSite=Strict` session cookies for `/ui` via `POST /api/login` (never putting tokens in URLs), validates `Host`, rejects cross-origin `Origin` headers with `403`, serves `/ui` with a strict offline CSP, and returns `405 Allow: POST` on `GET /mcp`.
+- HTTP transport binds strictly to `127.0.0.1`, enables Bearer token authentication by default (`--require-token`, **`?token=` query-string auth rejected with `401`**), serves `/mcp` with Bearer-only auth (`405 Allow: POST` on `GET /mcp`), and validates `Host` and `Origin` across endpoints.
+- Dashboard `/ui` uses server-side random `SessionStore` cookies (`consilium_session`, 12h TTL, `HttpOnly; SameSite=Strict`) issued via `POST /api/login` or `token_version`-bound 30s single-use tickets (`POST /api/ui-ticket` -> `GET /ui/auth?ticket=...` via `consilium ui`). Token rotation or `/api/logout` immediately revokes unredeemed tickets, existing sessions (`401`), and active SSE streams.
+- Cookie-authenticated dashboard writes (`/api/missions/<id>/close`, `/api/tasks/<id>/requeue`, `/api/logout`) enforce exact daemon `Origin` (`scheme://host:port`, `403`), `Content-Type: application/json` (`415`), and `X-Consilium-CSRF` (`403`).
+- `/ui` serves a strict offline CSP (`default-src 'none'; ...; frame-ancestors 'none';`) and all HTTP/JSON/SSE/`202` responses set `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, and `Cache-Control: no-store` (`no-cache, no-store` on SSE). `EventHub` caps SSE at `16` concurrent clients (`503` beyond cap) with `10s` write timeouts and monotonic `state_version`.
 - Cold notifications pass untrusted text via `osascript` `argv` (`on run argv`), strip leading `/` from deep-link prompts, truncate safely before UTF-8 percent-encoding, and never simulate keystrokes.
