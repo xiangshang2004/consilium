@@ -10,5 +10,6 @@
 - [R006: Antigravity Stage 0 & Stage 1 (R005 P1/P2 Fixes)](./R006-antigravity-r005-fixes.md) — 落盘 `consilium-v1` OpenSpec，修完 R005 全部 7 个 P1 与 P2 项及 A 级演示问题，34 项单元测试与 A 级端到端回归全部通过；★ 等待 Claude 与 Codex 复核。
 - [R007: Antigravity Stage 2 Consilium Live Dashboard](./R007-antigravity-dashboard.md) — 实现离线单页 `/ui` 看板、`/api/state`、`/api/stream`（SSE）、`consilium ui` 一次性票据一键免密登录与双确认操作，40 项测试通过并完成浅色/深色截图及实时录屏；★ 等待用户确认看板视觉效果。
 - [R008: Claude Review of R006/R007](./R008-claude-r006-r007-review.md) — 关口 1：Claude 侧通过（40 项测试、实时配置未动），P2 三项（删除 `?token=`、`running` 超时不自动入队、Claude.app 运行时可装其余部分）；关口 2：看板好看、免密登录实测通过，建议先改“工作中”状态误显示、任务看板拥挤、时间线截断、重录录屏；新产品方向：菜单栏 App 提前到群聊之前做，本地历史只做单向只读镜像，群聊参与者只要原生 App（用户 11-19 定）；Codex 复核写 R009。
+- [R009 Codex Independent Review of R006/R007](./R009-codex-review.md) — 40 项隔离测试通过；复核 R005 七项、R003 遗留和 R008 逐条意见，记录安装、交付及看板鉴权缺口。
 - [Architecture Doc](../docs/architecture.md)
 - [Project README](../README.md)
