@@ -1,4 +1,4 @@
-"""Safe, idempotent, two-phase atomic installer & token rotator for deskbell."""
+"""Safe, idempotent, two-phase atomic installer & token rotator for consilium."""
 
 from __future__ import annotations
 
@@ -17,25 +17,25 @@ REPO_DIR_DEFAULT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_DIR_DEFAULT not in sys.path:
     sys.path.insert(0, REPO_DIR_DEFAULT)
 
-from deskbell.models import (
+from consilium.models import (
     ensure_auth_token,
     generate_auth_token,
     read_auth_token,
     write_auth_token,
 )
 
-BEGIN_MARKER = "# BEGIN DESKBELL MCP"
-END_MARKER = "# END DESKBELL MCP"
+BEGIN_MARKER = "# BEGIN CONSILIUM MCP"
+END_MARKER = "# END CONSILIUM MCP"
 
 CODEX_BLOCK_RE = re.compile(
     re.escape(BEGIN_MARKER) + r".*?" + re.escape(END_MARKER) + r"\n?",
     re.DOTALL,
 )
 CODEX_DUP_TABLE_RE = re.compile(
-    r"""(?m)^\s*\[\s*mcp_servers\.(?:"deskbell"|'deskbell'|deskbell)(?:\s*\.[^\]]+)?\s*\]\s*(?:#.*)?$"""
+    r"""(?m)^\s*\[\s*mcp_servers\.(?:"consilium"|'consilium'|consilium)(?:\s*\.[^\]]+)?\s*\]\s*(?:#.*)?$"""
 )
 CODEX_DUP_DOTTED_RE = re.compile(
-    r"""(?m)^\s*mcp_servers\.(?:"deskbell"|'deskbell'|deskbell)\s*\.[^=\n]+="""
+    r"""(?m)^\s*mcp_servers\.(?:"consilium"|'consilium'|consilium)\s*\.[^=\n]+="""
 )
 
 
@@ -46,7 +46,7 @@ def _timestamp_tag() -> str:
 def _atomic_write_text(path: str, content: str, mode: int = 0o600) -> None:
     parent = os.path.dirname(path)
     os.makedirs(parent, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(prefix=".deskbell-tmp-", dir=parent)
+    fd, tmp_path = tempfile.mkstemp(prefix=".consilium-tmp-", dir=parent)
     try:
         os.chmod(tmp_path, mode)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -122,12 +122,12 @@ def _plan_json_mcp(
 
     data = _load_json_dict(path)
     servers = dict(data.get("mcpServers") or {})
-    current = servers.get("deskbell")
+    current = servers.get("consilium")
 
     if remove:
-        if "deskbell" not in servers:
-            return "unchanged", "deskbell key absent", None
-        del servers["deskbell"]
+        if "consilium" not in servers:
+            return "unchanged", "consilium key absent", None
+        del servers["consilium"]
         if servers:
             data["mcpServers"] = servers
         elif "mcpServers" in data:
@@ -136,18 +136,18 @@ def _plan_json_mcp(
     else:
         if current == entry:
             return "unchanged", "already configured", None
-        servers["deskbell"] = entry
+        servers["consilium"] = entry
         data["mcpServers"] = servers
         action = "update" if exists else "create"
 
     serialized = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-    return action, "deskbell entry " + ("removed" if remove else "configured"), serialized
+    return action, "consilium entry " + ("removed" if remove else "configured"), serialized
 
 
 def _render_codex_block(port: int, token: str) -> str:
     return (
         f"{BEGIN_MARKER}\n"
-        f"[mcp_servers.deskbell]\n"
+        f"[mcp_servers.consilium]\n"
         f'url = "http://127.0.0.1:{port}/mcp"\n'
         f"tool_timeout_sec = 330\n"
         f'http_headers = {{ Authorization = "Bearer {token}" }}\n'
@@ -158,7 +158,7 @@ def _render_codex_block(port: int, token: str) -> str:
 def _check_codex_duplicates(outside_text: str, path: str) -> None:
     if CODEX_DUP_TABLE_RE.search(outside_text) or CODEX_DUP_DOTTED_RE.search(outside_text):
         raise ValueError(
-            f"Duplicate deskbell MCP table or dotted key exists outside managed block in {path}"
+            f"Duplicate consilium MCP table or dotted key exists outside managed block in {path}"
         )
 
 
@@ -220,11 +220,11 @@ def _plan_claude_code_mcp(
 
     data = _load_json_dict(path)
     servers = data.get("mcpServers") or {}
-    current = servers.get("deskbell")
+    current = servers.get("consilium")
 
     if remove:
-        if "deskbell" not in servers:
-            return "unchanged", "deskbell key absent", desired, None
+        if "consilium" not in servers:
+            return "unchanged", "consilium key absent", desired, None
         return "remove", "removed via claude mcp remove", desired, current
 
     if current == desired:
@@ -248,10 +248,10 @@ def _apply_claude_code_mcp(
     _backup_file(path, home_dir, backup_root)
     env = _claude_subprocess_env(home_dir)
 
-    # Probe via `claude mcp get deskbell` before removal (R005 3.7 item 3).
+    # Probe via `claude mcp get consilium` before removal (R005 3.7 item 3).
     if previous_entry is not None or remove:
         runner(
-            [claude_bin, "mcp", "get", "deskbell"],
+            [claude_bin, "mcp", "get", "consilium"],
             env=env,
             capture_output=True,
             text=True,
@@ -261,7 +261,7 @@ def _apply_claude_code_mcp(
     removed_old = False
     if remove or previous_entry is not None:
         rm_res = runner(
-            [claude_bin, "mcp", "remove", "-s", "user", "deskbell"],
+            [claude_bin, "mcp", "remove", "-s", "user", "consilium"],
             env=env,
             capture_output=True,
             text=True,
@@ -276,7 +276,7 @@ def _apply_claude_code_mcp(
     if not remove:
         payload_json = json.dumps(desired, ensure_ascii=False)
         add_res = runner(
-            [claude_bin, "mcp", "add-json", "-s", "user", "deskbell", payload_json],
+            [claude_bin, "mcp", "add-json", "-s", "user", "consilium", payload_json],
             env=env,
             capture_output=True,
             text=True,
@@ -292,7 +292,7 @@ def _apply_claude_code_mcp(
                         "add-json",
                         "-s",
                         "user",
-                        "deskbell",
+                        "consilium",
                         json.dumps(previous_entry, ensure_ascii=False),
                     ],
                     env=env,
@@ -357,13 +357,13 @@ def run_installer(
     """Two-phase atomic installer: validate ALL targets before writing a single byte."""
     home_dir = os.path.abspath(os.path.expanduser(target_home))
     resolved_repo = os.path.abspath(repo_dir)
-    state_dir = os.path.join(home_dir, "Library", "Application Support", "deskbell")
+    state_dir = os.path.join(home_dir, "Library", "Application Support", "consilium")
     resolved_rv = (
         os.path.abspath(os.path.expanduser(rendezvous_dir))
         if rendezvous_dir
-        else (os.environ.get("DESKBELL_RENDEZVOUS_DIR") or f"/tmp/deskbell-{os.getuid()}")
+        else (os.environ.get("CONSILIUM_RENDEZVOUS_DIR") or f"/tmp/consilium-{os.getuid()}")
     )
-    log_dir = os.path.join(home_dir, "Library", "Logs", "deskbell")
+    log_dir = os.path.join(home_dir, "Library", "Logs", "consilium")
     backup_root = os.path.join(state_dir, "backups", _timestamp_tag())
 
     apply_changes = mode in ("apply", "uninstall")
@@ -384,7 +384,7 @@ def run_installer(
 
     # Read template sources up front so missing files fail before any write.
     skill_content = _read_text(
-        os.path.join(resolved_repo, "adapters", "skill", "deskbell-collab", "SKILL.md")
+        os.path.join(resolved_repo, "adapters", "skill", "consilium-collab", "SKILL.md")
     )
     claude_agents_dir = os.path.join(resolved_repo, "adapters", "claude", "agents")
     claude_agent_files = [
@@ -399,7 +399,7 @@ def run_installer(
         if fname.endswith(".toml")
     ]
     plist_tmpl = _read_text(
-        os.path.join(resolved_repo, "adapters", "launchd", "com.up.deskbell.plist.tmpl")
+        os.path.join(resolved_repo, "adapters", "launchd", "com.up.consilium.plist.tmpl")
     )
     plist_rendered = (
         plist_tmpl.replace("__PORT__", str(port))
@@ -433,7 +433,7 @@ def run_installer(
         "command": "/usr/bin/python3",
         "args": [
             "-m",
-            "deskbell.cli",
+            "consilium.cli",
             "mcp-stdio",
             "--peer",
             "claude",
@@ -535,19 +535,19 @@ def run_installer(
     text_targets: List[Tuple[str, str, str, int]] = [
         (
             "antigravity_skill",
-            os.path.join(home_dir, ".gemini", "config", "skills", "deskbell-collab", "SKILL.md"),
+            os.path.join(home_dir, ".gemini", "config", "skills", "consilium-collab", "SKILL.md"),
             skill_content,
             0o644,
         ),
         (
             "claude_skill",
-            os.path.join(home_dir, ".claude", "skills", "deskbell-collab", "SKILL.md"),
+            os.path.join(home_dir, ".claude", "skills", "consilium-collab", "SKILL.md"),
             skill_content,
             0o644,
         ),
         (
             "codex_skill",
-            os.path.join(home_dir, ".codex", "skills", "deskbell-collab", "SKILL.md"),
+            os.path.join(home_dir, ".codex", "skills", "consilium-collab", "SKILL.md"),
             skill_content,
             0o644,
         ),
@@ -563,7 +563,7 @@ def run_installer(
     text_targets.append(
         (
             "launchd_plist",
-            os.path.join(home_dir, "Library", "LaunchAgents", "com.up.deskbell.plist"),
+            os.path.join(home_dir, "Library", "LaunchAgents", "com.up.consilium.plist"),
             plist_rendered,
             0o644,
         )
@@ -620,12 +620,12 @@ def rotate_token(
     state_dir: Optional[str] = None,
     claude_runner: Any = subprocess.run,
 ) -> Dict[str, Any]:
-    """Rotate deskbell Bearer token: update all configured clients first, swap auth.token last."""
+    """Rotate consilium Bearer token: update all configured clients first, swap auth.token last."""
     home_dir = os.path.abspath(os.path.expanduser(target_home))
     resolved_state = (
         os.path.abspath(os.path.expanduser(state_dir))
         if state_dir
-        else os.path.join(home_dir, "Library", "Application Support", "deskbell")
+        else os.path.join(home_dir, "Library", "Application Support", "consilium")
     )
     backup_root = os.path.join(resolved_state, "backups", f"rotate-{_timestamp_tag()}")
     new_token = generate_auth_token()
@@ -639,7 +639,7 @@ def rotate_token(
     ag_content: Optional[str] = None
     if ag_exists:
         ag_data = _load_json_dict(antigravity_path)
-        if "deskbell" in (ag_data.get("mcpServers") or {}):
+        if "consilium" in (ag_data.get("mcpServers") or {}):
             _, _, ag_content = _plan_json_mcp(
                 antigravity_path,
                 {
@@ -659,8 +659,8 @@ def rotate_token(
     claude_bin = _find_claude_cli()
     if os.path.exists(claude_code_path):
         cc_data = _load_json_dict(claude_code_path)
-        if "deskbell" in (cc_data.get("mcpServers") or {}):
-            cc_prev = cc_data["mcpServers"]["deskbell"]
+        if "consilium" in (cc_data.get("mcpServers") or {}):
+            cc_prev = cc_data["mcpServers"]["consilium"]
             cc_needs_update = True
             if not (os.path.isfile(claude_bin) and os.access(claude_bin, os.X_OK)):
                 raise FileNotFoundError(f"Executable claude CLI not found at {claude_bin}")
@@ -713,13 +713,13 @@ def rotate_token(
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Install or inspect deskbell configurations (defaults to --dry-run)."
+        description="Install or inspect consilium configurations (defaults to --dry-run)."
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--dry-run", action="store_true", help="Show planned changes without writing (default).")
     group.add_argument("--check", action="store_true", help="Inspect current configuration status without writing.")
     group.add_argument("--apply", action="store_true", help="Write configs/templates with timestamped backups.")
-    group.add_argument("--uninstall", action="store_true", help="Remove unmodified deskbell config entries and files.")
+    group.add_argument("--uninstall", action="store_true", help="Remove unmodified consilium config entries and files.")
     parser.add_argument("--target-home", default=os.path.expanduser("~"))
     parser.add_argument("--repo-dir", default=REPO_DIR_DEFAULT)
     parser.add_argument("--rendezvous-dir", default=None)

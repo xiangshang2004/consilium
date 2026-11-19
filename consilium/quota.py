@@ -9,7 +9,7 @@ import sqlite3
 import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
 
-from deskbell.store import BusStore
+from consilium.store import BusStore
 
 PLATFORM_TO_PEER = {
     "antigravity": "antigravity",
@@ -489,9 +489,9 @@ def sync_local_quotas(
     user_home: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Best-effort harvest of local quota & reset windows into BusStore."""
-    if os.environ.get("DESKBELL_DISABLE_LOCAL_QUOTA_SYNC") == "1" and user_home is None:
+    if os.environ.get("CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC") == "1" and user_home is None:
         return store.list_quota_windows()
-    effective_home = user_home or os.environ.get("DESKBELL_USER_HOME") or "~"
+    effective_home = user_home or os.environ.get("CONSILIUM_USER_HOME") or "~"
     home = os.path.abspath(os.path.expanduser(effective_home))
     discovered: List[Dict[str, Any]] = []
     discovered.extend(_collect_cockpit_sqlite(os.path.join(home, ".antigravity_cockpit")))

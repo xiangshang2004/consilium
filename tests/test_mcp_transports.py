@@ -13,11 +13,11 @@ import threading
 import unittest
 from typing import Dict, Tuple
 
-from deskbell.mcp_server import DeskBellDaemon, run_stdio_server
+from consilium.mcp_server import ConsiliumDaemon, run_stdio_server
 
 
 def _raw_http_roundtrip(
-    daemon: DeskBellDaemon,
+    daemon: ConsiliumDaemon,
     method: str,
     path: str,
     headers: Dict[str, str],
@@ -56,7 +56,7 @@ class MCPTransportsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp_state = tempfile.mkdtemp(prefix="dbell-mstate-", dir="/tmp")
         self.tmp_rv = tempfile.mkdtemp(prefix="dbell-mrv-", dir="/tmp")
-        os.environ["DESKBELL_DRY_RUN"] = "1"
+        os.environ["CONSILIUM_DRY_RUN"] = "1"
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp_state, ignore_errors=True)
@@ -72,7 +72,7 @@ class MCPTransportsTests(unittest.TestCase):
                 "id": 3,
                 "method": "tools/call",
                 "params": {
-                    "name": "deskbell_create_mission",
+                    "name": "consilium_create_mission",
                     "arguments": {
                         "title": "Stdio mission",
                         "goal": "Test stdio roundtrip",
@@ -88,7 +88,7 @@ class MCPTransportsTests(unittest.TestCase):
                 "id": 4,
                 "method": "tools/call",
                 "params": {
-                    "name": "deskbell_pickup_inbox",
+                    "name": "consilium_pickup_inbox",
                     "arguments": {"peer_id": "chatgpt", "session_label": "codex-main"},
                 },
             },
@@ -106,16 +106,16 @@ class MCPTransportsTests(unittest.TestCase):
 
         self.assertEqual(len(lines), 4)
         self.assertEqual(lines[0]["id"], 1)
-        self.assertEqual(lines[0]["result"]["serverInfo"]["name"], "deskbell")
+        self.assertEqual(lines[0]["result"]["serverInfo"]["name"], "consilium")
         # Unknown client protocolVersion must not be blindly echoed.
         self.assertEqual(lines[0]["result"]["protocolVersion"], "2025-03-26")
 
         tool_names = [t["name"] for t in lines[1]["result"]["tools"]]
         self.assertEqual(len(tool_names), 10)
-        self.assertIn("deskbell_create_mission", tool_names)
-        self.assertIn("deskbell_wait", tool_names)
-        self.assertIn("deskbell_quota", tool_names)
-        self.assertIn("deskbell_close_mission", tool_names)
+        self.assertIn("consilium_create_mission", tool_names)
+        self.assertIn("consilium_wait", tool_names)
+        self.assertIn("consilium_quota", tool_names)
+        self.assertIn("consilium_close_mission", tool_names)
 
         mission_payload = lines[2]["result"]["structuredContent"]
         self.assertEqual(mission_payload["deliveries"][0]["delivery"], "cold_notification")
@@ -132,7 +132,7 @@ class MCPTransportsTests(unittest.TestCase):
                 "id": 5,
                 "method": "tools/call",
                 "params": {
-                    "name": "deskbell_complete_task",
+                    "name": "consilium_complete_task",
                     "arguments": {
                         "task_id": pickup_payload["claimed_tasks"][0]["task_id"],
                         "peer_id": "chatgpt",
@@ -145,7 +145,7 @@ class MCPTransportsTests(unittest.TestCase):
                 "id": 6,
                 "method": "tools/call",
                 "params": {
-                    "name": "deskbell_close_mission",
+                    "name": "consilium_close_mission",
                     "arguments": {
                         "mission_id": mission_id,
                         "peer_id": "claude",
@@ -167,7 +167,7 @@ class MCPTransportsTests(unittest.TestCase):
 
     def test_http_default_token_security_headers_and_405(self) -> None:
         # require_token defaults to True!
-        daemon = DeskBellDaemon(
+        daemon = ConsiliumDaemon(
             home_dir=self.tmp_state,
             rendezvous_dir=self.tmp_rv,
             host="127.0.0.1",

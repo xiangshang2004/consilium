@@ -12,7 +12,7 @@ import threading
 import time
 import unittest
 
-from deskbell.mcp_server import DeskBellDaemon
+from consilium.mcp_server import ConsiliumDaemon
 from tests.test_mcp_transports import _raw_http_roundtrip
 
 
@@ -21,11 +21,11 @@ class DashboardAndSSETests(unittest.TestCase):
         self.tmp_state = tempfile.mkdtemp(prefix="dbell-uistate-", dir="/tmp")
         self.tmp_rv = tempfile.mkdtemp(prefix="dbell-uirv-", dir="/tmp")
         self.tmp_home = tempfile.mkdtemp(prefix="dbell-uihome-", dir="/tmp")
-        self._prev_dry = os.environ.get("DESKBELL_DRY_RUN")
-        self._prev_home = os.environ.get("DESKBELL_USER_HOME")
-        os.environ["DESKBELL_DRY_RUN"] = "1"
-        os.environ["DESKBELL_USER_HOME"] = self.tmp_home
-        self.daemon = DeskBellDaemon(
+        self._prev_dry = os.environ.get("CONSILIUM_DRY_RUN")
+        self._prev_home = os.environ.get("CONSILIUM_USER_HOME")
+        os.environ["CONSILIUM_DRY_RUN"] = "1"
+        os.environ["CONSILIUM_USER_HOME"] = self.tmp_home
+        self.daemon = ConsiliumDaemon(
             home_dir=self.tmp_state,
             rendezvous_dir=self.tmp_rv,
             host="127.0.0.1",
@@ -35,13 +35,13 @@ class DashboardAndSSETests(unittest.TestCase):
     def tearDown(self) -> None:
         self.daemon.stop()
         if self._prev_dry is None:
-            os.environ.pop("DESKBELL_DRY_RUN", None)
+            os.environ.pop("CONSILIUM_DRY_RUN", None)
         else:
-            os.environ["DESKBELL_DRY_RUN"] = self._prev_dry
+            os.environ["CONSILIUM_DRY_RUN"] = self._prev_dry
         if self._prev_home is None:
-            os.environ.pop("DESKBELL_USER_HOME", None)
+            os.environ.pop("CONSILIUM_USER_HOME", None)
         else:
-            os.environ["DESKBELL_USER_HOME"] = self._prev_home
+            os.environ["CONSILIUM_USER_HOME"] = self._prev_home
         shutil.rmtree(self.tmp_state, ignore_errors=True)
         shutil.rmtree(self.tmp_rv, ignore_errors=True)
         shutil.rmtree(self.tmp_home, ignore_errors=True)
@@ -95,7 +95,7 @@ class DashboardAndSSETests(unittest.TestCase):
         )
         self.assertEqual(st_ok, 200)
         set_cookie = hdrs_ok.get("set-cookie", "")
-        self.assertIn("deskbell_session=", set_cookie)
+        self.assertIn("consilium_session=", set_cookie)
         self.assertIn("HttpOnly", set_cookie)
         self.assertIn("SameSite=Strict", set_cookie)
         cookie_pair = set_cookie.split(";", 1)[0]
@@ -107,7 +107,7 @@ class DashboardAndSSETests(unittest.TestCase):
                 "id": 1,
                 "method": "tools/call",
                 "params": {
-                    "name": "deskbell_create_mission",
+                    "name": "consilium_create_mission",
                     "arguments": {
                         "title": "Dashboard API test",
                         "goal": "Inspect snapshot shape",
@@ -203,7 +203,7 @@ class DashboardAndSSETests(unittest.TestCase):
                     "id": 10,
                     "method": "tools/call",
                     "params": {
-                        "name": "deskbell_create_mission",
+                        "name": "consilium_create_mission",
                         "arguments": {
                             "title": "SSE order test",
                             "goal": "Push ordered frames",
@@ -220,7 +220,7 @@ class DashboardAndSSETests(unittest.TestCase):
                     "id": 11,
                     "method": "tools/call",
                     "params": {
-                        "name": "deskbell_complete_task",
+                        "name": "consilium_complete_task",
                         "arguments": {
                             "task_id": tid,
                             "peer_id": "chatgpt",
@@ -278,7 +278,7 @@ class DashboardAndSSETests(unittest.TestCase):
         self.assertLess(events[1][1], events[2][1])
 
     def test_sse_detects_waiter_change_and_latency_only_stamps_unacked(self) -> None:
-        from deskbell.wakeup import _acquire_lease, _release_lease
+        from consilium.wakeup import _acquire_lease, _release_lease
 
         # Verify record_peer_wakeup_latency ignores already-acked events.
         created = self.daemon.dispatcher.store.create_mission(
@@ -378,7 +378,7 @@ class DashboardAndSSETests(unittest.TestCase):
         self.assertEqual(hdrs_auth.get("location"), "/ui")
         self.assertEqual(hdrs_auth.get("cache-control"), "no-store")
         set_cookie = hdrs_auth.get("set-cookie", "")
-        self.assertIn("deskbell_session=", set_cookie)
+        self.assertIn("consilium_session=", set_cookie)
         self.assertIn("HttpOnly", set_cookie)
         self.assertIn("SameSite=Strict", set_cookie)
 

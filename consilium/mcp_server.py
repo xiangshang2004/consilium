@@ -14,8 +14,8 @@ import time
 import urllib.parse
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from deskbell import __version__
-from deskbell.dashboard import (
+from consilium import __version__
+from consilium.dashboard import (
     SESSION_COOKIE_NAME,
     EventHub,
     LoginTicketStore,
@@ -24,7 +24,7 @@ from deskbell.dashboard import (
     parse_cookie_header,
     render_dashboard_html,
 )
-from deskbell.models import (
+from consilium.models import (
     DEFAULT_HTTP_HOST,
     DEFAULT_HTTP_PORT,
     DEFAULT_REAPER_INTERVAL_SEC,
@@ -38,9 +38,9 @@ from deskbell.models import (
     resolve_state_dir,
     utc_now_iso,
 )
-from deskbell.quota import sync_local_quotas
-from deskbell.store import BusStore
-from deskbell.wakeup import (
+from consilium.quota import sync_local_quotas
+from consilium.store import BusStore
+from consilium.wakeup import (
     WakeBrokerServer,
     query_active_waiters,
     rebuild_all_peer_seqs,
@@ -78,7 +78,7 @@ def _safe_ring_peer(**kwargs: Any) -> Dict[str, Any]:
 
 TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
-        "name": "deskbell_status",
+        "name": "consilium_status",
         "description": "Inspect peer standby states, active socket waiters, and missions/tasks.",
         "inputSchema": {
             "type": "object",
@@ -88,7 +88,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "deskbell_create_mission",
+        "name": "consilium_create_mission",
         "description": "Create a collaboration mission, dispatch initial tasks, and ring target desktop peers.",
         "inputSchema": {
             "type": "object",
@@ -121,7 +121,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "deskbell_dispatch_task",
+        "name": "consilium_dispatch_task",
         "description": "Add a task to an existing mission and ring the assignee peer.",
         "inputSchema": {
             "type": "object",
@@ -140,7 +140,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "deskbell_pickup_inbox",
+        "name": "consilium_pickup_inbox",
         "description": "Atomically acknowledge unread events and claim queued tasks assigned to peer_id.",
         "inputSchema": {
             "type": "object",
@@ -154,7 +154,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "deskbell_report_progress",
+        "name": "consilium_report_progress",
         "description": "Update task status/progress and optionally ring the coordinator peer.",
         "inputSchema": {
             "type": "object",
@@ -171,7 +171,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "deskbell_complete_task",
+        "name": "consilium_complete_task",
         "description": "Mark a task terminal (done/failed/blocked), record summary/artifacts, and ring the coordinator.",
         "inputSchema": {
             "type": "object",
@@ -187,7 +187,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "deskbell_request_review",
+        "name": "consilium_request_review",
         "description": "Request cross-peer review while enforcing the mission max_rounds loop guard.",
         "inputSchema": {
             "type": "object",
@@ -204,7 +204,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "deskbell_wait",
+        "name": "consilium_wait",
         "description": "Block silently until a doorbell event arrives for peer_id or timeout expires (max 300s). Does not auto-pickup by default.",
         "inputSchema": {
             "type": "object",
@@ -218,7 +218,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "deskbell_quota",
+        "name": "consilium_quota",
         "description": "Query or report per-peer remaining account quota percentages and reset times.",
         "inputSchema": {
             "type": "object",
@@ -245,7 +245,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "deskbell_close_mission",
+        "name": "consilium_close_mission",
         "description": "Record final summary and close a mission (coordinator only; validates open tasks unless force=true).",
         "inputSchema": {
             "type": "object",
@@ -267,7 +267,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
 ]
 
 
-class DeskBellMCPDispatcher:
+class ConsiliumMCPDispatcher:
     """Routes MCP JSON-RPC 2.0 requests to BusStore and wakeup doorbell logic."""
 
     def __init__(
@@ -335,7 +335,7 @@ class DeskBellMCPDispatcher:
                 {
                     "protocolVersion": negotiated,
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "deskbell", "version": __version__},
+                    "serverInfo": {"name": "consilium", "version": __version__},
                 },
             )
 
@@ -371,7 +371,7 @@ class DeskBellMCPDispatcher:
         return self._tool_text_result(req_id, output, is_error=False)
 
     def _dispatch_tool(self, name: str, args: Dict[str, Any]) -> Dict[str, Any]:
-        if name == "deskbell_status":
+        if name == "consilium_status":
             mission_id = args.get("mission_id")
             try:
                 sync_local_quotas(self.store)
@@ -385,7 +385,7 @@ class DeskBellMCPDispatcher:
                 **snapshot,
             }
 
-        if name == "deskbell_create_mission":
+        if name == "consilium_create_mission":
             open_deeplink = _parse_bool(args, "open_deeplink", False)
             client_req_id = args.get("client_request_id")
             created = self.store.create_mission(
@@ -428,10 +428,10 @@ class DeskBellMCPDispatcher:
                     store=self.store,
                     home_dir=self.rendezvous_dir,
                     peer_id=assignee,
-                    title=f"DeskBell: {mission['title']}",
+                    title=f"Consilium: {mission['title']}",
                     body=f"New task(s) {task_ids} ({tiers})",
                     pickup_prompt=(
-                        f"Use deskbell_pickup_inbox(peer_id={assignee!r}) "
+                        f"Use consilium_pickup_inbox(peer_id={assignee!r}) "
                         f"to claim task(s) {task_ids} in mission {mission['mission_id']}."
                     ),
                     workspace_path=mission.get("workspace_path", ""),
@@ -457,7 +457,7 @@ class DeskBellMCPDispatcher:
                 "deliveries": deliveries,
             }
 
-        if name == "deskbell_dispatch_task":
+        if name == "consilium_dispatch_task":
             open_deeplink = _parse_bool(args, "open_deeplink", False)
             client_req_id = args.get("client_request_id")
             dispatched = self.store.dispatch_task(
@@ -486,10 +486,10 @@ class DeskBellMCPDispatcher:
                 store=self.store,
                 home_dir=self.rendezvous_dir,
                 peer_id=task["assignee_peer"],
-                title=f"DeskBell: {mission['title']}",
+                title=f"Consilium: {mission['title']}",
                 body=f"Task {task['task_id']} ({task['model_tier']})",
                 pickup_prompt=(
-                    f"Use deskbell_pickup_inbox(peer_id={task['assignee_peer']!r}) "
+                    f"Use consilium_pickup_inbox(peer_id={task['assignee_peer']!r}) "
                     f"to claim task {task['task_id']} in mission {mission['mission_id']}."
                 ),
                 workspace_path=mission.get("workspace_path", ""),
@@ -505,7 +505,7 @@ class DeskBellMCPDispatcher:
                 "delivery": delivery,
             }
 
-        if name == "deskbell_pickup_inbox":
+        if name == "consilium_pickup_inbox":
             peer = str(args.get("peer_id") or self.default_peer)
             claim_tasks = _parse_bool(args, "claim_tasks", True)
             try:
@@ -521,7 +521,7 @@ class DeskBellMCPDispatcher:
             self._emit_mutation("pickup_inbox")
             return picked
 
-        if name == "deskbell_report_progress":
+        if name == "consilium_report_progress":
             notify_coord = _parse_bool(args, "notify_coordinator", False)
             client_req_id = args.get("client_request_id")
             res = self.store.report_progress(
@@ -542,10 +542,10 @@ class DeskBellMCPDispatcher:
                     store=self.store,
                     home_dir=self.rendezvous_dir,
                     peer_id=res["coordinator_peer"],
-                    title="DeskBell Progress",
+                    title="Consilium Progress",
                     body=f"{args['peer_id']} updated {args['task_id']}",
                     pickup_prompt=(
-                        f"Use deskbell_pickup_inbox(peer_id={res['coordinator_peer']!r}) "
+                        f"Use consilium_pickup_inbox(peer_id={res['coordinator_peer']!r}) "
                         f"to read progress on {args['task_id']}."
                     ),
                     event_ids=[evt_id],
@@ -556,7 +556,7 @@ class DeskBellMCPDispatcher:
             self._emit_mutation("report_progress")
             return {**res, "committed": True, "result": res, "delivery": delivery}
 
-        if name == "deskbell_complete_task":
+        if name == "consilium_complete_task":
             client_req_id = args.get("client_request_id")
             res = self.store.complete_task(
                 task_id=str(args["task_id"]),
@@ -576,13 +576,13 @@ class DeskBellMCPDispatcher:
                     store=self.store,
                     home_dir=self.rendezvous_dir,
                     peer_id=coord,
-                    title="DeskBell Task Done",
+                    title="Consilium Task Done",
                     body=(
                         f"{args['peer_id']} finished {args['task_id']}"
                         + (" (ALL TASKS FINISHED)" if res["all_tasks_finished"] else "")
                     ),
                     pickup_prompt=(
-                        f"Use deskbell_pickup_inbox(peer_id={coord!r}) to collect results "
+                        f"Use consilium_pickup_inbox(peer_id={coord!r}) to collect results "
                         f"from {args['peer_id']} on {args['task_id']}."
                     ),
                     event_ids=[evt_id],
@@ -591,7 +591,7 @@ class DeskBellMCPDispatcher:
             self._emit_mutation("complete_task")
             return {**res, "committed": True, "result": res, "delivery": delivery}
 
-        if name == "deskbell_request_review":
+        if name == "consilium_request_review":
             client_req_id = args.get("client_request_id")
             res = self.store.request_review(
                 mission_id=str(args["mission_id"]),
@@ -612,7 +612,7 @@ class DeskBellMCPDispatcher:
                 if not res["allowed"] and target == sender_norm:
                     delivery = {"delivery": "self_coordinator", "peer_id": target}
                 else:
-                    title = "DeskBell Review Request" if res["allowed"] else "DeskBell Loop Guard"
+                    title = "Consilium Review Request" if res["allowed"] else "Consilium Loop Guard"
                     body = (
                         f"Round {res['round']}/{res['max_rounds']} from {args['from_peer']}"
                         if res["allowed"]
@@ -625,7 +625,7 @@ class DeskBellMCPDispatcher:
                         title=title,
                         body=body,
                         pickup_prompt=(
-                            f"Use deskbell_pickup_inbox(peer_id={target!r}) to handle {title} "
+                            f"Use consilium_pickup_inbox(peer_id={target!r}) to handle {title} "
                             f"for mission {args['mission_id']}."
                         ),
                         event_ids=[evt_id],
@@ -634,7 +634,7 @@ class DeskBellMCPDispatcher:
             self._emit_mutation("request_review")
             return {**res, "committed": True, "result": res, "delivery": delivery}
 
-        if name == "deskbell_wait":
+        if name == "consilium_wait":
             peer = str(args.get("peer_id") or self.default_peer)
             timeout_sec = min(300.0, max(0.1, float(args.get("timeout_sec", 45.0))))
             auto_pickup = _parse_bool(args, "auto_pickup", False)
@@ -660,7 +660,7 @@ class DeskBellMCPDispatcher:
                     pass
             return wres
 
-        if name == "deskbell_quota":
+        if name == "consilium_quota":
             report_windows = args.get("report_windows") or []
             if report_windows:
                 normalized_reports = []
@@ -673,7 +673,7 @@ class DeskBellMCPDispatcher:
                 sync_local_quotas(self.store, user_home=args.get("user_home"))
             return self.store.list_quota_windows(peer_id=args.get("peer_id"))
 
-        if name == "deskbell_close_mission":
+        if name == "consilium_close_mission":
             force = _parse_bool(args, "force", False)
             client_req_id = args.get("client_request_id")
             res = self.store.close_mission(
@@ -705,10 +705,10 @@ class DeskBellMCPDispatcher:
                     store=self.store,
                     home_dir=self.rendezvous_dir,
                     peer_id=evt["to_peer"],
-                    title="DeskBell Mission Closed",
+                    title="Consilium Mission Closed",
                     body=f"Mission {res['mission_id']} closed ({res['status']})",
                     pickup_prompt=(
-                        f"Use deskbell_pickup_inbox(peer_id={evt['to_peer']!r}) "
+                        f"Use consilium_pickup_inbox(peer_id={evt['to_peer']!r}) "
                         f"for closed mission {res['mission_id']}."
                     ),
                     event_ids=[eid],
@@ -769,7 +769,7 @@ def run_stdio_server(
     """Run a newline-delimited JSON-RPC 2.0 MCP server over stdio."""
     in_stream = stdin if stdin is not None else sys.stdin
     out_stream = stdout if stdout is not None else sys.stdout
-    dispatcher = DeskBellMCPDispatcher(
+    dispatcher = ConsiliumMCPDispatcher(
         home_dir=home_dir,
         default_peer=default_peer,
         rendezvous_dir=rendezvous_dir,
@@ -814,7 +814,7 @@ def _is_valid_origin(origin_header: str) -> bool:
     return (parsed.hostname or "").lower() in LOCAL_HOSTS
 
 
-class DeskBellDaemon:
+class ConsiliumDaemon:
     """Combined WakeBrokerServer + hardened 127.0.0.1 Streamable HTTP MCP server."""
 
     def __init__(
@@ -842,7 +842,7 @@ class DeskBellDaemon:
         self.started_monotonic = time.monotonic()
         self.event_hub = EventHub()
         self.ticket_store = LoginTicketStore()
-        self.dispatcher = DeskBellMCPDispatcher(
+        self.dispatcher = ConsiliumMCPDispatcher(
             home_dir=self.home_dir,
             rendezvous_dir=self.rendezvous_dir,
             on_mutation=self.publish_state_update,
@@ -908,10 +908,10 @@ class DeskBellDaemon:
                     store=self.dispatcher.store,
                     home_dir=self.rendezvous_dir,
                     peer_id=coord,
-                    title="DeskBell Task Requeued",
+                    title="Consilium Task Requeued",
                     body=f"Task {task['task_id']} timed out and returned to queued",
                     pickup_prompt=(
-                        f"Use deskbell_pickup_inbox(peer_id={coord!r}) to handle requeued task {task['task_id']}."
+                        f"Use consilium_pickup_inbox(peer_id={coord!r}) to handle requeued task {task['task_id']}."
                     ),
                     event_ids=[eid],
                 )
@@ -1287,10 +1287,10 @@ class DeskBellDaemon:
                                 store=daemon.dispatcher.store,
                                 home_dir=daemon.rendezvous_dir,
                                 peer_id=evt["to_peer"],
-                                title="DeskBell Mission Closed",
+                                title="Consilium Mission Closed",
                                 body=f"Mission {res['mission_id']} closed ({res['status']})",
                                 pickup_prompt=(
-                                    f"Use deskbell_pickup_inbox(peer_id={evt['to_peer']!r}) "
+                                    f"Use consilium_pickup_inbox(peer_id={evt['to_peer']!r}) "
                                     f"for closed mission {res['mission_id']}."
                                 ),
                                 event_ids=[eid],
@@ -1335,10 +1335,10 @@ class DeskBellDaemon:
                             store=daemon.dispatcher.store,
                             home_dir=daemon.rendezvous_dir,
                             peer_id=res["assignee_peer"],
-                            title="DeskBell Task Requeued",
+                            title="Consilium Task Requeued",
                             body=f"Task {tid} returned to queued",
                             pickup_prompt=(
-                                f"Use deskbell_pickup_inbox(peer_id={res['assignee_peer']!r}) "
+                                f"Use consilium_pickup_inbox(peer_id={res['assignee_peer']!r}) "
                                 f"to claim requeued task {tid}."
                             ),
                             event_ids=[eid],
@@ -1412,13 +1412,13 @@ class DeskBellDaemon:
         self.port = int(bound_port)
         self._http_thread = threading.Thread(
             target=self._httpd.serve_forever,
-            name="deskbell-http-server",
+            name="consilium-http-server",
             daemon=True,
         )
         self._http_thread.start()
         self._reaper_thread = threading.Thread(
             target=self._reaper_loop,
-            name="deskbell-stale-reaper",
+            name="consilium-stale-reaper",
             daemon=True,
         )
         self._reaper_thread.start()
@@ -1446,7 +1446,7 @@ class DeskBellDaemon:
         """Start daemon and block until KeyboardInterrupt."""
         host, port = self.start()
         sys.stderr.write(
-            f"deskbell serving on http://{host}:{port}/mcp (socket: {self.wake_broker.sock_path})\n"
+            f"consilium serving on http://{host}:{port}/mcp (socket: {self.wake_broker.sock_path})\n"
         )
         sys.stderr.flush()
         try:

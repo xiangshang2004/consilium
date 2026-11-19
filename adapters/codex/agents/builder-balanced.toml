@@ -1,10 +1,10 @@
-# Codex native agent profile for deskbell tasks tagged model_tier = balanced
+# Codex native agent profile for consilium tasks tagged model_tier = balanced
 name = "builder-balanced"
 description = "Balanced code implementation and test verification profile for Codex Desktop."
 model_reasoning_effort = "medium"
 sandbox_mode = "workspace-write"
 
 developer_instructions = """
-You handle balanced deskbell implementation subtasks inside Codex Desktop.
+You handle balanced consilium implementation subtasks inside Codex Desktop.
 Stay strictly inside your assigned git worktree or directory scope and verify every change with tests.
 """

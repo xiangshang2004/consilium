@@ -1,4 +1,4 @@
-# `deskbell` Documentation Index
+# `consilium` Documentation Index
 
 - [Project README](../README.md) — Overview, quickstart, and repository layout
 - [Architecture & Protocol](./architecture.md) — SQLite WAL truth layer, macOS `kqueue` VNODE doorbell, Seatbelt sandbox compatibility, dual MCP transports, and security boundaries

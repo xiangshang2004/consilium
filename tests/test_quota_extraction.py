@@ -10,24 +10,24 @@ import tempfile
 import time
 import unittest
 
-from deskbell.mcp_server import DeskBellMCPDispatcher
-from deskbell.quota import sync_local_quotas
-from deskbell.store import BusStore
+from consilium.mcp_server import ConsiliumMCPDispatcher
+from consilium.quota import sync_local_quotas
+from consilium.store import BusStore
 
 
 class QuotaExtractionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp_bus = tempfile.mkdtemp(prefix="dbell-qbus-", dir="/tmp")
         self.tmp_user_home = tempfile.mkdtemp(prefix="dbell-qhome-", dir="/tmp")
-        self._prev_user_home = os.environ.get("DESKBELL_USER_HOME")
-        os.environ["DESKBELL_USER_HOME"] = self.tmp_user_home
+        self._prev_user_home = os.environ.get("CONSILIUM_USER_HOME")
+        os.environ["CONSILIUM_USER_HOME"] = self.tmp_user_home
         self.store = BusStore(self.tmp_bus)
 
     def tearDown(self) -> None:
         if self._prev_user_home is None:
-            os.environ.pop("DESKBELL_USER_HOME", None)
+            os.environ.pop("CONSILIUM_USER_HOME", None)
         else:
-            os.environ["DESKBELL_USER_HOME"] = self._prev_user_home
+            os.environ["CONSILIUM_USER_HOME"] = self._prev_user_home
         shutil.rmtree(self.tmp_bus, ignore_errors=True)
         shutil.rmtree(self.tmp_user_home, ignore_errors=True)
 
@@ -154,15 +154,15 @@ class QuotaExtractionTests(unittest.TestCase):
         self.assertTrue(cl["exhausted"])
         self.assertFalse(cl["dispatch_recommended"])
 
-    def test_mcp_deskbell_quota_manual_report_and_status(self) -> None:
-        dispatcher = DeskBellMCPDispatcher(home_dir=self.tmp_bus)
+    def test_mcp_consilium_quota_manual_report_and_status(self) -> None:
+        dispatcher = ConsiliumMCPDispatcher(home_dir=self.tmp_bus)
         resp = dispatcher.handle_payload(
             {
                 "jsonrpc": "2.0",
                 "id": 10,
                 "method": "tools/call",
                 "params": {
-                    "name": "deskbell_quota",
+                    "name": "consilium_quota",
                     "arguments": {
                         "sync_local": False,
                         "peer_id": "chatgpt",
@@ -193,7 +193,7 @@ class QuotaExtractionTests(unittest.TestCase):
                 "jsonrpc": "2.0",
                 "id": 11,
                 "method": "tools/call",
-                "params": {"name": "deskbell_status", "arguments": {}},
+                "params": {"name": "consilium_status", "arguments": {}},
             }
         )
         status_payload = status_resp["result"]["structuredContent"]

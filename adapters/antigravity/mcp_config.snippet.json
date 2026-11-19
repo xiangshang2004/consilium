@@ -1,9 +1,9 @@
 {
   "mcpServers": {
-    "deskbell": {
+    "consilium": {
       "url": "http://127.0.0.1:18920/mcp",
       "headers": {
-        "Authorization": "Bearer __DESKBELL_TOKEN__"
+        "Authorization": "Bearer __CONSILIUM_TOKEN__"
       }
     }
   }

@@ -1,4 +1,4 @@
-"""CLI entrypoint for deskbell daemon, stdio MCP bridge, zero-CPU waiter, status, and quota."""
+"""CLI entrypoint for consilium daemon, stdio MCP bridge, zero-CPU waiter, status, and quota."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 from typing import List, Optional
 
-from deskbell.models import (
+from consilium.models import (
     DEFAULT_HTTP_HOST,
     DEFAULT_HTTP_PORT,
     VALID_PEERS,
@@ -20,15 +20,15 @@ from deskbell.models import (
     resolve_rendezvous_dir,
     resolve_state_dir,
 )
-from deskbell.mcp_server import DeskBellDaemon, run_stdio_server
-from deskbell.quota import sync_local_quotas
-from deskbell.store import BusStore
-from deskbell.wakeup import query_active_waiters, wait_for_doorbell
+from consilium.mcp_server import ConsiliumDaemon, run_stdio_server
+from consilium.quota import sync_local_quotas
+from consilium.store import BusStore
+from consilium.wakeup import query_active_waiters, wait_for_doorbell
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="deskbell",
+        prog="consilium",
         description="Local MCP collaboration bus and wakeup doorbell for desktop AI apps.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -102,7 +102,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.command == "serve":
         state_dir = resolve_state_dir(args.data_dir)
         rv_dir = resolve_rendezvous_dir(args.rendezvous_dir, fallback_dir=args.data_dir)
-        daemon = DeskBellDaemon(
+        daemon = ConsiliumDaemon(
             home_dir=state_dir,
             rendezvous_dir=rv_dir,
             host=args.host,
@@ -200,13 +200,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         except urllib.error.HTTPError as exc:
             sys.stderr.write(
                 f"Failed to request UI login ticket ({exc.code}): "
-                f"check that deskbell serve is running with the same --data-dir ({state_dir}).\n"
+                f"check that consilium serve is running with the same --data-dir ({state_dir}).\n"
             )
             return 1
         except urllib.error.URLError as exc:
             sys.stderr.write(
-                f"Cannot reach deskbell daemon at http://{args.host}:{args.port} ({exc.reason}).\n"
-                f"Start it first: /usr/bin/python3 -m deskbell.cli serve --port {args.port}\n"
+                f"Cannot reach consilium daemon at http://{args.host}:{args.port} ({exc.reason}).\n"
+                f"Start it first: /usr/bin/python3 -m consilium.cli serve --port {args.port}\n"
             )
             return 1
         auth_url = str(data.get("url") or f"http://{args.host}:{args.port}/ui")

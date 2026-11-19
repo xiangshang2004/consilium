@@ -1,1 +1,1 @@
-"""Unit test suite for deskbell."""
+"""Unit test suite for consilium."""

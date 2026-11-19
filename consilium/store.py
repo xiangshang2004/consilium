@@ -1,4 +1,4 @@
-"""SQLite WAL truth-layer store for deskbell missions, tasks, peers, and events."""
+"""SQLite WAL truth-layer store for consilium missions, tasks, peers, and events."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import time
 from typing import Any, Dict, Iterator, List, Optional
 import uuid
 
-from deskbell.models import (
+from consilium.models import (
     DEFAULT_CLAIM_TIMEOUT_SEC,
     DEFAULT_RUNNING_TIMEOUT_SEC,
     NON_TERMINAL_TASK_STATUSES,
@@ -26,7 +26,7 @@ from deskbell.models import (
     validate_choice,
     validate_peer,
 )
-from deskbell.wakeup import query_active_waiters, write_peer_seq
+from consilium.wakeup import query_active_waiters, write_peer_seq
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS peers (
@@ -145,7 +145,7 @@ def _format_countdown(seconds: Optional[int]) -> str:
 
 
 class BusStore:
-    """Transactional SQLite WAL store for deskbell coordination state."""
+    """Transactional SQLite WAL store for consilium coordination state."""
 
     def __init__(
         self,
@@ -909,7 +909,7 @@ class BusStore:
                 int(claimed_timeout_sec)
                 if claimed_timeout_sec is not None
                 else int(
-                    os.environ.get("DESKBELL_CLAIM_TIMEOUT_SEC", str(DEFAULT_CLAIM_TIMEOUT_SEC))
+                    os.environ.get("CONSILIUM_CLAIM_TIMEOUT_SEC", str(DEFAULT_CLAIM_TIMEOUT_SEC))
                 )
             )
         )
@@ -917,7 +917,7 @@ class BusStore:
             int(running_timeout_sec)
             if running_timeout_sec is not None
             else int(
-                os.environ.get("DESKBELL_RUNNING_TIMEOUT_SEC", str(DEFAULT_RUNNING_TIMEOUT_SEC))
+                os.environ.get("CONSILIUM_RUNNING_TIMEOUT_SEC", str(DEFAULT_RUNNING_TIMEOUT_SEC))
             )
         )
         now_dt = datetime.now(timezone.utc)

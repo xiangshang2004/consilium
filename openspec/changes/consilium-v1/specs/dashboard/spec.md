@@ -3,14 +3,14 @@
 ## ADDED Requirements
 
 ### Requirement: Offline Localhost Dashboard UI (`/ui`)
-`DeskBellDaemon` MUST serve a single-page dashboard at `GET /ui` on `127.0.0.1` with zero external CDN dependencies (all CSS and JS inline).
+`ConsiliumDaemon` MUST serve a single-page dashboard at `GET /ui` on `127.0.0.1` with zero external CDN dependencies (all CSS and JS inline).
 
 #### Scenario: Dashboard renders offline with Light/Dark/System theme support
 - **WHEN** an authenticated user loads `GET /ui`
 - **THEN** the page MUST render the Consilium header (title, daemon uptime, version, Light/Dark/System theme toggle), three peer status cards (`claude`, `chatgpt`, `antigravity`), the mission list with progress bars and review round indicators, expandable mission detail (status-grouped task cards, reverse-chronological event timeline with hot/cold badges and ms wakeup latency, Markdown `final_summary`), and tabular numerals (`font-variant-numeric: tabular-nums`) without any external network requests.
 
 ### Requirement: Snapshot API (`/api/state`) and Realtime SSE (`/api/stream`)
-`DeskBellDaemon` MUST expose authenticated `GET /api/state` returning a complete JSON snapshot (daemon metadata, peers, quotas with `"unknown"` / `null` when missing, missions, tasks, and events) and `GET /api/stream` streaming Server-Sent Events (`text/event-stream`) in event order, while the UI automatically reconnects SSE and falls back to 3-second polling when SSE is unavailable.
+`ConsiliumDaemon` MUST expose authenticated `GET /api/state` returning a complete JSON snapshot (daemon metadata, peers, quotas with `"unknown"` / `null` when missing, missions, tasks, and events) and `GET /api/stream` streaming Server-Sent Events (`text/event-stream`) in event order, while the UI automatically reconnects SSE and falls back to 3-second polling when SSE is unavailable.
 
 #### Scenario: SSE delivers ordered live updates
 - **WHEN** a client subscribes to `GET /api/stream` and mission/task mutations occur

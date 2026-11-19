@@ -6,7 +6,7 @@ dist/
 build/
 .DS_Store
 .pytest_cache/
-.deskbell-local/
+.consilium-local/
 *.sock
 *.db
 *.db-wal

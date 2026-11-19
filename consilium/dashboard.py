@@ -10,13 +10,13 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from deskbell import __version__
-from deskbell.models import utc_now_iso
-from deskbell.quota import sync_local_quotas
-from deskbell.store import BusStore
-from deskbell.wakeup import query_active_waiters
+from consilium import __version__
+from consilium.models import utc_now_iso
+from consilium.quota import sync_local_quotas
+from consilium.store import BusStore
+from consilium.wakeup import query_active_waiters
 
-SESSION_COOKIE_NAME = "deskbell_session"
+SESSION_COOKIE_NAME = "consilium_session"
 _SESSION_HMAC_CONTEXT = b"consilium-ui-session-v1"
 
 
@@ -45,7 +45,7 @@ def parse_cookie_header(cookie_header: str) -> Dict[str, str]:
 
 
 class LoginTicketStore:
-    """Short-lived, single-use local login tickets so `deskbell ui` opens logged-in without putting auth.token in URLs."""
+    """Short-lived, single-use local login tickets so `consilium ui` opens logged-in without putting auth.token in URLs."""
 
     def __init__(self, max_pending: int = 32) -> None:
         self._lock = threading.Lock()
@@ -1102,8 +1102,8 @@ html, body {
   <div class="modal">
     <h2 id="login-title">登录 Consilium 看板</h2>
     <p>推荐使用一条命令免密直达（自动签发一次性票据并记住当前浏览器会话，之后不用再输）：</p>
-    <p><code class="mono">python3 -m deskbell.cli ui</code></p>
-    <p>若手动输入，可先复制本机令牌：<code class="mono">pbcopy &lt; ~/Library/Application\ Support/deskbell/auth.token</code></p>
+    <p><code class="mono">python3 -m consilium.cli ui</code></p>
+    <p>若手动输入，可先复制本机令牌：<code class="mono">pbcopy &lt; ~/Library/Application\ Support/consilium/auth.token</code></p>
     <input type="password" id="token-input" class="input mono" placeholder="粘贴本机 auth.token 令牌…" autocomplete="off">
     <div class="err-text" id="login-err"></div>
     <div class="modal-actions">
@@ -1418,7 +1418,7 @@ html, body {
     const missions = state.missions || [];
     document.getElementById("missions-summary").textContent = missions.length + " 条记录";
     if (!missions.length) {
-      stack.innerHTML = `<div class="empty-state">暂无 Mission。可在任意已接入 deskbell 的桌面端发起会诊，或运行 <code class="mono">run_demo_a.py</code> 驱动实时演示。</div>`;
+      stack.innerHTML = `<div class="empty-state">暂无 Mission。可在任意已接入 consilium 的桌面端发起会诊，或运行 <code class="mono">run_demo_a.py</code> 驱动实时演示。</div>`;
       return;
     }
     if (!autoExpandedOnce && missions.length) {

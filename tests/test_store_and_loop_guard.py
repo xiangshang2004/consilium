@@ -8,7 +8,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from deskbell.store import BusStore
+from consilium.store import BusStore
 
 
 class StoreAndLoopGuardTests(unittest.TestCase):

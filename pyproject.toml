@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "deskbell"
+name = "consilium"
 version = "0.1.0"
 description = "Local MCP collaboration bus and zero-CLI doorbell wakeup bridge for desktop AI apps on macOS"
 readme = "README.md"
@@ -11,7 +11,7 @@ requires-python = ">=3.9"
 dependencies = []
 
 [project.scripts]
-deskbell = "deskbell.cli:main"
+consilium = "consilium.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["deskbell*"]
+include = ["consilium*"]

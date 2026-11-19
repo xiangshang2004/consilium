@@ -195,7 +195,7 @@ Hooks own normal skill-active and workflow-state persistence under `.omx/state/`
 Execute `omx setup` to install all components. Execute `omx doctor` to verify installation.
 
 <!-- OMX:AGENTS-INIT:MANUAL:START -->
-## Local Notes (`deskbell`)
+## Local Notes (`consilium`)
 - **Purpose**: Desktop-native collaboration bus & doorbell wakeup system connecting `ChatGPT.app` (`com.openai.codex`), `Claude.app` (`com.anthropic.claudefordesktop`), and `Antigravity.app` (`com.google.antigravity`) without wrapping LLM CLIs.
 - **Runtime Constraint**: Pure **Python 3.9+ standard library** (`from __future__ import annotations` at top of every module, zero third-party pip dependencies, tested via `/usr/bin/python3 -m unittest discover -s tests -v`).
 - **Desktop Harness Philosophy**: Cross-desktop coordination uses MCP + SQLite WAL + `AF_UNIX` wakeups (with safe cold macOS notification/deep-link fallback). Dynamic model routing and parallel fan-out use each desktop app's own native subagent/profile harness.

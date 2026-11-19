@@ -15,12 +15,12 @@ import time
 import unittest
 from unittest import mock
 
-from deskbell import mcp_server
-from deskbell.mcp_server import DeskBellDaemon, DeskBellMCPDispatcher, run_stdio_server
-from deskbell.models import resolve_rendezvous_dir
-from deskbell.quota import sync_local_quotas
-from deskbell.store import BusStore
-from deskbell.wakeup import read_peer_seq, ring_peer, wait_for_doorbell
+from consilium import mcp_server
+from consilium.mcp_server import ConsiliumDaemon, ConsiliumMCPDispatcher, run_stdio_server
+from consilium.models import resolve_rendezvous_dir
+from consilium.quota import sync_local_quotas
+from consilium.store import BusStore
+from consilium.wakeup import read_peer_seq, ring_peer, wait_for_doorbell
 from scripts.install import rotate_token, run_installer
 from tests.test_mcp_transports import _raw_http_roundtrip
 
@@ -30,35 +30,35 @@ class R006RegressionsTests(unittest.TestCase):
         self.tmp_state = tempfile.mkdtemp(prefix="dbell-r6s-", dir="/tmp")
         self.tmp_rv = tempfile.mkdtemp(prefix="dbell-r6rv-", dir="/tmp")
         self.tmp_home = tempfile.mkdtemp(prefix="dbell-r6h-", dir="/tmp")
-        self._prev_dry = os.environ.get("DESKBELL_DRY_RUN")
-        self._prev_user_home = os.environ.get("DESKBELL_USER_HOME")
-        os.environ["DESKBELL_DRY_RUN"] = "1"
-        os.environ["DESKBELL_USER_HOME"] = self.tmp_home
+        self._prev_dry = os.environ.get("CONSILIUM_DRY_RUN")
+        self._prev_user_home = os.environ.get("CONSILIUM_USER_HOME")
+        os.environ["CONSILIUM_DRY_RUN"] = "1"
+        os.environ["CONSILIUM_USER_HOME"] = self.tmp_home
         self.repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     def tearDown(self) -> None:
         if self._prev_dry is None:
-            os.environ.pop("DESKBELL_DRY_RUN", None)
+            os.environ.pop("CONSILIUM_DRY_RUN", None)
         else:
-            os.environ["DESKBELL_DRY_RUN"] = self._prev_dry
+            os.environ["CONSILIUM_DRY_RUN"] = self._prev_dry
         if self._prev_user_home is None:
-            os.environ.pop("DESKBELL_USER_HOME", None)
+            os.environ.pop("CONSILIUM_USER_HOME", None)
         else:
-            os.environ["DESKBELL_USER_HOME"] = self._prev_user_home
+            os.environ["CONSILIUM_USER_HOME"] = self._prev_user_home
         shutil.rmtree(self.tmp_state, ignore_errors=True)
         shutil.rmtree(self.tmp_rv, ignore_errors=True)
         shutil.rmtree(self.tmp_home, ignore_errors=True)
 
-    # ---- R005 3.1: deskbell_wait defaults to auto_pickup=False ----
+    # ---- R005 3.1: consilium_wait defaults to auto_pickup=False ----
     def test_3_1_wait_defaults_no_auto_pickup_and_timeout_leaves_task_queued(self) -> None:
-        dispatcher = DeskBellMCPDispatcher(
+        dispatcher = ConsiliumMCPDispatcher(
             home_dir=self.tmp_state, rendezvous_dir=self.tmp_rv
         )
         tools_resp = dispatcher.handle_payload(
             {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
         )
         wait_tool = [
-            t for t in tools_resp["result"]["tools"] if t["name"] == "deskbell_wait"
+            t for t in tools_resp["result"]["tools"] if t["name"] == "consilium_wait"
         ][0]
         self.assertFalse(wait_tool["inputSchema"]["properties"]["auto_pickup"]["default"])
 
@@ -69,7 +69,7 @@ class R006RegressionsTests(unittest.TestCase):
                 "id": 2,
                 "method": "tools/call",
                 "params": {
-                    "name": "deskbell_wait",
+                    "name": "consilium_wait",
                     "arguments": {"peer_id": "claude", "timeout_sec": 0.1},
                 },
             }
@@ -83,7 +83,7 @@ class R006RegressionsTests(unittest.TestCase):
                 "id": 3,
                 "method": "tools/call",
                 "params": {
-                    "name": "deskbell_create_mission",
+                    "name": "consilium_create_mission",
                     "arguments": {
                         "title": "After timeout",
                         "goal": "Task must stay queued",
@@ -95,14 +95,14 @@ class R006RegressionsTests(unittest.TestCase):
         )
         mission_id = create_resp["result"]["structuredContent"]["mission"]["mission_id"]
 
-        # Even calling deskbell_wait again (immediate wakeup) without auto_pickup leaves task queued!
+        # Even calling consilium_wait again (immediate wakeup) without auto_pickup leaves task queued!
         wait2 = dispatcher.handle_payload(
             {
                 "jsonrpc": "2.0",
                 "id": 4,
                 "method": "tools/call",
                 "params": {
-                    "name": "deskbell_wait",
+                    "name": "consilium_wait",
                     "arguments": {"peer_id": "claude", "timeout_sec": 0.5},
                 },
             }
@@ -225,11 +225,11 @@ class R006RegressionsTests(unittest.TestCase):
             rendezvous_dir=self.tmp_rv,
             claude_running_check=lambda: False,
         )
-        state_dir = os.path.join(self.tmp_home, "Library", "Application Support", "deskbell")
+        state_dir = os.path.join(self.tmp_home, "Library", "Application Support", "consilium")
         with open(os.path.join(state_dir, "auth.token"), encoding="utf-8") as h:
             old_token = h.read().strip()
 
-        daemon = DeskBellDaemon(
+        daemon = ConsiliumDaemon(
             home_dir=state_dir, rendezvous_dir=self.tmp_rv, host="127.0.0.1", port=18920
         )
         s_old_ok, _, _ = _raw_http_roundtrip(
@@ -285,7 +285,7 @@ class R006RegressionsTests(unittest.TestCase):
             )
             conn.commit()
 
-        daemon = DeskBellDaemon(
+        daemon = ConsiliumDaemon(
             home_dir=self.tmp_state,
             rendezvous_dir=self.tmp_rv,
             reaper_interval_sec=0.05,
@@ -301,7 +301,7 @@ class R006RegressionsTests(unittest.TestCase):
 
     # ---- R005 3.5: ring_peer error isolated + client_request_id idempotency ----
     def test_3_5_ring_error_returns_committed_true_and_idempotency_prevents_duplicates(self) -> None:
-        dispatcher = DeskBellMCPDispatcher(
+        dispatcher = ConsiliumMCPDispatcher(
             home_dir=self.tmp_state, rendezvous_dir=self.tmp_rv
         )
         with mock.patch.object(mcp_server, "ring_peer", side_effect=RuntimeError("boom")):
@@ -311,7 +311,7 @@ class R006RegressionsTests(unittest.TestCase):
                     "id": 10,
                     "method": "tools/call",
                     "params": {
-                        "name": "deskbell_create_mission",
+                        "name": "consilium_create_mission",
                         "arguments": {
                             "title": "Fault isolation",
                             "goal": "Committed despite ring failure",
@@ -335,7 +335,7 @@ class R006RegressionsTests(unittest.TestCase):
                 "id": 11,
                 "method": "tools/call",
                 "params": {
-                    "name": "deskbell_create_mission",
+                    "name": "consilium_create_mission",
                     "arguments": {
                         "title": "Fault isolation",
                         "goal": "Committed despite ring failure",
@@ -359,7 +359,7 @@ class R006RegressionsTests(unittest.TestCase):
                 "id": 12,
                 "method": "tools/call",
                 "params": {
-                    "name": "deskbell_dispatch_task",
+                    "name": "consilium_dispatch_task",
                     "arguments": {
                         "mission_id": mid1,
                         "assignee_peer": "antigravity",
@@ -375,7 +375,7 @@ class R006RegressionsTests(unittest.TestCase):
                 "id": 13,
                 "method": "tools/call",
                 "params": {
-                    "name": "deskbell_dispatch_task",
+                    "name": "consilium_dispatch_task",
                     "arguments": {
                         "mission_id": mid1,
                         "assignee_peer": "antigravity",
@@ -391,7 +391,7 @@ class R006RegressionsTests(unittest.TestCase):
     # ---- R005 3.6: SKILL.md no longer claims pressing Return joins ----
     def test_3_6_skill_md_removes_press_return_claim(self) -> None:
         skill_path = os.path.join(
-            self.repo_dir, "adapters", "skill", "deskbell-collab", "SKILL.md"
+            self.repo_dir, "adapters", "skill", "consilium-collab", "SKILL.md"
         )
         with open(skill_path, encoding="utf-8") as h:
             text = h.read()
@@ -411,7 +411,7 @@ class R006RegressionsTests(unittest.TestCase):
             (ag_path, '{"mcpServers": {"orig": {"url": "http://127.0.0.1:1"}}}\n'),
             (cd_path, '{"mcpServers": {"keep": {"command": "echo"}}}\n'),
             (cc_path, '{"mcpServers": {}}\n'),
-            (cx_path, 'model = "gpt-5"\n[mcp_servers."deskbell"]\nurl = "http://127.0.0.1:1"\n'),
+            (cx_path, 'model = "gpt-5"\n[mcp_servers."consilium"]\nurl = "http://127.0.0.1:1"\n'),
         ):
             os.makedirs(os.path.dirname(p), exist_ok=True)
             with open(p, "w", encoding="utf-8") as h:
@@ -435,13 +435,13 @@ class R006RegressionsTests(unittest.TestCase):
                 self.assertEqual(h.read(), expected)
         self.assertFalse(
             os.path.exists(
-                os.path.join(self.tmp_home, "Library", "Application Support", "deskbell", "auth.token")
+                os.path.join(self.tmp_home, "Library", "Application Support", "consilium", "auth.token")
             )
         )
 
-        # Also test dotted key detection: mcp_servers.deskbell.url = ...
+        # Also test dotted key detection: mcp_servers.consilium.url = ...
         with open(cx_path, "w", encoding="utf-8") as h:
-            h.write('mcp_servers.deskbell.url = "http://127.0.0.1:9999/mcp"\n')
+            h.write('mcp_servers.consilium.url = "http://127.0.0.1:9999/mcp"\n')
         with self.assertRaises(ValueError):
             run_installer(
                 mode="dry-run",
@@ -464,7 +464,7 @@ class R006RegressionsTests(unittest.TestCase):
             )
         self.assertFalse(
             os.path.exists(
-                os.path.join(self.tmp_home, "Library", "Application Support", "deskbell", "auth.token")
+                os.path.join(self.tmp_home, "Library", "Application Support", "consilium", "auth.token")
             )
         )
 
@@ -472,7 +472,7 @@ class R006RegressionsTests(unittest.TestCase):
         cc_path = os.path.join(self.tmp_home, ".claude.json")
         old_entry = {"type": "http", "url": "http://127.0.0.1:18920/mcp", "headers": {"Authorization": "Bearer OLD"}}
         with open(cc_path, "w", encoding="utf-8") as h:
-            json.dump({"mcpServers": {"deskbell": old_entry}}, h)
+            json.dump({"mcpServers": {"consilium": old_entry}}, h)
 
         calls = []
 
@@ -559,7 +559,7 @@ class R006RegressionsTests(unittest.TestCase):
             store.request_review(m1["mission"]["mission_id"], "chatgpt", "claude", "s", "q")
 
     def test_p2_3_strict_rpc_and_http_validation(self) -> None:
-        daemon = DeskBellDaemon(home_dir=self.tmp_state, rendezvous_dir=self.tmp_rv)
+        daemon = ConsiliumDaemon(home_dir=self.tmp_state, rendezvous_dir=self.tmp_rv)
         # Non-dict batch element -> -32600
         batch_resp = daemon.dispatcher.handle_payload([123, {"jsonrpc": "2.0", "id": 1, "method": "ping"}])
         self.assertEqual(batch_resp[0]["error"]["code"], -32600)
@@ -578,7 +578,7 @@ class R006RegressionsTests(unittest.TestCase):
                 "id": 3,
                 "method": "tools/call",
                 "params": {
-                    "name": "deskbell_wait",
+                    "name": "consilium_wait",
                     "arguments": {"peer_id": "claude", "auto_pickup": "false"},
                 },
             }
@@ -649,8 +649,8 @@ class R006RegressionsTests(unittest.TestCase):
         self.assertEqual(gpt["windows"][0]["window_key"], "90m")
 
     def test_demo_a_findings_rendezvous_env_precedence_and_peer_activity(self) -> None:
-        prev = os.environ.get("DESKBELL_RENDEZVOUS_DIR")
-        os.environ["DESKBELL_RENDEZVOUS_DIR"] = self.tmp_rv
+        prev = os.environ.get("CONSILIUM_RENDEZVOUS_DIR")
+        os.environ["CONSILIUM_RENDEZVOUS_DIR"] = self.tmp_rv
         try:
             self.assertEqual(
                 resolve_rendezvous_dir(None, fallback_dir=self.tmp_state),
@@ -658,9 +658,9 @@ class R006RegressionsTests(unittest.TestCase):
             )
         finally:
             if prev is None:
-                os.environ.pop("DESKBELL_RENDEZVOUS_DIR", None)
+                os.environ.pop("CONSILIUM_RENDEZVOUS_DIR", None)
             else:
-                os.environ["DESKBELL_RENDEZVOUS_DIR"] = prev
+                os.environ["CONSILIUM_RENDEZVOUS_DIR"] = prev
 
         store = BusStore(self.tmp_state, rendezvous_dir=self.tmp_rv)
         store.create_mission(

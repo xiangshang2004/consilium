@@ -11,8 +11,8 @@ import time
 import unittest
 import urllib.parse
 
-from deskbell.store import BusStore
-from deskbell.wakeup import (
+from consilium.store import BusStore
+from consilium.wakeup import (
     ColdDoorbell,
     _acquire_lease,
     _release_lease,
@@ -34,13 +34,13 @@ class WakeupAndColdFallbackTests(unittest.TestCase):
         shutil.rmtree(self.tmp_rv, ignore_errors=True)
 
     def test_long_home_path_shortens_unix_socket_inside_private_subdir(self) -> None:
-        long_rv = "/tmp/" + ("nested_directory_segment_" * 5) + "deskbell"
+        long_rv = "/tmp/" + ("nested_directory_segment_" * 5) + "consilium"
         try:
             sock_path = resolve_socket_path(long_rv)
             self.assertLessEqual(len(sock_path.encode("utf-8")), 96)
-            self.assertTrue(sock_path.startswith(f"/tmp/deskbell-{os.getuid()}/sock/"))
+            self.assertTrue(sock_path.startswith(f"/tmp/consilium-{os.getuid()}/sock/"))
         finally:
-            shutil.rmtree("/tmp/nested_directory_segment_nested_directory_segment_nested_directory_segment_nested_directory_segment_nested_directory_segment_deskbell", ignore_errors=True)
+            shutil.rmtree("/tmp/nested_directory_segment_nested_directory_segment_nested_directory_segment_nested_directory_segment_nested_directory_segment_consilium", ignore_errors=True)
 
     def test_db_free_kqueue_hot_wakeup_and_lease_cleanup(self) -> None:
         wait_result = {}
@@ -136,7 +136,7 @@ class WakeupAndColdFallbackTests(unittest.TestCase):
                 peer_id="claude",
                 title="Escalation test",
                 body="Task waiting",
-                pickup_prompt="Check deskbell inbox",
+                pickup_prompt="Check consilium inbox",
                 dry_run=True,
                 event_ids=[created["events"][0]["event_id"]],
                 escalation_delay_sec=0.1,
@@ -177,28 +177,28 @@ class WakeupAndColdFallbackTests(unittest.TestCase):
         claude_url = ColdDoorbell.build_deeplink(
             "claude",
             chinese_prompt,
-            workspace_path="/Users/up/code/github/deskbell",
+            workspace_path="/Users/up/code/github/consilium",
             max_url_len=295,
         )
         self.assertLessEqual(len(claude_url), 295)
         self.assertTrue(claude_url.startswith("claude://code/new?q="))
-        self.assertIn("&folder=%2FUsers%2Fup%2Fcode%2Fgithub%2Fdeskbell", claude_url)
+        self.assertIn("&folder=%2FUsers%2Fup%2Fcode%2Fgithub%2Fconsilium", claude_url)
         parsed = urllib.parse.urlparse(claude_url)
         params = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
         # Leading '/' must be stripped, and UTF-8 must decode cleanly without split %XX!
         self.assertFalse(params["q"][0].startswith("/"))
-        self.assertEqual(params["folder"][0], "/Users/up/code/github/deskbell")
+        self.assertEqual(params["folder"][0], "/Users/up/code/github/consilium")
 
         codex_url = ColdDoorbell.build_deeplink(
             "chatgpt",
-            "/Claim task T-999 from deskbell",
-            workspace_path="/Users/up/code/github/deskbell",
+            "/Claim task T-999 from consilium",
+            workspace_path="/Users/up/code/github/consilium",
         )
         self.assertTrue(codex_url.startswith("codex://new?prompt="))
         self.assertNotIn("&folder=", codex_url)
-        self.assertIn("&path=%2FUsers%2Fup%2Fcode%2Fgithub%2Fdeskbell", codex_url)
+        self.assertIn("&path=%2FUsers%2Fup%2Fcode%2Fgithub%2Fconsilium", codex_url)
         codex_params = urllib.parse.parse_qs(urllib.parse.urlparse(codex_url).query)
-        self.assertEqual(codex_params["path"][0], "/Users/up/code/github/deskbell")
+        self.assertEqual(codex_params["path"][0], "/Users/up/code/github/consilium")
         self.assertNotIn("[cwd:", codex_params["prompt"][0])
         self.assertFalse(codex_params["prompt"][0].startswith("/"))
 
@@ -213,8 +213,8 @@ class WakeupAndColdFallbackTests(unittest.TestCase):
             peer_id="claude",
             title='Check "quotes" & newlines\nhere',
             body="Task T-123 ready",
-            pickup_prompt='Use deskbell_pickup_inbox("claude") for "T-123"',
-            workspace_path="/Users/up/code/github/deskbell",
+            pickup_prompt='Use consilium_pickup_inbox("claude") for "T-123"',
+            workspace_path="/Users/up/code/github/consilium",
             open_deeplink=True,
             dry_run=True,
         )

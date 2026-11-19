@@ -1,4 +1,4 @@
-"""deskbell: Local MCP collaboration bus and wakeup doorbell for desktop AI apps."""
+"""consilium: Local MCP collaboration bus and wakeup doorbell for desktop AI apps."""
 
 from __future__ import annotations
 

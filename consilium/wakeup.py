@@ -16,7 +16,7 @@ import time
 import urllib.parse
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-from deskbell.models import (
+from consilium.models import (
     VALID_PEERS,
     _ensure_private_dir,
     resolve_rendezvous_dir,
@@ -24,7 +24,7 @@ from deskbell.models import (
 )
 
 if TYPE_CHECKING:
-    from deskbell.store import BusStore
+    from consilium.store import BusStore
 
 MAX_UNIX_PATH_BYTES = 96
 DEFAULT_DEEPLINK_MAX_LEN = 2000
@@ -37,13 +37,13 @@ def resolve_socket_path(rendezvous_dir: str) -> str:
     candidate = os.path.join(resolved_rv, "wake.sock")
     if len(candidate.encode("utf-8")) <= MAX_UNIX_PATH_BYTES:
         return candidate
-    sock_dir = _ensure_private_dir(f"/tmp/deskbell-{os.getuid()}/sock", "socket")
+    sock_dir = _ensure_private_dir(f"/tmp/consilium-{os.getuid()}/sock", "socket")
     digest = hashlib.sha256(resolved_rv.encode("utf-8")).hexdigest()[:10]
     return os.path.join(sock_dir, f"{digest}.sock")
 
 
 def _is_dry_run(dry_run: bool = False) -> bool:
-    return bool(dry_run or os.environ.get("DESKBELL_DRY_RUN") == "1")
+    return bool(dry_run or os.environ.get("CONSILIUM_DRY_RUN") == "1")
 
 
 def _send_json_line(sock: socket.socket, payload: Dict[str, Any]) -> None:
@@ -397,7 +397,7 @@ class WakeBrokerServer:
         self._server_sock = sock
         self._running = True
         self._accept_thread = threading.Thread(
-            target=self._accept_loop, name="deskbell-wake-accept", daemon=True
+            target=self._accept_loop, name="consilium-wake-accept", daemon=True
         )
         self._accept_thread.start()
         return self.sock_path
@@ -466,7 +466,7 @@ class WakeBrokerServer:
             worker = threading.Thread(
                 target=self._handle_client,
                 args=(conn,),
-                name="deskbell-wake-client",
+                name="consilium-wake-client",
                 daemon=True,
             )
             worker.start()
@@ -869,7 +869,7 @@ class ColdDoorbell:
     ) -> str:
         """Build a valid native desktop deep-link URL truncated safely before percent-encoding."""
         peer = validate_peer(peer_id)
-        clean = (pickup_prompt or "").strip().lstrip("/").strip() or "Check deskbell inbox"
+        clean = (pickup_prompt or "").strip().lstrip("/").strip() or "Check consilium inbox"
 
         if peer == "claude":
             prefix = "claude://code/new?q="
@@ -974,7 +974,7 @@ def ring_peer(
         delay = (
             float(escalation_delay_sec)
             if escalation_delay_sec is not None
-            else float(os.environ.get("DESKBELL_ESCALATION_SEC", str(DEFAULT_ESCALATION_SEC)))
+            else float(os.environ.get("CONSILIUM_ESCALATION_SEC", str(DEFAULT_ESCALATION_SEC)))
         )
         escalation_scheduled = False
         if store is not None and event_ids and delay > 0:

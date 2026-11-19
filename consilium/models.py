@@ -1,4 +1,4 @@
-"""Shared constants, validation helpers, and split state/rendezvous paths for deskbell."""
+"""Shared constants, validation helpers, and split state/rendezvous paths for consilium."""
 
 from __future__ import annotations
 
@@ -61,10 +61,10 @@ def _ensure_private_dir(raw_path: str, label: str) -> str:
     os.makedirs(resolved, mode=0o700, exist_ok=True)
     st = os.lstat(resolved)
     if stat.S_ISLNK(st.st_mode):
-        raise PermissionError(f"Refusing symlinked deskbell {label} directory: {resolved}")
+        raise PermissionError(f"Refusing symlinked consilium {label} directory: {resolved}")
     if st.st_uid != os.getuid():
         raise PermissionError(
-            f"Refusing deskbell {label} directory owned by uid {st.st_uid}: {resolved}"
+            f"Refusing consilium {label} directory owned by uid {st.st_uid}: {resolved}"
         )
     try:
         os.chmod(resolved, 0o700)
@@ -74,12 +74,12 @@ def _ensure_private_dir(raw_path: str, label: str) -> str:
 
 
 def resolve_state_dir(override: Optional[str] = None) -> str:
-    """Resolve the persistent state directory (defaults to ~/Library/Application Support/deskbell)."""
-    default_dir = os.path.join("~", "Library", "Application Support", "deskbell")
+    """Resolve the persistent state directory (defaults to ~/Library/Application Support/consilium)."""
+    default_dir = os.path.join("~", "Library", "Application Support", "consilium")
     raw = (
         override
-        or os.environ.get("DESKBELL_STATE_DIR")
-        or os.environ.get("DESKBELL_HOME")
+        or os.environ.get("CONSILIUM_STATE_DIR")
+        or os.environ.get("CONSILIUM_HOME")
         or default_dir
     )
     return _ensure_private_dir(raw, "state")
@@ -96,12 +96,12 @@ def resolve_rendezvous_dir(
 ) -> str:
     """Resolve the ephemeral /tmp rendezvous directory for kqueue signals, leases, and wake.sock.
 
-    Precedence: explicit override -> DESKBELL_RENDEZVOUS_DIR env -> optional fallback_dir -> /tmp/deskbell-<uid>.
+    Precedence: explicit override -> CONSILIUM_RENDEZVOUS_DIR env -> optional fallback_dir -> /tmp/consilium-<uid>.
     """
-    default_dir = f"/tmp/deskbell-{os.getuid()}"
+    default_dir = f"/tmp/consilium-{os.getuid()}"
     raw = (
         override
-        or os.environ.get("DESKBELL_RENDEZVOUS_DIR")
+        or os.environ.get("CONSILIUM_RENDEZVOUS_DIR")
         or fallback_dir
         or default_dir
     )
