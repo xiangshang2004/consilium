@@ -45,7 +45,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--require-token",
         dest="require_token",
         action="store_true",
-        help="Require Bearer/query token on HTTP endpoints (default).",
+        help="Require Bearer token on HTTP endpoints (default).",
     )
     tok_grp.add_argument(
         "--no-require-token",
@@ -60,11 +60,15 @@ def _build_parser() -> argparse.ArgumentParser:
     stdio_p.add_argument("--data-dir", default=None)
     stdio_p.add_argument("--rendezvous-dir", default=None)
 
-    wait_p = sub.add_parser("wait", help="Zero-CPU standby waiter watching signals/<peer>.seq without touching DB.")
+    wait_p = sub.add_parser("wait", help="Read-only zero-CPU standby waiter watching signals/<peer>.seq without touching DB.")
     wait_p.add_argument("--peer", required=True, choices=VALID_PEERS)
     wait_p.add_argument("--timeout", type=float, default=86400.0)
     wait_p.add_argument("--session-label", default="")
-    wait_p.add_argument("--pickup", action="store_true")
+    wait_p.add_argument(
+        "--pickup",
+        action="store_true",
+        help="Deprecated & ignored (waiting is strictly read-only; call consilium_pickup_inbox explicitly).",
+    )
     wait_p.add_argument("--data-dir", default=None)
     wait_p.add_argument("--rendezvous-dir", default=None)
 
@@ -128,19 +132,19 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "wait":
         rv_dir = resolve_rendezvous_dir(args.rendezvous_dir, fallback_dir=args.data_dir)
-        store = (
-            BusStore(resolve_state_dir(args.data_dir), rendezvous_dir=rv_dir)
-            if args.pickup
-            else None
-        )
+        if args.pickup:
+            sys.stderr.write(
+                "Notice: --pickup is ignored; `consilium wait` is strictly read-only and never touches the DB. "
+                "Call `consilium_pickup_inbox` explicitly after wakeup.\n"
+            )
         result = wait_for_doorbell(
-            store=store,
+            store=None,
             home_dir=rv_dir,
             rendezvous_dir=rv_dir,
             peer_id=args.peer,
             timeout_sec=args.timeout,
             session_label=args.session_label,
-            auto_pickup=args.pickup,
+            auto_pickup=bool(args.pickup),
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
@@ -176,13 +180,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     if args.command == "rotate-token":
-        from scripts.install import rotate_token
+        from scripts.install import TokenRotationError, rotate_token
 
-        report = rotate_token(
-            target_home=args.target_home,
-            port=args.port,
-            state_dir=args.data_dir,
-        )
+        try:
+            report = rotate_token(
+                target_home=args.target_home,
+                port=args.port,
+                state_dir=args.data_dir,
+            )
+        except TokenRotationError as exc:
+            sys.stderr.write(json.dumps(exc.report, ensure_ascii=False, indent=2) + "\n")
+            return 1
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
 
@@ -214,10 +222,22 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(auth_url)
             return 0
         try:
-            subprocess.run(["open", auth_url], check=False)
-        except OSError:
+            proc = subprocess.run(["open", auth_url], capture_output=True, text=True, check=False)
+        except OSError as exc:
+            sys.stderr.write(
+                f"Failed to launch browser with `open`: {exc}\n"
+                f"Open this one-time login URL manually:\n"
+            )
             print(auth_url)
-            return 0
+            return 1
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or f"exit code {proc.returncode}").strip()
+            sys.stderr.write(
+                f"Failed to launch browser (`open` exited {proc.returncode}: {detail}).\n"
+                f"Open this one-time login URL manually:\n"
+            )
+            print(auth_url)
+            return 1
         print(f"Opened Consilium dashboard (signed in automatically): http://{args.host}:{args.port}/ui")
         return 0
 

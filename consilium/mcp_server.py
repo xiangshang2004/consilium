@@ -16,15 +16,19 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from consilium import __version__
 from consilium.dashboard import (
+    SSE_MAX_SUBSCRIBERS,
     SESSION_COOKIE_NAME,
     EventHub,
     LoginTicketStore,
+    SessionRecord,
+    SessionStore,
     build_dashboard_state,
-    derive_session_cookie,
+    compute_state_fingerprint,
     parse_cookie_header,
     render_dashboard_html,
 )
 from consilium.models import (
+    ConflictError,
     DEFAULT_HTTP_HOST,
     DEFAULT_HTTP_PORT,
     DEFAULT_REAPER_INTERVAL_SEC,
@@ -75,6 +79,127 @@ def _safe_ring_peer(**kwargs: Any) -> Dict[str, Any]:
             "peer_id": peer_id,
             "error": f"{type(exc).__name__}: {exc}",
         }
+
+
+def _safe_record_event_delivery(
+    store: BusStore,
+    event_ids: List[int],
+    delivery: Dict[str, Any],
+    **kwargs: Any,
+) -> Optional[str]:
+    """Best-effort DB attachment of delivery receipt; returns warning string instead of raising."""
+    if not event_ids:
+        return None
+    try:
+        store.record_event_delivery(event_ids, delivery, **kwargs)
+        return None
+    except Exception as exc:
+        return f"record_event_delivery({event_ids}): {type(exc).__name__}: {exc}"
+
+
+def _collect_post_commit_warnings(
+    store_warnings: Optional[List[str]],
+    delivery_obj: Any,
+    extra_warnings: Optional[List[str]] = None,
+) -> List[str]:
+    warnings: List[str] = []
+    seen = set()
+
+    def _add(item: Any) -> None:
+        text = str(item or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            warnings.append(text)
+
+    for w in (store_warnings or []):
+        _add(w)
+    if isinstance(delivery_obj, dict):
+        sub_errors = [
+            sub["error"]
+            for sub in (delivery_obj.get("deliveries") or [])
+            if isinstance(sub, dict) and sub.get("error")
+        ]
+        if sub_errors:
+            for err in sub_errors:
+                _add(err)
+        elif delivery_obj.get("error"):
+            _add(delivery_obj["error"])
+    for w in (extra_warnings or []):
+        _add(w)
+    return warnings
+
+
+def _deliver_reaper_notifications(
+    store: BusStore,
+    rendezvous_dir: str,
+    released: List[Dict[str, Any]],
+) -> List[str]:
+    """Notify coordinators and assignees for tasks handled by release_stale_claims."""
+    warnings: List[str] = []
+    for item in released:
+        action = item.get("reaper_action") or "requeued"
+        coord = str(item.get("coordinator_peer") or "")
+        assignee = str(item.get("assignee_peer") or "")
+        task_id = str(item.get("task_id") or "")
+        events = list(item.get("events") or [])
+        if item.get("post_commit_warnings"):
+            warnings.extend(str(w) for w in item["post_commit_warnings"] if w)
+
+        if action == "requeued":
+            for evt in events:
+                eid = int(evt["event_id"])
+                ring_ms = time.time() * 1000.0
+                receipt = _safe_ring_peer(
+                    store=store,
+                    home_dir=rendezvous_dir,
+                    peer_id=evt["to_peer"],
+                    title="Consilium Task Requeued",
+                    body=f"Task {task_id} claim timed out and returned to queued",
+                    pickup_prompt=(
+                        f"Use consilium_pickup_inbox(peer_id={evt['to_peer']!r}) "
+                        f"to handle requeued task {task_id}."
+                    ),
+                    event_ids=[eid],
+                )
+                w = _safe_record_event_delivery(store, [eid], receipt, ring_sent_at_ms=ring_ms)
+                if w:
+                    warnings.append(w)
+            if assignee and assignee != coord:
+                # Also wake the assignee whose .seq queued_tasks increased on requeue.
+                _safe_ring_peer(
+                    store=store,
+                    home_dir=rendezvous_dir,
+                    peer_id=assignee,
+                    title="Consilium Task Available",
+                    body=f"Task {task_id} returned to queued",
+                    pickup_prompt=(
+                        f"Use consilium_pickup_inbox(peer_id={assignee!r}) "
+                        f"to re-claim task {task_id}."
+                    ),
+                )
+        elif action == "marked_stale":
+            for evt in events:
+                eid = int(evt["event_id"])
+                target = str(evt.get("to_peer") or "")
+                if not target:
+                    continue
+                ring_ms = time.time() * 1000.0
+                receipt = _safe_ring_peer(
+                    store=store,
+                    home_dir=rendezvous_dir,
+                    peer_id=target,
+                    title="Consilium Running Task Stale",
+                    body=f"Task {task_id} exceeded heartbeat threshold; awaiting coordinator requeue",
+                    pickup_prompt=(
+                        f"Use consilium_pickup_inbox(peer_id={target!r}) "
+                        f"to check stale running task {task_id}."
+                    ),
+                    event_ids=[eid],
+                )
+                w = _safe_record_event_delivery(store, [eid], receipt, ring_sent_at_ms=ring_ms)
+                if w:
+                    warnings.append(w)
+    return warnings
 
 TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
@@ -155,15 +280,16 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     },
     {
         "name": "consilium_report_progress",
-        "description": "Update task status/progress and optionally ring the coordinator peer.",
+        "description": "Update claimed/running task status/progress (requires active attempt_id) and optionally ring coordinator.",
         "inputSchema": {
             "type": "object",
-            "required": ["task_id", "peer_id", "progress_note"],
+            "required": ["task_id", "peer_id", "progress_note", "attempt_id"],
             "properties": {
                 "task_id": {"type": "string"},
                 "peer_id": {"type": "string", "enum": list(VALID_PEERS)},
+                "attempt_id": {"type": "string"},
                 "progress_note": {"type": "string"},
-                "status": {"type": "string", "default": "running"},
+                "status": {"type": "string", "enum": ["claimed", "running"], "default": "running"},
                 "worktree_branch": {"type": "string"},
                 "notify_coordinator": {"type": "boolean", "default": False},
                 "client_request_id": {"type": "string"},
@@ -172,16 +298,31 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     },
     {
         "name": "consilium_complete_task",
-        "description": "Mark a task terminal (done/failed/blocked), record summary/artifacts, and ring the coordinator.",
+        "description": "Mark a claimed/running task terminal (requires active attempt_id), record summary/artifacts, and ring coordinator.",
         "inputSchema": {
             "type": "object",
-            "required": ["task_id", "peer_id", "result_summary"],
+            "required": ["task_id", "peer_id", "result_summary", "attempt_id"],
             "properties": {
                 "task_id": {"type": "string"},
                 "peer_id": {"type": "string", "enum": list(VALID_PEERS)},
+                "attempt_id": {"type": "string"},
                 "result_summary": {"type": "string"},
                 "artifacts": {"type": "array", "items": {"type": "string"}},
                 "status": {"type": "string", "enum": ["done", "failed", "blocked"], "default": "done"},
+                "client_request_id": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "consilium_requeue_task",
+        "description": "Coordinator-only: archive current attempt and return a claimed, running, failed, or blocked task to queued.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["task_id", "peer_id"],
+            "properties": {
+                "task_id": {"type": "string"},
+                "peer_id": {"type": "string", "enum": list(VALID_PEERS)},
+                "reason": {"type": "string"},
                 "client_request_id": {"type": "string"},
             },
         },
@@ -205,7 +346,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     },
     {
         "name": "consilium_wait",
-        "description": "Block silently until a doorbell event arrives for peer_id or timeout expires (max 300s). Does not auto-pickup by default.",
+        "description": "Read-only silent wait until a doorbell event arrives or timeout expires (max 300s). Never auto-claims; call consilium_pickup_inbox explicitly.",
         "inputSchema": {
             "type": "object",
             "required": ["peer_id"],
@@ -213,7 +354,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "peer_id": {"type": "string", "enum": list(VALID_PEERS)},
                 "timeout_sec": {"type": "number", "minimum": 0.1, "maximum": 300, "default": 45},
                 "session_label": {"type": "string"},
-                "auto_pickup": {"type": "boolean", "default": False},
+                "auto_pickup": {"type": "boolean", "default": False, "description": "Deprecated and ignored; wait is always read-only."},
             },
         },
     },
@@ -236,6 +377,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                             "account_id": {"type": "string"},
                             "window_key": {"type": "string"},
                             "label": {"type": "string"},
+                            "source": {"type": "string", "enum": ["manual_report", "demo"]},
                             "remaining_percent": {"type": "number", "minimum": 0, "maximum": 100},
                             "reset_at": {"type": "string"},
                         },
@@ -276,19 +418,26 @@ class ConsiliumMCPDispatcher:
         default_peer: str = "",
         rendezvous_dir: Optional[str] = None,
         on_mutation: Optional[Callable[[str], None]] = None,
+        claim_timeout_sec: Optional[int] = None,
+        running_timeout_sec: Optional[int] = None,
+        on_reaper_tasks: Optional[Callable[[List[Dict[str, Any]]], None]] = None,
     ) -> None:
         self.home_dir = resolve_state_dir(home_dir)
         self.rendezvous_dir = resolve_rendezvous_dir(rendezvous_dir, fallback_dir=home_dir)
         self.default_peer = default_peer
         self.store = BusStore(self.home_dir, rendezvous_dir=self.rendezvous_dir)
         self._on_mutation = on_mutation
+        self.claim_timeout_sec = claim_timeout_sec
+        self.running_timeout_sec = running_timeout_sec
+        self._on_reaper_tasks = on_reaper_tasks
 
-    def _emit_mutation(self, reason: str) -> None:
+    def _emit_mutation(self, reason: str) -> Optional[str]:
         if self._on_mutation is not None:
             try:
                 self._on_mutation(reason)
-            except Exception:
-                pass
+            except Exception as exc:
+                return f"publish_state_update: {type(exc).__name__}: {exc}"
+        return None
 
     def handle_payload(self, payload: Any) -> Optional[Any]:
         """Handle a single JSON-RPC object or batch; return None for pure notifications."""
@@ -419,6 +568,7 @@ class ConsiliumMCPDispatcher:
             for evt in created["events"]:
                 events_by_peer.setdefault(evt["to_peer"], []).append(int(evt["event_id"]))
             deliveries = []
+            rec_warnings: List[str] = []
             for assignee, peer_tasks in tasks_by_peer.items():
                 task_ids = ", ".join(t["task_id"] for t in peer_tasks)
                 tiers = ", ".join(sorted({t["model_tier"] for t in peer_tasks}))
@@ -438,9 +588,15 @@ class ConsiliumMCPDispatcher:
                     open_deeplink=open_deeplink,
                     event_ids=peer_eids,
                 )
-                self.store.record_event_delivery(peer_eids, receipt, ring_sent_at_ms=ring_ms)
+                rw = _safe_record_event_delivery(
+                    self.store, peer_eids, receipt, ring_sent_at_ms=ring_ms
+                )
+                if rw:
+                    rec_warnings.append(rw)
                 deliveries.append(receipt)
-            self._emit_mutation("create_mission")
+            pub_warn = self._emit_mutation("create_mission")
+            if pub_warn:
+                rec_warnings.append(pub_warn)
             delivery_summary: Dict[str, Any] = {
                 "deliveries": deliveries,
                 "errors": [d for d in deliveries if d.get("delivery") == "error"],
@@ -449,6 +605,11 @@ class ConsiliumMCPDispatcher:
                 delivery_summary["error"] = "; ".join(
                     str(d.get("error", "")) for d in delivery_summary["errors"]
                 )
+            all_warnings = _collect_post_commit_warnings(
+                created.get("post_commit_warnings"), delivery_summary, rec_warnings
+            )
+            if all_warnings:
+                delivery_summary["warnings"] = all_warnings
             return {
                 **created,
                 "committed": True,
@@ -469,6 +630,7 @@ class ConsiliumMCPDispatcher:
                 parallel_fanout=int(args.get("parallel_fanout", 1)),
                 worktree_branch=str(args.get("worktree_branch", "")),
                 client_request_id=str(client_req_id) if client_req_id is not None else None,
+                caller_scope=(f"peer:{self.default_peer}" if self.default_peer else None),
             )
             if dispatched.get("idempotent_replay"):
                 replay_delivery = {"delivery": "replayed", "idempotent_replay": True}
@@ -496,8 +658,17 @@ class ConsiliumMCPDispatcher:
                 open_deeplink=open_deeplink,
                 event_ids=[evt_id],
             )
-            self.store.record_event_delivery([evt_id], delivery, ring_sent_at_ms=ring_ms)
-            self._emit_mutation("dispatch_task")
+            rw = _safe_record_event_delivery(
+                self.store, [evt_id], delivery, ring_sent_at_ms=ring_ms
+            )
+            pub_warn = self._emit_mutation("dispatch_task")
+            all_warnings = _collect_post_commit_warnings(
+                dispatched.get("post_commit_warnings"),
+                delivery,
+                [w for w in (rw, pub_warn) if w] or None,
+            )
+            if all_warnings:
+                delivery["warnings"] = all_warnings
             return {
                 **dispatched,
                 "committed": True,
@@ -509,7 +680,17 @@ class ConsiliumMCPDispatcher:
             peer = str(args.get("peer_id") or self.default_peer)
             claim_tasks = _parse_bool(args, "claim_tasks", True)
             try:
-                self.store.release_stale_claims()
+                released = self.store.release_stale_claims(
+                    claimed_timeout_sec=self.claim_timeout_sec,
+                    running_timeout_sec=self.running_timeout_sec,
+                )
+                if released:
+                    if self._on_reaper_tasks is not None:
+                        self._on_reaper_tasks(released)
+                    else:
+                        _deliver_reaper_notifications(
+                            self.store, self.rendezvous_dir, released
+                        )
             except Exception:
                 pass
             picked = self.store.pickup_inbox(
@@ -518,7 +699,9 @@ class ConsiliumMCPDispatcher:
                 claim_tasks=claim_tasks,
                 limit=int(args.get("limit", 20)),
             )
-            self._emit_mutation("pickup_inbox")
+            pub_warn = self._emit_mutation("pickup_inbox")
+            if pub_warn:
+                picked.setdefault("post_commit_warnings", []).append(pub_warn)
             return picked
 
         if name == "consilium_report_progress":
@@ -531,8 +714,10 @@ class ConsiliumMCPDispatcher:
                 status=str(args.get("status", "running")),
                 worktree_branch=args.get("worktree_branch"),
                 notify_coordinator=notify_coord,
+                attempt_id=str(args["attempt_id"]) if args.get("attempt_id") is not None else None,
                 client_request_id=str(client_req_id) if client_req_id is not None else None,
             )
+            rec_warnings = []
             if res.get("idempotent_replay"):
                 delivery = {"delivery": "replayed", "idempotent_replay": True}
             elif res.get("event") and res.get("coordinator_peer"):
@@ -550,10 +735,22 @@ class ConsiliumMCPDispatcher:
                     ),
                     event_ids=[evt_id],
                 )
-                self.store.record_event_delivery([evt_id], delivery, ring_sent_at_ms=ring_ms)
+                rw = _safe_record_event_delivery(
+                    self.store, [evt_id], delivery, ring_sent_at_ms=ring_ms
+                )
+                if rw:
+                    rec_warnings.append(rw)
             else:
                 delivery = {"delivery": "none"}
-            self._emit_mutation("report_progress")
+            pub_warn = self._emit_mutation("report_progress")
+            if pub_warn:
+                rec_warnings.append(pub_warn)
+            if not res.get("idempotent_replay"):
+                all_warnings = _collect_post_commit_warnings(
+                    res.get("post_commit_warnings"), delivery, rec_warnings
+                )
+                if all_warnings:
+                    delivery["warnings"] = all_warnings
             return {**res, "committed": True, "result": res, "delivery": delivery}
 
         if name == "consilium_complete_task":
@@ -564,10 +761,13 @@ class ConsiliumMCPDispatcher:
                 result_summary=str(args["result_summary"]),
                 artifacts=args.get("artifacts") or [],
                 status=str(args.get("status", "done")),
+                attempt_id=str(args["attempt_id"]) if args.get("attempt_id") is not None else None,
                 client_request_id=str(client_req_id) if client_req_id is not None else None,
             )
+            rec_warnings = []
             if res.get("idempotent_replay"):
                 delivery = {"delivery": "replayed", "idempotent_replay": True}
+                self._emit_mutation("complete_task")
             else:
                 coord = res["coordinator_peer"]
                 evt_id = int(res["event"]["event_id"])
@@ -587,8 +787,61 @@ class ConsiliumMCPDispatcher:
                     ),
                     event_ids=[evt_id],
                 )
-                self.store.record_event_delivery([evt_id], delivery, ring_sent_at_ms=ring_ms)
-            self._emit_mutation("complete_task")
+                rw = _safe_record_event_delivery(
+                    self.store, [evt_id], delivery, ring_sent_at_ms=ring_ms
+                )
+                if rw:
+                    rec_warnings.append(rw)
+                pub_warn = self._emit_mutation("complete_task")
+                if pub_warn:
+                    rec_warnings.append(pub_warn)
+                all_warnings = _collect_post_commit_warnings(
+                    res.get("post_commit_warnings"), delivery, rec_warnings
+                )
+                if all_warnings:
+                    delivery["warnings"] = all_warnings
+            return {**res, "committed": True, "result": res, "delivery": delivery}
+
+        if name == "consilium_requeue_task":
+            client_req_id = args.get("client_request_id")
+            res = self.store.requeue_task(
+                task_id=str(args["task_id"]),
+                reason=str(args.get("reason") or "coordinator_requeue"),
+                actor_peer=str(args["peer_id"]),
+                client_request_id=str(client_req_id) if client_req_id is not None else None,
+            )
+            rec_warnings = []
+            if res.get("idempotent_replay"):
+                delivery = {"delivery": "replayed", "idempotent_replay": True}
+                self._emit_mutation("requeue_task")
+            else:
+                eid = int(res["event"]["event_id"])
+                ring_ms = time.time() * 1000.0
+                delivery = _safe_ring_peer(
+                    store=self.store,
+                    home_dir=self.rendezvous_dir,
+                    peer_id=res["assignee_peer"],
+                    title="Consilium Task Requeued",
+                    body=f"Task {args['task_id']} returned to queued",
+                    pickup_prompt=(
+                        f"Use consilium_pickup_inbox(peer_id={res['assignee_peer']!r}) "
+                        f"to claim requeued task {args['task_id']}."
+                    ),
+                    event_ids=[eid],
+                )
+                rw = _safe_record_event_delivery(
+                    self.store, [eid], delivery, ring_sent_at_ms=ring_ms
+                )
+                if rw:
+                    rec_warnings.append(rw)
+                pub_warn = self._emit_mutation("requeue_task")
+                if pub_warn:
+                    rec_warnings.append(pub_warn)
+                all_warnings = _collect_post_commit_warnings(
+                    res.get("post_commit_warnings"), delivery, rec_warnings
+                )
+                if all_warnings:
+                    delivery["warnings"] = all_warnings
             return {**res, "committed": True, "result": res, "delivery": delivery}
 
         if name == "consilium_request_review":
@@ -602,8 +855,10 @@ class ConsiliumMCPDispatcher:
                 task_id=args.get("task_id"),
                 client_request_id=str(client_req_id) if client_req_id is not None else None,
             )
+            rec_warnings = []
             if res.get("idempotent_replay"):
                 delivery = {"delivery": "replayed", "idempotent_replay": True}
+                self._emit_mutation("request_review")
             else:
                 target = str(args["to_peer"]) if res["allowed"] else res["coordinator_peer"]
                 sender_norm = str(args["from_peer"]).strip().lower()
@@ -630,23 +885,41 @@ class ConsiliumMCPDispatcher:
                         ),
                         event_ids=[evt_id],
                     )
-                self.store.record_event_delivery([evt_id], delivery, ring_sent_at_ms=ring_ms)
-            self._emit_mutation("request_review")
+                rw = _safe_record_event_delivery(
+                    self.store, [evt_id], delivery, ring_sent_at_ms=ring_ms
+                )
+                if rw:
+                    rec_warnings.append(rw)
+                pub_warn = self._emit_mutation("request_review")
+                if pub_warn:
+                    rec_warnings.append(pub_warn)
+                all_warnings = _collect_post_commit_warnings(
+                    res.get("post_commit_warnings"), delivery, rec_warnings
+                )
+                if all_warnings:
+                    delivery["warnings"] = all_warnings
             return {**res, "committed": True, "result": res, "delivery": delivery}
 
         if name == "consilium_wait":
             peer = str(args.get("peer_id") or self.default_peer)
             timeout_sec = min(300.0, max(0.1, float(args.get("timeout_sec", 45.0))))
-            auto_pickup = _parse_bool(args, "auto_pickup", False)
+            # Validate boolean strictly, then ignore value (wait is strictly read-only).
+            requested_auto_pickup = _parse_bool(args, "auto_pickup", False)
             wres = wait_for_doorbell(
                 store=self.store,
                 home_dir=self.rendezvous_dir,
                 peer_id=peer,
                 timeout_sec=timeout_sec,
                 session_label=str(args.get("session_label", "")),
-                auto_pickup=auto_pickup,
+                auto_pickup=False,
                 rendezvous_dir=self.rendezvous_dir,
             )
+            if requested_auto_pickup:
+                wres["auto_pickup_ignored"] = True
+                wres["notice"] = (
+                    "consilium_wait is strictly read-only; auto_pickup is ignored. "
+                    "Call consilium_pickup_inbox explicitly."
+                )
             if wres.get("woke") and wres.get("source") in (
                 "kqueue",
                 "socket",
@@ -654,7 +927,9 @@ class ConsiliumMCPDispatcher:
             ):
                 try:
                     woke_ms = time.time() * 1000.0
-                    self.store.record_peer_wakeup_latency(peer, woke_ms)
+                    self.store.record_peer_wakeup_latency(
+                        peer, woke_ms, max_event_id=wres.get("wake_seq")
+                    )
                     self._emit_mutation("wait_woke")
                 except Exception:
                     pass
@@ -666,7 +941,8 @@ class ConsiliumMCPDispatcher:
                 normalized_reports = []
                 for item in report_windows:
                     entry = dict(item)
-                    entry["source"] = "manual_report"
+                    req_src = str(item.get("source") or "").strip().lower()
+                    entry["source"] = "demo" if req_src == "demo" else "manual_report"
                     normalized_reports.append(entry)
                 self.store.upsert_quota_windows(normalized_reports)
             if _parse_bool(args, "sync_local", True):
@@ -698,6 +974,7 @@ class ConsiliumMCPDispatcher:
                     "deliveries": [],
                 }
             deliveries = []
+            rec_warnings = []
             for evt in res.get("events", []):
                 eid = int(evt["event_id"])
                 ring_ms = time.time() * 1000.0
@@ -713,9 +990,15 @@ class ConsiliumMCPDispatcher:
                     ),
                     event_ids=[eid],
                 )
-                self.store.record_event_delivery([eid], receipt, ring_sent_at_ms=ring_ms)
+                rw = _safe_record_event_delivery(
+                    self.store, [eid], receipt, ring_sent_at_ms=ring_ms
+                )
+                if rw:
+                    rec_warnings.append(rw)
                 deliveries.append(receipt)
-            self._emit_mutation("close_mission")
+            pub_warn = self._emit_mutation("close_mission")
+            if pub_warn:
+                rec_warnings.append(pub_warn)
             delivery_summary = {
                 "deliveries": deliveries,
                 "errors": [d for d in deliveries if d.get("delivery") == "error"],
@@ -724,6 +1007,11 @@ class ConsiliumMCPDispatcher:
                 delivery_summary["error"] = "; ".join(
                     str(d.get("error", "")) for d in delivery_summary["errors"]
                 )
+            all_warnings = _collect_post_commit_warnings(
+                res.get("post_commit_warnings"), delivery_summary, rec_warnings
+            )
+            if all_warnings:
+                delivery_summary["warnings"] = all_warnings
             return {
                 **res,
                 "committed": True,
@@ -791,14 +1079,27 @@ def run_stdio_server(
             out_stream.flush()
 
 
-def _extract_hostname(host_header: str) -> str:
+def _extract_host_and_port(host_header: str) -> Tuple[str, Optional[int]]:
     raw = (host_header or "").strip().lower()
     if not raw:
-        return ""
+        return "", None
     if raw.startswith("["):
         end = raw.find("]")
-        return raw[1:end] if end != -1 else raw
-    return raw.split(":", 1)[0]
+        if end == -1:
+            return raw, None
+        host = raw[1:end]
+        rest = raw[end + 1 :]
+        if rest.startswith(":") and rest[1:].isdigit():
+            return host, int(rest[1:])
+        return host, None
+    if ":" in raw:
+        host, port_s = raw.split(":", 1)
+        return host, int(port_s) if port_s.isdigit() else None
+    return raw, None
+
+
+def _extract_hostname(host_header: str) -> str:
+    return _extract_host_and_port(host_header)[0]
 
 
 def _is_valid_host(host_header: str) -> bool:
@@ -812,6 +1113,39 @@ def _is_valid_origin(origin_header: str) -> bool:
     if parsed.scheme not in ("http", "https"):
         return False
     return (parsed.hostname or "").lower() in LOCAL_HOSTS
+
+
+def _is_exact_daemon_origin(
+    origin_header: str,
+    host_header: str,
+    daemon_host: str,
+    daemon_port: int,
+) -> bool:
+    """Require non-empty Origin matching daemon scheme, host, and port with no path/query/userinfo."""
+    if not origin_header:
+        return False
+    parsed = urllib.parse.urlparse(origin_header)
+    if parsed.scheme != "http":
+        return False
+    if parsed.path not in ("", None) or parsed.params or parsed.query or parsed.fragment:
+        return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    expected_host = (daemon_host or "").strip("[]").lower()
+    origin_host = (parsed.hostname or "").lower()
+    if origin_host not in LOCAL_HOSTS:
+        return False
+    if expected_host and origin_host != expected_host:
+        return False
+    origin_port = parsed.port if parsed.port is not None else 80
+    if origin_port != int(daemon_port):
+        return False
+    host_name, host_port = _extract_host_and_port(host_header)
+    if host_name and origin_host != host_name:
+        return False
+    if host_port is not None and origin_port != host_port:
+        return False
+    return True
 
 
 class ConsiliumDaemon:
@@ -833,19 +1167,27 @@ class ConsiliumDaemon:
         self.host = host
         self.port = int(port)
         self.require_token = bool(require_token)
+        self._auth_lock = threading.Lock()
         self.auth_token = ensure_auth_token(self.home_dir) if self.require_token else ""
         self._token_stat_sig: Optional[Tuple[int, int]] = self._read_token_stat()
+        self._token_version = 1
         self.reaper_interval_sec = max(0.05, float(reaper_interval_sec))
         self.claim_timeout_sec = claim_timeout_sec
         self.running_timeout_sec = running_timeout_sec
         self.started_at = utc_now_iso()
         self.started_monotonic = time.monotonic()
-        self.event_hub = EventHub()
+        self.event_hub = EventHub(max_subscribers=SSE_MAX_SUBSCRIBERS)
+        self.session_store = SessionStore()
         self.ticket_store = LoginTicketStore()
+        self._state_cache_lock = threading.Lock()
+        self._cached_state: Optional[Tuple[float, Dict[str, Any]]] = None
         self.dispatcher = ConsiliumMCPDispatcher(
             home_dir=self.home_dir,
             rendezvous_dir=self.rendezvous_dir,
             on_mutation=self.publish_state_update,
+            claim_timeout_sec=self.claim_timeout_sec,
+            running_timeout_sec=self.running_timeout_sec,
+            on_reaper_tasks=self._handle_reaper_released,
         )
         self.wake_broker = WakeBrokerServer(rendezvous_dir=self.rendezvous_dir)
         self._httpd: Optional[ThreadingHTTPServer] = None
@@ -866,12 +1208,27 @@ class ConsiliumDaemon:
             sync_quotas=sync_quotas,
         )
 
+    def get_cached_dashboard_state(self, max_age_sec: float = 0.35) -> Dict[str, Any]:
+        """Share a brief snapshot cache across idle SSE pollers to avoid duplicate DB rebuilds."""
+        now = time.monotonic()
+        with self._state_cache_lock:
+            if self._cached_state is not None:
+                ts, snap = self._cached_state
+                if (now - ts) <= max_age_sec:
+                    return snap
+            snap = self.get_dashboard_state(sync_quotas=False)
+            self._cached_state = (now, snap)
+            return snap
+
     def publish_state_update(self, reason: str = "mutation") -> int:
-        """Broadcast an ordered state update to all connected SSE dashboard clients."""
+        """Broadcast a monotonically versioned state update to all connected SSE dashboard clients."""
+        with self._state_cache_lock:
+            self._cached_state = None
         if self.event_hub.subscriber_count() == 0:
-            return 0
-        snapshot = self.get_dashboard_state(sync_quotas=False)
-        return self.event_hub.publish("update", {"reason": reason, "state": snapshot})
+            return self.event_hub.next_version()
+        return self.event_hub.publish_state(
+            "update", reason, lambda: self.get_dashboard_state(sync_quotas=False)
+        )
 
     def _read_token_stat(self) -> Optional[Tuple[int, int]]:
         token_path = os.path.join(self.home_dir, "auth.token")
@@ -881,43 +1238,49 @@ class ConsiliumDaemon:
         except OSError:
             return None
 
+    def get_auth_state(self) -> Tuple[str, int]:
+        """Return (active_token, token_version), revoking sessions/tickets/SSE on disk rotation."""
+        if not self.require_token:
+            return "", 0
+        close_streams = False
+        with self._auth_lock:
+            sig = self._read_token_stat()
+            if sig is not None and sig != self._token_stat_sig:
+                fresh = read_auth_token(self.home_dir)
+                self._token_stat_sig = sig
+                if fresh and fresh != self.auth_token:
+                    self.auth_token = fresh
+                    self._token_version += 1
+                    self.session_store.revoke_all()
+                    self.ticket_store.revoke_all()
+                    close_streams = True
+            token_val = self.auth_token
+            ver_val = self._token_version
+        if close_streams:
+            self.event_hub.close_all()
+        return token_val, ver_val
+
     def get_active_token(self) -> str:
         """Return the active auth token, live-reloading if auth.token was rotated on disk."""
-        if not self.require_token:
-            return ""
-        sig = self._read_token_stat()
-        if sig is not None and sig != self._token_stat_sig:
-            fresh = read_auth_token(self.home_dir)
-            if fresh:
-                self.auth_token = fresh
-                self._token_stat_sig = sig
-        return self.auth_token
+        return self.get_auth_state()[0]
+
+    def _handle_reaper_released(self, released: List[Dict[str, Any]]) -> None:
+        if not released:
+            return
+        _deliver_reaper_notifications(
+            self.dispatcher.store, self.rendezvous_dir, released
+        )
+        actions = {str(r.get("reaper_action") or "requeued") for r in released}
+        reason = "reaper_stale" if actions == {"marked_stale"} else "reaper_requeued"
+        self.publish_state_update(reason)
 
     def run_reaper_once(self) -> List[Dict[str, Any]]:
-        """Re-queue stale claimed/running tasks and notify their coordinators."""
+        """Re-queue stale claimed tasks, mark stale running tasks, and notify peers."""
         released = self.dispatcher.store.release_stale_claims(
             claimed_timeout_sec=self.claim_timeout_sec,
             running_timeout_sec=self.running_timeout_sec,
         )
-        for task in released:
-            coord = str(task.get("coordinator_peer") or "")
-            evt = task.get("requeue_event") or {}
-            if coord and evt:
-                eid = int(evt["event_id"])
-                receipt = _safe_ring_peer(
-                    store=self.dispatcher.store,
-                    home_dir=self.rendezvous_dir,
-                    peer_id=coord,
-                    title="Consilium Task Requeued",
-                    body=f"Task {task['task_id']} timed out and returned to queued",
-                    pickup_prompt=(
-                        f"Use consilium_pickup_inbox(peer_id={coord!r}) to handle requeued task {task['task_id']}."
-                    ),
-                    event_ids=[eid],
-                )
-                self.dispatcher.store.record_event_delivery([eid], receipt)
-        if released:
-            self.publish_state_update("reaper_requeued")
+        self._handle_reaper_released(released)
         return released
 
     def _reaper_loop(self) -> None:
@@ -950,36 +1313,59 @@ class ConsiliumDaemon:
                     return False
                 return True
 
-            def _is_authenticated(self, *, allow_cookie: bool = False) -> bool:
-                if not daemon.require_token:
-                    return True
-                active_token = daemon.get_active_token()
+            def _authenticate_request(
+                self, *, allow_cookie: bool = False
+            ) -> Tuple[Optional[str], Optional[SessionRecord]]:
                 auth_hdr = self.headers.get("Authorization", "")
+                if not daemon.require_token:
+                    if auth_hdr.startswith("Bearer "):
+                        return "bearer", None
+                    return "open", None
+                active_token, token_ver = daemon.get_auth_state()
                 expected_hdr = f"Bearer {active_token}"
-                query_token = ""
-                parsed = urllib.parse.urlparse(self.path)
-                if parsed.query:
-                    query_token = urllib.parse.parse_qs(parsed.query).get("token", [""])[0]
-                hdr_ok = hmac.compare_digest(auth_hdr, expected_hdr)
-                qry_ok = bool(query_token) and hmac.compare_digest(
-                    query_token, active_token
-                )
-                if hdr_ok or qry_ok:
-                    return True
+                if auth_hdr and hmac.compare_digest(auth_hdr, expected_hdr):
+                    return "bearer", None
                 if allow_cookie:
                     cookies = parse_cookie_header(self.headers.get("Cookie", ""))
-                    sess = cookies.get(SESSION_COOKIE_NAME, "")
-                    expected_cookie = derive_session_cookie(active_token)
-                    if sess and hmac.compare_digest(sess, expected_cookie):
-                        return True
-                return False
+                    sess_id = cookies.get(SESSION_COOKIE_NAME, "")
+                    session_rec = daemon.session_store.get(sess_id, token_ver)
+                    if session_rec is not None:
+                        return "cookie", session_rec
+                return None, None
 
-            def _check_security(self, *, allow_cookie: bool = False) -> bool:
+            def _check_security(
+                self, *, allow_cookie: bool = False
+            ) -> Tuple[bool, Optional[str], Optional[SessionRecord]]:
                 if not self._check_host_origin():
-                    return False
-                if not self._is_authenticated(allow_cookie=allow_cookie):
+                    return False, None, None
+                mode, session_rec = self._authenticate_request(allow_cookie=allow_cookie)
+                if mode is None:
                     self._send_json(401, {"error": "Unauthorized"})
+                    return False, None, None
+                return True, mode, session_rec
+
+            def _check_cookie_write_csrf(
+                self, auth_mode: str, session_rec: Optional[SessionRecord]
+            ) -> bool:
+                if auth_mode == "bearer":
+                    return True
+                origin_hdr = self.headers.get("Origin", "")
+                host_hdr = self.headers.get("Host", "")
+                if not _is_exact_daemon_origin(origin_hdr, host_hdr, daemon.host, daemon.port):
+                    self._send_json(403, {"error": "Forbidden or missing exact daemon Origin"})
                     return False
+                raw_ct = self.headers.get("Content-Type", "")
+                media_type = raw_ct.split(";", 1)[0].strip().lower()
+                if media_type != "application/json":
+                    self._send_json(
+                        415, {"error": "Unsupported Media Type; expected application/json"}
+                    )
+                    return False
+                if session_rec is not None:
+                    csrf_hdr = self.headers.get("X-Consilium-CSRF", "")
+                    if not csrf_hdr or not hmac.compare_digest(csrf_hdr, session_rec.csrf_token):
+                        self._send_json(403, {"error": "Missing or invalid X-Consilium-CSRF header"})
+                        return False
                 return True
 
             def _send_json(
@@ -993,6 +1379,8 @@ class ConsiliumDaemon:
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(encoded)))
                 self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Referrer-Policy", "no-referrer")
                 if extra_headers:
                     for hk, hv in extra_headers.items():
                         self.send_header(hk, hv)
@@ -1007,9 +1395,14 @@ class ConsiliumDaemon:
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(encoded)))
                 self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Referrer-Policy", "no-referrer")
                 self.send_header(
                     "Content-Security-Policy",
-                    "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:;",
+                    (
+                        "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+                        "connect-src 'self'; img-src 'self' data:; frame-ancestors 'none';"
+                    ),
                 )
                 if self.close_connection:
                     self.send_header("Connection", "close")
@@ -1044,7 +1437,11 @@ class ConsiliumDaemon:
                     )
                     return False, None
 
-            def _handle_sse_stream(self, parsed_url: urllib.parse.ParseResult) -> None:
+            def _handle_sse_stream(
+                self,
+                parsed_url: urllib.parse.ParseResult,
+                session_rec: Optional[SessionRecord],
+            ) -> None:
                 qs = urllib.parse.parse_qs(parsed_url.query)
                 max_events = 0
                 if "max_events" in qs:
@@ -1053,23 +1450,40 @@ class ConsiliumDaemon:
                     except ValueError:
                         max_events = 0
 
-                self.connection.settimeout(None)
+                _, stream_tok_ver = daemon.get_auth_state()
+                stream_sess_id = session_rec.session_id if session_rec is not None else ""
+                sub = daemon.event_hub.subscribe(
+                    session_id=stream_sess_id,
+                    token_version=stream_tok_ver,
+                )
+                if sub is None:
+                    self._send_json(
+                        503,
+                        {"error": f"Too many active SSE streams (limit {SSE_MAX_SUBSCRIBERS})"},
+                    )
+                    return
+
+                self.connection.settimeout(10.0)
                 self.close_connection = True
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Cache-Control", "no-cache, no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Referrer-Policy", "no-referrer")
                 self.send_header("Connection", "close")
                 self.end_headers()
 
-                sub_q = daemon.event_hub.subscribe()
                 sent_count = 0
                 last_ping = time.monotonic()
                 try:
-                    initial = daemon.get_dashboard_state(sync_quotas=False)
-                    last_eid = int(initial.get("latest_event_id", 0))
+                    ver0, initial = daemon.event_hub.snapshot_with_version(
+                        lambda: daemon.get_dashboard_state(sync_quotas=False)
+                    )
+                    last_sent_ver = ver0
+                    last_fp = compute_state_fingerprint(initial)
                     last_waiters = dict(initial.get("active_waiters") or {})
                     frame = (
-                        f"id: {last_eid}\n"
+                        f"id: {ver0}\n"
                         f"event: state\n"
                         f"data: {json.dumps(initial, ensure_ascii=False)}\n\n"
                     ).encode("utf-8")
@@ -1079,9 +1493,21 @@ class ConsiliumDaemon:
                     if max_events and sent_count >= max_events:
                         return
 
-                    while not daemon._stop_event.is_set():
+                    while not daemon._stop_event.is_set() and not sub.closed_event.is_set():
+                        # Check live token rotation and session revocation even during idle loops.
+                        _, cur_tok_ver = daemon.get_auth_state()
+                        if daemon.require_token and cur_tok_ver != sub.token_version:
+                            break
+                        if stream_sess_id and daemon.session_store.get(stream_sess_id, cur_tok_ver) is None:
+                            break
+
                         try:
-                            seq, ev_name, payload = sub_q.get(timeout=0.5)
+                            seq, ev_name, payload = sub.queue.get(timeout=0.5)
+                            if ev_name == "__close__" or sub.closed_event.is_set():
+                                break
+                            if seq <= last_sent_ver:
+                                continue
+                            last_sent_ver = seq
                             ev_frame = (
                                 f"id: {seq}\n"
                                 f"event: {ev_name}\n"
@@ -1089,26 +1515,37 @@ class ConsiliumDaemon:
                             ).encode("utf-8")
                             self.wfile.write(ev_frame)
                             self.wfile.flush()
-                            st = payload.get("state") or {}
-                            last_eid = max(last_eid, int(st.get("latest_event_id", 0)))
-                            if isinstance(st.get("active_waiters"), dict):
-                                last_waiters = dict(st["active_waiters"])
+                            st = payload.get("state")
+                            if isinstance(st, dict):
+                                last_fp = compute_state_fingerprint(st)
+                                last_waiters = dict(st.get("active_waiters") or {})
                             sent_count += 1
                             if max_events and sent_count >= max_events:
                                 return
                         except queue.Empty:
-                            # Detect external stdio/CLI DB mutations or standby waiter lease changes.
-                            cur_state = daemon.get_dashboard_state(sync_quotas=False)
-                            cur_eid = int(cur_state.get("latest_event_id", 0))
-                            cur_waiters = dict(cur_state.get("active_waiters") or {})
-                            if cur_eid > last_eid or cur_waiters != last_waiters:
-                                reason = "external_db" if cur_eid > last_eid else "waiter_change"
-                                last_eid = max(last_eid, cur_eid)
+                            if sub.closed_event.is_set():
+                                break
+                            cur_state = daemon.get_cached_dashboard_state(max_age_sec=0.35)
+                            cur_fp = compute_state_fingerprint(cur_state)
+                            if cur_fp != last_fp:
+                                cur_waiters = dict(cur_state.get("active_waiters") or {})
+                                reason = (
+                                    "waiter_change"
+                                    if cur_waiters != last_waiters
+                                    else "external_change"
+                                )
+                                ver_ext, stamped = daemon.event_hub.snapshot_with_version(
+                                    lambda: dict(cur_state)
+                                )
+                                last_fp = cur_fp
                                 last_waiters = cur_waiters
+                                if ver_ext <= last_sent_ver:
+                                    continue
+                                last_sent_ver = ver_ext
                                 ext_frame = (
-                                    f"id: {last_eid}\n"
+                                    f"id: {ver_ext}\n"
                                     f"event: update\n"
-                                    f"data: {json.dumps({'reason': reason, 'state': cur_state}, ensure_ascii=False)}\n\n"
+                                    f"data: {json.dumps({'reason': reason, 'active_waiters': cur_waiters, 'version': ver_ext, 'state': stamped}, ensure_ascii=False)}\n\n"
                                 ).encode("utf-8")
                                 self.wfile.write(ext_frame)
                                 self.wfile.flush()
@@ -1119,10 +1556,10 @@ class ConsiliumDaemon:
                                 self.wfile.write(b": keepalive\n\n")
                                 self.wfile.flush()
                                 last_ping = time.monotonic()
-                except (BrokenPipeError, ConnectionResetError, OSError):
+                except (BrokenPipeError, ConnectionResetError, TimeoutError, socket.timeout, OSError):
                     pass
                 finally:
-                    daemon.event_hub.unsubscribe(sub_q)
+                    daemon.event_hub.unsubscribe(sub)
 
             def do_GET(self) -> None:
                 parsed = urllib.parse.urlparse(self.path)
@@ -1137,17 +1574,19 @@ class ConsiliumDaemon:
                         self.send_header("Location", "/ui")
                         self.send_header("Cache-Control", "no-store")
                         self.send_header("Referrer-Policy", "no-referrer")
+                        self.send_header("X-Content-Type-Options", "nosniff")
+                        _, token_ver = daemon.get_auth_state()
                         if not daemon.require_token:
-                            cookie_val = "open"
+                            session = daemon.session_store.create(token_ver)
                             self.send_header(
                                 "Set-Cookie",
-                                f"{SESSION_COOKIE_NAME}={cookie_val}; HttpOnly; SameSite=Strict; Path=/",
+                                f"{SESSION_COOKIE_NAME}={session.session_id}; HttpOnly; SameSite=Strict; Path=/",
                             )
-                        elif daemon.ticket_store.consume(ticket):
-                            cookie_val = derive_session_cookie(daemon.get_active_token())
+                        elif daemon.ticket_store.consume(ticket, token_ver):
+                            session = daemon.session_store.create(token_ver)
                             self.send_header(
                                 "Set-Cookie",
-                                f"{SESSION_COOKIE_NAME}={cookie_val}; HttpOnly; SameSite=Strict; Path=/",
+                                f"{SESSION_COOKIE_NAME}={session.session_id}; HttpOnly; SameSite=Strict; Path=/",
                             )
                         self.send_header("Content-Length", "0")
                         if self.close_connection:
@@ -1157,6 +1596,9 @@ class ConsiliumDaemon:
                     if route == "/":
                         self.send_response(302)
                         self.send_header("Location", "/ui")
+                        self.send_header("Cache-Control", "no-store")
+                        self.send_header("Referrer-Policy", "no-referrer")
+                        self.send_header("X-Content-Type-Options", "nosniff")
                         self.send_header("Content-Length", "0")
                         if self.close_connection:
                             self.send_header("Connection", "close")
@@ -1166,18 +1608,26 @@ class ConsiliumDaemon:
                     return
 
                 if route == "/api/state":
-                    if not self._check_security(allow_cookie=True):
+                    ok_sec, _, session_rec = self._check_security(allow_cookie=True)
+                    if not ok_sec:
                         return
-                    self._send_json(200, daemon.get_dashboard_state(sync_quotas=True))
+                    ver_before = daemon.event_hub.current_version()
+                    snap = daemon.get_dashboard_state(sync_quotas=True)
+                    snap["state_version"] = ver_before
+                    if session_rec is not None:
+                        snap["csrf_token"] = session_rec.csrf_token
+                    self._send_json(200, snap)
                     return
 
                 if route == "/api/stream":
-                    if not self._check_security(allow_cookie=True):
+                    ok_sec, _, session_rec = self._check_security(allow_cookie=True)
+                    if not ok_sec:
                         return
-                    self._handle_sse_stream(parsed)
+                    self._handle_sse_stream(parsed, session_rec)
                     return
 
-                if not self._check_security():
+                ok_sec, _, _ = self._check_security()
+                if not ok_sec:
                     return
                 if route == "/health":
                     self._send_json(
@@ -1215,29 +1665,29 @@ class ConsiliumDaemon:
                         auth_hdr = self.headers.get("Authorization", "")
                         if auth_hdr.startswith("Bearer "):
                             supplied = auth_hdr[7:].strip()
+                    active, token_ver = daemon.get_auth_state()
                     if daemon.require_token:
-                        active = daemon.get_active_token()
                         if not supplied or not hmac.compare_digest(supplied, active):
                             self._send_json(401, {"error": "Invalid token"})
                             return
-                        cookie_val = derive_session_cookie(active)
-                    else:
-                        cookie_val = "open"
+                    session = daemon.session_store.create(token_ver)
                     cookie_hdr = (
-                        f"{SESSION_COOKIE_NAME}={cookie_val}; "
+                        f"{SESSION_COOKIE_NAME}={session.session_id}; "
                         "HttpOnly; SameSite=Strict; Path=/"
                     )
                     self._send_json(
                         200,
-                        {"ok": True},
+                        {"ok": True, "csrf_token": session.csrf_token},
                         extra_headers={"Set-Cookie": cookie_hdr},
                     )
                     return
 
                 if route == "/api/ui-ticket":
-                    if not self._check_security(allow_cookie=False):
+                    ok_sec, _, _ = self._check_security(allow_cookie=False)
+                    if not ok_sec:
                         return
-                    ticket = daemon.ticket_store.issue(ttl_sec=30.0)
+                    _, token_ver = daemon.get_auth_state()
+                    ticket = daemon.ticket_store.issue(token_version=token_ver, ttl_sec=30.0)
                     auth_url = f"http://{daemon.host}:{daemon.port}/ui/auth?ticket={ticket}"
                     self._send_json(
                         200,
@@ -1248,6 +1698,15 @@ class ConsiliumDaemon:
                 if route == "/api/logout":
                     if not self._check_host_origin():
                         return
+                    cookies = parse_cookie_header(self.headers.get("Cookie", ""))
+                    sess_id = cookies.get(SESSION_COOKIE_NAME, "")
+                    _, cur_ver = daemon.get_auth_state()
+                    existing_sess = daemon.session_store.get(sess_id, cur_ver) if sess_id else None
+                    if existing_sess is not None:
+                        if not self._check_cookie_write_csrf("cookie", existing_sess):
+                            return
+                        daemon.session_store.revoke(existing_sess.session_id)
+                        daemon.event_hub.close_for_session(existing_sess.session_id)
                     self._send_json(
                         200,
                         {"ok": True},
@@ -1261,7 +1720,10 @@ class ConsiliumDaemon:
                     return
 
                 if route.startswith("/api/missions/") and route.endswith("/close"):
-                    if not self._check_security(allow_cookie=True):
+                    ok_sec, auth_mode, session_rec = self._check_security(allow_cookie=True)
+                    if not ok_sec or auth_mode is None:
+                        return
+                    if not self._check_cookie_write_csrf(auth_mode, session_rec):
                         return
                     mid = urllib.parse.unquote(route[len("/api/missions/") : -len("/close")])
                     ok, payload = self._read_json_body()
@@ -1272,14 +1734,30 @@ class ConsiliumDaemon:
                         return
                     try:
                         force = _parse_bool(payload, "force", False)
+                        client_req_id = payload.get("client_request_id")
                         res = daemon.dispatcher.store.close_mission(
                             mission_id=mid,
                             final_summary=str(payload.get("final_summary") or "Closed via dashboard."),
                             peer_id=None,
                             status=str(payload.get("status") or "completed"),
                             force=force,
+                            client_request_id=(
+                                str(client_req_id) if client_req_id is not None else None
+                            ),
+                            caller_scope="dashboard",
                         )
+                        if res.get("idempotent_replay"):
+                            self._send_json(
+                                200,
+                                {
+                                    "committed": True,
+                                    "result": res,
+                                    "delivery": {"delivery": "replayed", "idempotent_replay": True, "deliveries": []},
+                                },
+                            )
+                            return
                         deliveries = []
+                        rec_warnings: List[str] = []
                         for evt in res.get("events", []):
                             eid = int(evt["event_id"])
                             ring_ms = time.time() * 1000.0
@@ -1295,27 +1773,50 @@ class ConsiliumDaemon:
                                 ),
                                 event_ids=[eid],
                             )
-                            daemon.dispatcher.store.record_event_delivery(
-                                [eid], receipt, ring_sent_at_ms=ring_ms
+                            rw = _safe_record_event_delivery(
+                                daemon.dispatcher.store, [eid], receipt, ring_sent_at_ms=ring_ms
                             )
+                            if rw:
+                                rec_warnings.append(rw)
                             deliveries.append(receipt)
-                        daemon.publish_state_update("ui_close_mission")
+                        delivery_summary: Dict[str, Any] = {
+                            "deliveries": deliveries,
+                            "errors": [d for d in deliveries if d.get("delivery") == "error"],
+                        }
+                        if delivery_summary["errors"]:
+                            delivery_summary["error"] = "; ".join(
+                                str(d.get("error", "")) for d in delivery_summary["errors"]
+                            )
+                        all_warnings = _collect_post_commit_warnings(
+                            res.get("post_commit_warnings"), delivery_summary, rec_warnings
+                        )
+                        try:
+                            daemon.publish_state_update("ui_close_mission")
+                        except Exception as pub_exc:
+                            all_warnings.append(f"publish_state_update: {pub_exc}")
+                        if all_warnings:
+                            delivery_summary["warnings"] = all_warnings
                         self._send_json(
                             200,
                             {
                                 "committed": True,
                                 "result": res,
-                                "delivery": {"deliveries": deliveries},
+                                "delivery": delivery_summary,
                             },
                         )
                     except KeyError as exc:
                         self._send_json(404, {"error": str(exc)})
+                    except ConflictError as exc:
+                        self._send_json(409, {"error": str(exc)})
                     except ValueError as exc:
                         self._send_json(400, {"error": str(exc)})
                     return
 
                 if route.startswith("/api/tasks/") and route.endswith("/requeue"):
-                    if not self._check_security(allow_cookie=True):
+                    ok_sec, auth_mode, session_rec = self._check_security(allow_cookie=True)
+                    if not ok_sec or auth_mode is None:
+                        return
+                    if not self._check_cookie_write_csrf(auth_mode, session_rec):
                         return
                     tid = urllib.parse.unquote(route[len("/api/tasks/") : -len("/requeue")])
                     ok, payload = self._read_json_body()
@@ -1325,10 +1826,25 @@ class ConsiliumDaemon:
                         self._send_json(400, {"error": "Expected JSON object"})
                         return
                     try:
+                        client_req_id = payload.get("client_request_id")
                         res = daemon.dispatcher.store.requeue_task(
                             task_id=tid,
                             reason=str(payload.get("reason") or "manual_requeue"),
+                            client_request_id=(
+                                str(client_req_id) if client_req_id is not None else None
+                            ),
+                            caller_scope="dashboard",
                         )
+                        if res.get("idempotent_replay"):
+                            self._send_json(
+                                200,
+                                {
+                                    "committed": True,
+                                    "result": res,
+                                    "delivery": {"delivery": "replayed", "idempotent_replay": True},
+                                },
+                            )
+                            return
                         eid = int(res["event"]["event_id"])
                         ring_ms = time.time() * 1000.0
                         delivery = _safe_ring_peer(
@@ -1343,21 +1859,34 @@ class ConsiliumDaemon:
                             ),
                             event_ids=[eid],
                         )
-                        daemon.dispatcher.store.record_event_delivery(
-                            [eid], delivery, ring_sent_at_ms=ring_ms
+                        rw = _safe_record_event_delivery(
+                            daemon.dispatcher.store, [eid], delivery, ring_sent_at_ms=ring_ms
                         )
-                        daemon.publish_state_update("ui_requeue_task")
+                        all_warnings = _collect_post_commit_warnings(
+                            res.get("post_commit_warnings"),
+                            delivery,
+                            [rw] if rw else None,
+                        )
+                        try:
+                            daemon.publish_state_update("ui_requeue_task")
+                        except Exception as pub_exc:
+                            all_warnings.append(f"publish_state_update: {pub_exc}")
+                        if all_warnings:
+                            delivery["warnings"] = all_warnings
                         self._send_json(
                             200,
                             {"committed": True, "result": res, "delivery": delivery},
                         )
                     except KeyError as exc:
                         self._send_json(404, {"error": str(exc)})
+                    except ConflictError as exc:
+                        self._send_json(409, {"error": str(exc)})
                     except ValueError as exc:
                         self._send_json(400, {"error": str(exc)})
                     return
 
-                if not self._check_security():
+                ok_sec, _, _ = self._check_security()
+                if not ok_sec:
                     return
                 if route != "/mcp":
                     self._send_json(404, {"error": "Not found"})
@@ -1369,6 +1898,9 @@ class ConsiliumDaemon:
                 if resp is None:
                     self.send_response(202)
                     self.send_header("Content-Length", "0")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Referrer-Policy", "no-referrer")
+                    self.send_header("X-Content-Type-Options", "nosniff")
                     if self.close_connection:
                         self.send_header("Connection", "close")
                     self.end_headers()
@@ -1425,8 +1957,9 @@ class ConsiliumDaemon:
         return str(bound_host), self.port
 
     def stop(self) -> None:
-        """Shut down reaper thread, HTTP server, and AF_UNIX wake broker cleanly."""
+        """Shut down reaper thread, SSE streams, HTTP server, and AF_UNIX wake broker cleanly."""
         self._stop_event.set()
+        self.event_hub.close_all()
         if self._reaper_thread is not None:
             self._reaper_thread.join(timeout=2.0)
             self._reaper_thread = None

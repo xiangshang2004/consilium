@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from datetime import datetime, timezone
 import json
 import os
@@ -11,7 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 REPO_DIR_DEFAULT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_DIR_DEFAULT not in sys.path:
@@ -37,6 +38,79 @@ CODEX_DUP_TABLE_RE = re.compile(
 CODEX_DUP_DOTTED_RE = re.compile(
     r"""(?m)^\s*mcp_servers\.(?:"consilium"|'consilium'|consilium)\s*\.[^=\n]+="""
 )
+
+VALID_INSTALL_TARGETS: Tuple[str, ...] = (
+    "claude_desktop",
+    "claude_code",
+    "codex",
+    "antigravity",
+    "launchd",
+)
+
+TARGET_ALIASES: Dict[str, str] = {
+    "claude_desktop": "claude_desktop",
+    "claude-desktop": "claude_desktop",
+    "desktop": "claude_desktop",
+    "claude_app": "claude_desktop",
+    "claude-app": "claude_desktop",
+    "claude_code": "claude_code",
+    "claude-code": "claude_code",
+    "code": "claude_code",
+    "codex": "codex",
+    "antigravity": "antigravity",
+    "ag": "antigravity",
+    "gemini": "antigravity",
+    "launchd": "launchd",
+    "plist": "launchd",
+}
+
+
+class TokenRotationError(RuntimeError):
+    """Raised when rotate_token fails midway, carrying partial progress and rollback steps."""
+
+    def __init__(self, message: str, *, report: Dict[str, Any]) -> None:
+        super().__init__(message)
+        self.report = report
+
+
+def _normalize_install_targets(
+    targets: Optional[Iterable[str]] = None,
+    *,
+    skip_claude_desktop: bool = False,
+) -> Tuple[str, ...]:
+    if targets is None:
+        selected = list(VALID_INSTALL_TARGETS)
+    else:
+        raw_items: List[str] = []
+        if isinstance(targets, str):
+            raw_items.extend(part.strip() for part in targets.split(",") if part.strip())
+        else:
+            for item in targets:
+                raw_items.extend(part.strip() for part in str(item).split(",") if part.strip())
+        if not raw_items:
+            raise ValueError(
+                f"targets must not be empty; valid targets: {', '.join(VALID_INSTALL_TARGETS)}"
+            )
+        selected = []
+        for item in raw_items:
+            lowered = item.lower()
+            if lowered == "all":
+                for canon in VALID_INSTALL_TARGETS:
+                    if canon not in selected:
+                        selected.append(canon)
+                continue
+            canon = TARGET_ALIASES.get(lowered)
+            if canon is None:
+                raise ValueError(
+                    f"Unknown install target {item!r}; valid targets: {', '.join(VALID_INSTALL_TARGETS)}"
+                )
+            if canon not in selected:
+                selected.append(canon)
+    if skip_claude_desktop:
+        selected = [t for t in selected if t != "claude_desktop"]
+    if not selected:
+        raise ValueError("No install targets remain after filtering.")
+    return tuple(selected)
 
 
 def _timestamp_tag() -> str:
@@ -244,12 +318,19 @@ def _apply_claude_code_mcp(
     claude_bin: str,
     runner: Any = subprocess.run,
 ) -> None:
-    """Apply Claude Code MCP change via CLI with rollback if add fails after remove."""
+    """Apply Claude Code MCP change via CLI with saved entry and verified rollback."""
+    saved_previous: Optional[Dict[str, Any]] = copy.deepcopy(previous_entry)
+    if saved_previous is None and os.path.exists(path):
+        pre_data = _load_json_dict(path)
+        existing = (pre_data.get("mcpServers") or {}).get("consilium")
+        if existing is not None:
+            saved_previous = copy.deepcopy(existing)
+
     _backup_file(path, home_dir, backup_root)
     env = _claude_subprocess_env(home_dir)
 
-    # Probe via `claude mcp get consilium` before removal (R005 3.7 item 3).
-    if previous_entry is not None or remove:
+    # Probe via `claude mcp get consilium` before removal so prior state is confirmed.
+    if saved_previous is not None or remove:
         runner(
             [claude_bin, "mcp", "get", "consilium"],
             env=env,
@@ -259,7 +340,7 @@ def _apply_claude_code_mcp(
         )
 
     removed_old = False
-    if remove or previous_entry is not None:
+    if remove or saved_previous is not None:
         rm_res = runner(
             [claude_bin, "mcp", "remove", "-s", "user", "consilium"],
             env=env,
@@ -283,9 +364,9 @@ def _apply_claude_code_mcp(
             check=False,
         )
         if add_res.returncode != 0:
-            # Roll back previous entry if we removed it before add failed.
-            if removed_old and previous_entry is not None:
-                runner(
+            rollback_note = "no previous entry to restore"
+            if removed_old and saved_previous is not None:
+                rb_res = runner(
                     [
                         claude_bin,
                         "mcp",
@@ -293,15 +374,52 @@ def _apply_claude_code_mcp(
                         "-s",
                         "user",
                         "consilium",
-                        json.dumps(previous_entry, ensure_ascii=False),
+                        json.dumps(saved_previous, ensure_ascii=False),
                     ],
                     env=env,
                     capture_output=True,
                     text=True,
                     check=False,
                 )
+                if rb_res.returncode != 0:
+                    raise RuntimeError(
+                        f"claude mcp add-json failed ({add_res.returncode}): "
+                        f"{add_res.stderr or add_res.stdout}; rollback add-json also failed "
+                        f"({rb_res.returncode}): {rb_res.stderr or rb_res.stdout}; "
+                        f"restore backup from {backup_root}"
+                    )
+                verify_res = runner(
+                    [claude_bin, "mcp", "get", "consilium"],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if verify_res.returncode != 0:
+                    raise RuntimeError(
+                        f"claude mcp add-json failed ({add_res.returncode}): "
+                        f"{add_res.stderr or add_res.stdout}; rollback verification via "
+                        f"`claude mcp get consilium` failed ({verify_res.returncode}): "
+                        f"{verify_res.stderr or verify_res.stdout}; restore backup from {backup_root}"
+                    )
+                if os.path.exists(path):
+                    restored_data = _load_json_dict(path)
+                    restored_entry = (restored_data.get("mcpServers") or {}).get("consilium")
+                    if restored_entry != saved_previous:
+                        raise RuntimeError(
+                            f"claude mcp add-json failed ({add_res.returncode}); rollback verification "
+                            f"failed: {path} consilium entry does not match saved previous entry; "
+                            f"restore backup from {backup_root}"
+                        )
+                elif saved_previous is not None:
+                    raise RuntimeError(
+                        f"claude mcp add-json failed ({add_res.returncode}); rollback verification "
+                        f"failed: {path} missing after rollback; restore backup from {backup_root}"
+                    )
+                rollback_note = "previous entry restored and verified"
             raise RuntimeError(
-                f"claude mcp add-json failed ({add_res.returncode}): {add_res.stderr or add_res.stdout}"
+                f"claude mcp add-json failed ({add_res.returncode}): "
+                f"{add_res.stderr or add_res.stdout} ({rollback_note})"
             )
 
 
@@ -351,10 +469,17 @@ def run_installer(
     repo_dir: str,
     port: int,
     rendezvous_dir: Optional[str] = None,
+    targets: Optional[Iterable[str]] = None,
+    skip_claude_desktop: bool = False,
     claude_running_check: Optional[Callable[[], Optional[bool]]] = None,
     claude_runner: Any = subprocess.run,
 ) -> Dict[str, Any]:
-    """Two-phase atomic installer: validate ALL targets before writing a single byte."""
+    """Two-phase atomic installer: validate all selected targets before writing a single byte."""
+    selected_targets = _normalize_install_targets(
+        targets, skip_claude_desktop=skip_claude_desktop
+    )
+    selected_set = set(selected_targets)
+
     home_dir = os.path.abspath(os.path.expanduser(target_home))
     resolved_repo = os.path.abspath(repo_dir)
     state_dir = os.path.join(home_dir, "Library", "Application Support", "consilium")
@@ -369,45 +494,59 @@ def run_installer(
     apply_changes = mode in ("apply", "uninstall")
     remove = mode == "uninstall"
 
-    # ---- PHASE 1: READ & VALIDATE EVERYTHING (ZERO WRITES!) ----
+    # ---- PHASE 1: READ & VALIDATE SELECTED TARGETS (ZERO WRITES!) ----
     running_fn = claude_running_check or _is_claude_desktop_running
     claude_running = running_fn()
     warnings: List[str] = []
     if claude_running:
-        msg = (
-            "Claude.app is currently running; quit Claude.app before applying "
-            "claude_desktop_config.json changes."
-        )
-        if mode == "apply":
-            raise RuntimeError(msg)
-        warnings.append(msg)
+        if "claude_desktop" in selected_set:
+            msg = (
+                "Claude.app is currently running; quit Claude.app before applying "
+                "claude_desktop_config.json changes (or pass --skip-claude-desktop / "
+                "--targets claude_code,codex,antigravity)."
+            )
+            if mode == "apply":
+                raise RuntimeError(msg)
+            warnings.append(msg)
+        else:
+            warnings.append(
+                "Claude.app is currently running; proceeding because claude_desktop target is excluded."
+            )
 
-    # Read template sources up front so missing files fail before any write.
-    skill_content = _read_text(
-        os.path.join(resolved_repo, "adapters", "skill", "consilium-collab", "SKILL.md")
-    )
-    claude_agents_dir = os.path.join(resolved_repo, "adapters", "claude", "agents")
-    claude_agent_files = [
-        (fname, _read_text(os.path.join(claude_agents_dir, fname)))
-        for fname in sorted(os.listdir(claude_agents_dir))
-        if fname.endswith(".md")
-    ]
-    codex_agents_dir = os.path.join(resolved_repo, "adapters", "codex", "agents")
-    codex_agent_files = [
-        (fname, _read_text(os.path.join(codex_agents_dir, fname)))
-        for fname in sorted(os.listdir(codex_agents_dir))
-        if fname.endswith(".toml")
-    ]
-    plist_tmpl = _read_text(
-        os.path.join(resolved_repo, "adapters", "launchd", "com.up.consilium.plist.tmpl")
-    )
-    plist_rendered = (
-        plist_tmpl.replace("__PORT__", str(port))
-        .replace("__STATE_DIR__", state_dir)
-        .replace("__RENDEZVOUS_DIR__", resolved_rv)
-        .replace("__LOG_DIR__", log_dir)
-        .replace("__REPO_DIR__", resolved_repo)
-    )
+    # Read template sources up front for selected targets so missing files fail before any write.
+    skill_content = ""
+    if selected_set & {"antigravity", "claude_code", "codex"}:
+        skill_content = _read_text(
+            os.path.join(resolved_repo, "adapters", "skill", "consilium-collab", "SKILL.md")
+        )
+    claude_agent_files: List[Tuple[str, str]] = []
+    if "claude_code" in selected_set:
+        claude_agents_dir = os.path.join(resolved_repo, "adapters", "claude", "agents")
+        claude_agent_files = [
+            (fname, _read_text(os.path.join(claude_agents_dir, fname)))
+            for fname in sorted(os.listdir(claude_agents_dir))
+            if fname.endswith(".md")
+        ]
+    codex_agent_files: List[Tuple[str, str]] = []
+    if "codex" in selected_set:
+        codex_agents_dir = os.path.join(resolved_repo, "adapters", "codex", "agents")
+        codex_agent_files = [
+            (fname, _read_text(os.path.join(codex_agents_dir, fname)))
+            for fname in sorted(os.listdir(codex_agents_dir))
+            if fname.endswith(".toml")
+        ]
+    plist_rendered = ""
+    if "launchd" in selected_set:
+        plist_tmpl = _read_text(
+            os.path.join(resolved_repo, "adapters", "launchd", "com.up.consilium.plist.tmpl")
+        )
+        plist_rendered = (
+            plist_tmpl.replace("__PORT__", str(port))
+            .replace("__STATE_DIR__", state_dir)
+            .replace("__RENDEZVOUS_DIR__", resolved_rv)
+            .replace("__LOG_DIR__", log_dir)
+            .replace("__REPO_DIR__", resolved_repo)
+        )
 
     # Decide token value WITHOUT writing auth.token during Phase 1!
     existing_token = _peek_token(state_dir)
@@ -460,114 +599,127 @@ def run_installer(
             _record(label, path, "permission_denied", f"unreadable in current sandbox: {exc}")
 
     # 1. Antigravity MCP (headers auth, no ?token=!)
-    def _plan_ag() -> None:
-        action, detail, content = _plan_json_mcp(
-            antigravity_path, antigravity_http_entry, remove=remove
-        )
-        _record("antigravity_mcp", antigravity_path, action, detail)
-        if apply_changes and content is not None:
-            def _do_write(p: str = antigravity_path, c: str = content) -> None:
-                _backup_file(p, home_dir, backup_root)
-                _atomic_write_text(p, c, mode=0o600)
-            write_tasks.append(_do_write)
+    if "antigravity" in selected_set:
+        def _plan_ag() -> None:
+            action, detail, content = _plan_json_mcp(
+                antigravity_path, antigravity_http_entry, remove=remove
+            )
+            _record("antigravity_mcp", antigravity_path, action, detail)
+            if apply_changes and content is not None:
+                def _do_write(p: str = antigravity_path, c: str = content) -> None:
+                    _backup_file(p, home_dir, backup_root)
+                    _atomic_write_text(p, c, mode=0o600)
+                write_tasks.append(_do_write)
 
-    _plan_safe("antigravity_mcp", antigravity_path, _plan_ag)
+        _plan_safe("antigravity_mcp", antigravity_path, _plan_ag)
 
     # 2. Claude Desktop MCP
-    def _plan_cd() -> None:
-        action, detail, content = _plan_json_mcp(
-            claude_desktop_path, claude_desktop_stdio_entry, remove=remove
-        )
-        _record("claude_desktop_mcp", claude_desktop_path, action, detail)
-        if apply_changes and content is not None:
-            def _do_write(p: str = claude_desktop_path, c: str = content) -> None:
-                _backup_file(p, home_dir, backup_root)
-                _atomic_write_text(p, c, mode=0o600)
-            write_tasks.append(_do_write)
+    if "claude_desktop" in selected_set:
+        def _plan_cd() -> None:
+            action, detail, content = _plan_json_mcp(
+                claude_desktop_path, claude_desktop_stdio_entry, remove=remove
+            )
+            _record("claude_desktop_mcp", claude_desktop_path, action, detail)
+            if apply_changes and content is not None:
+                def _do_write(p: str = claude_desktop_path, c: str = content) -> None:
+                    _backup_file(p, home_dir, backup_root)
+                    _atomic_write_text(p, c, mode=0o600)
+                write_tasks.append(_do_write)
 
-    _plan_safe("claude_desktop_mcp", claude_desktop_path, _plan_cd)
+        _plan_safe("claude_desktop_mcp", claude_desktop_path, _plan_cd)
 
     # 3. Claude Code MCP (check CLI executability in Phase 1!)
-    def _plan_cc() -> None:
-        action, detail, desired, prev_entry = _plan_claude_code_mcp(
-            claude_code_path, port, effective_token, remove=remove
-        )
-        _record("claude_code_mcp", claude_code_path, action, detail)
-        if apply_changes and action != "unchanged":
-            claude_bin = _find_claude_cli()
-            if not (os.path.isfile(claude_bin) and os.access(claude_bin, os.X_OK)):
-                raise FileNotFoundError(f"Executable claude CLI not found at {claude_bin}")
-            def _do_cc(
-                p: str = claude_code_path,
-                d: Dict[str, Any] = desired,
-                prev: Optional[Dict[str, Any]] = prev_entry,
-                cb: str = claude_bin,
-            ) -> None:
-                _apply_claude_code_mcp(
-                    p,
-                    d,
-                    prev,
-                    remove=remove,
-                    home_dir=home_dir,
-                    backup_root=backup_root,
-                    claude_bin=cb,
-                    runner=claude_runner,
-                )
-            write_tasks.append(_do_cc)
+    if "claude_code" in selected_set:
+        def _plan_cc() -> None:
+            action, detail, desired, prev_entry = _plan_claude_code_mcp(
+                claude_code_path, port, effective_token, remove=remove
+            )
+            _record("claude_code_mcp", claude_code_path, action, detail)
+            if apply_changes and action != "unchanged":
+                claude_bin = _find_claude_cli()
+                if not (os.path.isfile(claude_bin) and os.access(claude_bin, os.X_OK)):
+                    raise FileNotFoundError(f"Executable claude CLI not found at {claude_bin}")
+                def _do_cc(
+                    p: str = claude_code_path,
+                    d: Dict[str, Any] = desired,
+                    prev: Optional[Dict[str, Any]] = prev_entry,
+                    cb: str = claude_bin,
+                ) -> None:
+                    _apply_claude_code_mcp(
+                        p,
+                        d,
+                        prev,
+                        remove=remove,
+                        home_dir=home_dir,
+                        backup_root=backup_root,
+                        claude_bin=cb,
+                        runner=claude_runner,
+                    )
+                write_tasks.append(_do_cc)
 
-    _plan_safe("claude_code_mcp", claude_code_path, _plan_cc)
+        _plan_safe("claude_code_mcp", claude_code_path, _plan_cc)
 
     # 4. Codex TOML (validates duplicate tables & dotted keys in Phase 1!)
-    def _plan_cx() -> None:
-        action, detail, content = _plan_codex_toml(
-            codex_path, port, effective_token, remove=remove
-        )
-        _record("codex_mcp", codex_path, action, detail)
-        if apply_changes and content is not None:
-            def _do_write(p: str = codex_path, c: str = content) -> None:
-                _backup_file(p, home_dir, backup_root)
-                _atomic_write_text(p, c, mode=0o600)
-            write_tasks.append(_do_write)
+    if "codex" in selected_set:
+        def _plan_cx() -> None:
+            action, detail, content = _plan_codex_toml(
+                codex_path, port, effective_token, remove=remove
+            )
+            _record("codex_mcp", codex_path, action, detail)
+            if apply_changes and content is not None:
+                def _do_write(p: str = codex_path, c: str = content) -> None:
+                    _backup_file(p, home_dir, backup_root)
+                    _atomic_write_text(p, c, mode=0o600)
+                write_tasks.append(_do_write)
 
-    _plan_safe("codex_mcp", codex_path, _plan_cx)
+        _plan_safe("codex_mcp", codex_path, _plan_cx)
 
-    # 5. Skills, agent templates, launchd plist
-    text_targets: List[Tuple[str, str, str, int]] = [
-        (
-            "antigravity_skill",
-            os.path.join(home_dir, ".gemini", "config", "skills", "consilium-collab", "SKILL.md"),
-            skill_content,
-            0o644,
-        ),
-        (
-            "claude_skill",
-            os.path.join(home_dir, ".claude", "skills", "consilium-collab", "SKILL.md"),
-            skill_content,
-            0o644,
-        ),
-        (
-            "codex_skill",
-            os.path.join(home_dir, ".codex", "skills", "consilium-collab", "SKILL.md"),
-            skill_content,
-            0o644,
-        ),
-    ]
-    for fname, content in claude_agent_files:
+    # 5. Skills, agent templates, launchd plist filtered by selected_set
+    text_targets: List[Tuple[str, str, str, int]] = []
+    if "antigravity" in selected_set:
         text_targets.append(
-            (f"claude_agent:{fname}", os.path.join(home_dir, ".claude", "agents", fname), content, 0o644)
+            (
+                "antigravity_skill",
+                os.path.join(home_dir, ".gemini", "config", "skills", "consilium-collab", "SKILL.md"),
+                skill_content,
+                0o644,
+            )
         )
-    for fname, content in codex_agent_files:
+    if "claude_code" in selected_set:
         text_targets.append(
-            (f"codex_agent:{fname}", os.path.join(home_dir, ".codex", "agents", fname), content, 0o644)
+            (
+                "claude_skill",
+                os.path.join(home_dir, ".claude", "skills", "consilium-collab", "SKILL.md"),
+                skill_content,
+                0o644,
+            )
         )
-    text_targets.append(
-        (
-            "launchd_plist",
-            os.path.join(home_dir, "Library", "LaunchAgents", "com.up.consilium.plist"),
-            plist_rendered,
-            0o644,
+        for fname, content in claude_agent_files:
+            text_targets.append(
+                (f"claude_agent:{fname}", os.path.join(home_dir, ".claude", "agents", fname), content, 0o644)
+            )
+    if "codex" in selected_set:
+        text_targets.append(
+            (
+                "codex_skill",
+                os.path.join(home_dir, ".codex", "skills", "consilium-collab", "SKILL.md"),
+                skill_content,
+                0o644,
+            )
         )
-    )
+        for fname, content in codex_agent_files:
+            text_targets.append(
+                (f"codex_agent:{fname}", os.path.join(home_dir, ".codex", "agents", fname), content, 0o644)
+            )
+    if "launchd" in selected_set:
+        text_targets.append(
+            (
+                "launchd_plist",
+                os.path.join(home_dir, "Library", "LaunchAgents", "com.up.consilium.plist"),
+                plist_rendered,
+                0o644,
+            )
+        )
 
     for label, dest, content, file_mode in text_targets:
         def _plan_txt(lbl: str = label, dst: str = dest, cnt: str = content, fm: int = file_mode) -> None:
@@ -600,6 +752,7 @@ def run_installer(
 
     return {
         "mode": mode,
+        "selected_targets": list(selected_targets),
         "target_home": home_dir,
         "state_dir": state_dir,
         "rendezvous_dir": resolved_rv,
@@ -672,34 +825,116 @@ def rotate_token(
         if CODEX_BLOCK_RE.search(raw_toml):
             _, _, cx_content = _plan_codex_toml(codex_path, port, new_token, remove=False)
 
-    # Phase 2: rewrite client configs FIRST, swap server auth.token LAST!
-    updated_targets: List[str] = []
+    steps: List[Tuple[str, Optional[str], Callable[[], None]]] = []
     if ag_content is not None:
-        _backup_file(antigravity_path, home_dir, backup_root)
-        _atomic_write_text(antigravity_path, ag_content, mode=0o600)
-        updated_targets.append("antigravity_mcp")
+        def _rot_ag() -> None:
+            _backup_file(antigravity_path, home_dir, backup_root)
+            _atomic_write_text(antigravity_path, ag_content, mode=0o600)
+
+        steps.append(("antigravity_mcp", antigravity_path, _rot_ag))
 
     if cc_needs_update:
-        _apply_claude_code_mcp(
-            claude_code_path,
-            cc_desired,
-            cc_prev,
-            remove=False,
-            home_dir=home_dir,
-            backup_root=backup_root,
-            claude_bin=claude_bin,
-            runner=claude_runner,
-        )
-        updated_targets.append("claude_code_mcp")
+        def _rot_cc() -> None:
+            _apply_claude_code_mcp(
+                claude_code_path,
+                cc_desired,
+                cc_prev,
+                remove=False,
+                home_dir=home_dir,
+                backup_root=backup_root,
+                claude_bin=claude_bin,
+                runner=claude_runner,
+            )
+
+        steps.append(("claude_code_mcp", claude_code_path, _rot_cc))
 
     if cx_content is not None:
-        _backup_file(codex_path, home_dir, backup_root)
-        _atomic_write_text(codex_path, cx_content, mode=0o600)
-        updated_targets.append("codex_mcp")
+        def _rot_cx() -> None:
+            _backup_file(codex_path, home_dir, backup_root)
+            _atomic_write_text(codex_path, cx_content, mode=0o600)
+
+        steps.append(("codex_mcp", codex_path, _rot_cx))
 
     previous_token_existed = bool(read_auth_token(resolved_state))
-    write_auth_token(resolved_state, new_token)
-    updated_targets.append("server_auth_token")
+    token_path = os.path.join(resolved_state, "auth.token")
+    if previous_token_existed:
+        _backup_file(token_path, resolved_state, backup_root)
+
+    def _rot_token() -> None:
+        write_auth_token(resolved_state, new_token)
+
+    steps.append(("server_auth_token", token_path, _rot_token))
+
+    # Phase 2: rewrite client configs FIRST, swap server auth.token LAST!
+    updated_targets: List[str] = []
+    updated_paths: Dict[str, str] = {}
+    planned_targets = [name for name, _, _ in steps]
+
+    for target_name, dest_path, fn in steps:
+        try:
+            fn()
+            updated_targets.append(target_name)
+            if dest_path:
+                updated_paths[target_name] = dest_path
+        except Exception as exc:
+            remaining_targets = [t for t in planned_targets if t not in updated_targets]
+            server_rotated = "server_auth_token" in updated_targets
+            actual_backup = backup_root if os.path.exists(backup_root) else ""
+            rollback_instructions: List[str] = []
+            if not server_rotated:
+                rollback_instructions.append(
+                    "Server auth.token was NOT rotated yet (existing token remains active)."
+                )
+            else:
+                rollback_instructions.append(
+                    f"Restore previous server token into {token_path} and restart consilium serve."
+                )
+            for done_target in updated_targets:
+                if done_target == "antigravity_mcp" and actual_backup:
+                    bak = os.path.join(actual_backup, os.path.relpath(antigravity_path, home_dir))
+                    rollback_instructions.append(
+                        f"Restore Antigravity config: cp -f {bak!r} {antigravity_path!r}"
+                    )
+                elif done_target == "claude_code_mcp":
+                    bak = os.path.join(actual_backup, os.path.relpath(claude_code_path, home_dir)) if actual_backup else ""
+                    if cc_prev is not None:
+                        rollback_instructions.append(
+                            f"Restore Claude Code MCP: {claude_bin} mcp remove -s user consilium && "
+                            f"{claude_bin} mcp add-json -s user consilium {json.dumps(cc_prev, ensure_ascii=False)!r}"
+                            + (f" (or restore backup {bak!r} -> {claude_code_path!r})" if bak else "")
+                        )
+                    elif bak:
+                        rollback_instructions.append(
+                            f"Restore Claude Code config: cp -f {bak!r} {claude_code_path!r}"
+                        )
+                elif done_target == "codex_mcp" and actual_backup:
+                    bak = os.path.join(actual_backup, os.path.relpath(codex_path, home_dir))
+                    rollback_instructions.append(
+                        f"Restore Codex config: cp -f {bak!r} {codex_path!r}"
+                    )
+            if not updated_targets:
+                rollback_instructions.append("No client configs were modified before the failure.")
+
+            report = {
+                "rotated": False,
+                "state_dir": resolved_state,
+                "port": port,
+                "failed_target": target_name,
+                "error": str(exc),
+                "updated_targets": updated_targets,
+                "updated_paths": updated_paths,
+                "remaining_targets": remaining_targets,
+                "server_token_rotated": server_rotated,
+                "backup_root": actual_backup,
+                "rollback_instructions": rollback_instructions,
+            }
+            summary = (
+                f"rotate-token failed at {target_name}: {exc}. "
+                f"Updated targets={updated_targets}; remaining={remaining_targets}; "
+                f"server_token_rotated={server_rotated}; backup_root={actual_backup!r}. "
+                f"Rollback: {' | '.join(rollback_instructions)}"
+            )
+            raise TokenRotationError(summary, report=report) from exc
 
     return {
         "rotated": True,
@@ -724,6 +959,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--repo-dir", default=REPO_DIR_DEFAULT)
     parser.add_argument("--rendezvous-dir", default=None)
     parser.add_argument("--port", type=int, default=18920)
+    parser.add_argument(
+        "--targets",
+        nargs="+",
+        default=None,
+        help=(
+            "Target components to plan/apply (comma or space separated): "
+            "claude_desktop, claude_code (code), codex, antigravity, launchd, or all."
+        ),
+    )
+    parser.add_argument(
+        "--skip-claude-desktop",
+        action="store_true",
+        help="Skip claude_desktop_config.json so other targets can install while Claude.app runs.",
+    )
     args = parser.parse_args(argv)
 
     if args.apply:
@@ -742,6 +991,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             repo_dir=args.repo_dir,
             port=args.port,
             rendezvous_dir=args.rendezvous_dir,
+            targets=args.targets,
+            skip_claude_desktop=args.skip_claude_desktop,
         )
     except (ValueError, json.JSONDecodeError, RuntimeError, FileNotFoundError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)

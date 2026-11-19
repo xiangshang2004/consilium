@@ -35,19 +35,22 @@ Whenever the user gives an instruction here that asks to coordinate across model
    - `hot_wakeup`: target desktop standby session woke automatically (with cold escalation backup if unacked).
    - `cold_notification`: target desktop had no active waiter; the macOS notification banner does **not** steal focus or open deep links on click. Tell the user briefly that a cold notification was sent so they can manually switch to the target app and run `consilium_pickup_inbox(peer_id=<target>)`. Only enable mission-level `open_deeplink: true` after explicit user consent.
 6. Wait for results cleanly:
-   - In **Antigravity / Claude Code tab / Codex**: run `python3 -m consilium.cli wait --peer <self>` in the background (without `--pickup`), or call `consilium_wait(peer_id=<self>, timeout_sec=45)` (defaults to `auto_pickup=false`) in request-bounded surfaces (such as Claude Chat tab), then explicitly call `consilium_pickup_inbox(peer_id=<self>)` upon wakeup.
+   - Waiting is **strictly read-only**: in **Antigravity / Claude Code tab / Codex**, run `/usr/bin/python3 -m consilium.cli wait --peer <self>` in the background, or call `consilium_wait(peer_id=<self>, timeout_sec=45)` in request-bounded surfaces (such as Claude Chat tab) (`auto_pickup` / `--pickup` parameters are retained only for compatibility and are ignored). Then explicitly call `consilium_pickup_inbox(peer_id=<self>)` upon wakeup.
+   - If you receive `task_stale` (a `running` task missed its progress interval) or a worker hits `failed`/`blocked`, inspect whether the worker is still active before calling `consilium_requeue_task(...)` (valid for `claimed`, `running`, `failed`, or `blocked`; never `done` or `cancelled`).
 7. Once `all_tasks_finished` is true (or `loop_guard_reached` escalates back), synthesize a single unified report for the user citing exact files, test results, and worktree branches, and close the mission with `consilium_close_mission(mission_id, peer_id=<self>, final_summary=...)`.
 
 ## 2. Standby Worker Mode (When Acting as a Background Doorbell Listener)
 1. **Surface Rules**:
    - **Claude.app**: Only the **Code tab** can stay on background standby (`run_in_background: true`). The **Chat tab** cannot run background listeners and participates only as coordinator or via cold deep link.
-   - Start background standby **WITHOUT `--pickup`**:
-     `python3 -m consilium.cli wait --peer <self> --session-label <label>`
-     (Waiter watches `/tmp/consilium-<uid>/signals/<peer>.seq` with 0% CPU and does not touch SQLite; if `--pickup` ran in the background process and the session closed, tasks could get stranded in `claimed`).
-2. On wakeup, call `consilium_pickup_inbox(peer_id=<self>, session_label=<label>)` to atomically claim tasks, then fan out **inside your own native harness**:
+   - Start background standby (strictly read-only):
+     `/usr/bin/python3 -m consilium.cli wait --peer <self> --session-label <label>`
+     (Waiter watches `/tmp/consilium-<uid>/signals/<peer>.seq` with 0% CPU, zero SQLite writes, and never claims tasks.)
+2. On wakeup, call `consilium_pickup_inbox(peer_id=<self>, session_label=<label>)` to atomically claim tasks. Save each claimed task's **`attempt_id`**, then fan out **inside your own native harness**:
    - **Antigravity**: call `invoke_subagent` with `Model: "pro" | "flash" | "flash_lite"` and `Workspace: "share" | "branch"` (or `swarm`).
    - **Claude Desktop**: invoke native `Agent` subagents using `opus-architect` (or `fable` for plan review), `opus-builder`, or `opus-scout` with worktree isolation when editing code. Do **not** use `sonnet` or `haiku`.
    - **ChatGPT / Codex Desktop**: spawn native Codex child agents using `architect-high`, `builder-balanced`, or `scout-fast` profiles.
-3. Send milestone updates only when needed via `consilium_report_progress(...)`.
+3. **Attempt Lease & Progress Interval (Required)**:
+   - Immediately transition started work via `consilium_report_progress(task_id, peer_id=<self>, note=..., status="running", attempt_id=<attempt_id>)` (unstarted `claimed` tasks auto-requeue on `claim_timeout_sec`).
+   - For long-running tasks, send `consilium_report_progress(..., attempt_id=<attempt_id>, status="running")` at intervals of **at most half the `running_timeout_sec`** (e.g., at least every **<= 1 hour** under the default 2-hour running timeout). Expired `running` tasks are marked `stale` (`task_stale` sent to both coordinator and assignee); if reassigned/requeued, old `attempt_id` writes are rejected.
 4. Never enter an unguarded ping-pong loop: cross-peer checks MUST go through `consilium_request_review(...)`, and if `allowed == false`, stop and hand control back to the coordinator.
-5. Finish by calling `consilium_complete_task(task_id, peer_id=<self>, result_summary=..., artifacts=[...])`, then re-arm your standby waiter silently if continuing standby duty.
+5. Finish by calling `consilium_complete_task(task_id, peer_id=<self>, attempt_id=<attempt_id>, result_summary=..., artifacts=[...])`, then re-arm your standby waiter silently if continuing standby duty.

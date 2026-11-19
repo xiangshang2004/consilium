@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
-import hmac
+import json
 import queue
 import secrets
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from consilium import __version__
 from consilium.models import utc_now_iso
@@ -17,16 +18,73 @@ from consilium.store import BusStore
 from consilium.wakeup import query_active_waiters
 
 SESSION_COOKIE_NAME = "consilium_session"
-_SESSION_HMAC_CONTEXT = b"consilium-ui-session-v1"
+SESSION_TTL_SEC = 12 * 3600.0
+SSE_MAX_SUBSCRIBERS = 16
 
 
-def derive_session_cookie(active_token: str) -> str:
-    """Derive a deterministic session cookie value tied to the current auth token."""
-    return hmac.new(
-        active_token.encode("utf-8"),
-        _SESSION_HMAC_CONTEXT,
-        hashlib.sha256,
-    ).hexdigest()
+@dataclass
+class SessionRecord:
+    session_id: str
+    csrf_token: str
+    token_version: int
+    created_at: float
+    expires_at: float
+
+
+class SessionStore:
+    """In-memory random server-side session registry with token-version binding and 12h TTL."""
+
+    def __init__(self, ttl_sec: float = SESSION_TTL_SEC, max_sessions: int = 64) -> None:
+        self._lock = threading.Lock()
+        self._sessions: Dict[str, SessionRecord] = {}
+        self._ttl_sec = max(60.0, float(ttl_sec))
+        self._max_sessions = max(4, int(max_sessions))
+
+    def _prune_locked(self, now: float) -> None:
+        expired = [sid for sid, rec in self._sessions.items() if rec.expires_at <= now]
+        for sid in expired:
+            self._sessions.pop(sid, None)
+
+    def create(self, token_version: int) -> SessionRecord:
+        now = time.time()
+        with self._lock:
+            self._prune_locked(now)
+            if len(self._sessions) >= self._max_sessions:
+                oldest = min(self._sessions.items(), key=lambda item: item[1].created_at)[0]
+                self._sessions.pop(oldest, None)
+            rec = SessionRecord(
+                session_id=secrets.token_urlsafe(32),
+                csrf_token=secrets.token_urlsafe(24),
+                token_version=int(token_version),
+                created_at=now,
+                expires_at=now + self._ttl_sec,
+            )
+            self._sessions[rec.session_id] = rec
+            return rec
+
+    def get(self, session_id: str, current_token_version: int) -> Optional[SessionRecord]:
+        if not session_id:
+            return None
+        now = time.time()
+        with self._lock:
+            self._prune_locked(now)
+            rec = self._sessions.get(session_id)
+            if rec is None:
+                return None
+            if rec.expires_at <= now or rec.token_version != int(current_token_version):
+                self._sessions.pop(session_id, None)
+                return None
+            return rec
+
+    def revoke(self, session_id: str) -> bool:
+        if not session_id:
+            return False
+        with self._lock:
+            return self._sessions.pop(session_id, None) is not None
+
+    def revoke_all(self) -> None:
+        with self._lock:
+            self._sessions.clear()
 
 
 def parse_cookie_header(cookie_header: str) -> Dict[str, str]:
@@ -45,81 +103,192 @@ def parse_cookie_header(cookie_header: str) -> Dict[str, str]:
 
 
 class LoginTicketStore:
-    """Short-lived, single-use local login tickets so `consilium ui` opens logged-in without putting auth.token in URLs."""
+    """Short-lived, single-use local login tickets bound to the current token version."""
 
     def __init__(self, max_pending: int = 32) -> None:
         self._lock = threading.Lock()
-        self._tickets: Dict[str, float] = {}
+        self._tickets: Dict[str, Tuple[float, int]] = {}
         self._max_pending = max(4, int(max_pending))
 
     def _prune_locked(self, now: float) -> None:
-        expired = [k for k, exp in self._tickets.items() if exp <= now]
+        expired = [k for k, (exp, _) in self._tickets.items() if exp <= now]
         for k in expired:
             self._tickets.pop(k, None)
 
-    def issue(self, ttl_sec: float = 30.0) -> str:
+    def issue(self, token_version: int = 1, ttl_sec: float = 30.0) -> str:
         now = time.monotonic()
         ttl = max(5.0, min(120.0, float(ttl_sec)))
         ticket = secrets.token_urlsafe(24)
         with self._lock:
             self._prune_locked(now)
             if len(self._tickets) >= self._max_pending:
-                oldest = min(self._tickets.items(), key=lambda item: item[1])[0]
+                oldest = min(self._tickets.items(), key=lambda item: item[1][0])[0]
                 self._tickets.pop(oldest, None)
-            self._tickets[ticket] = now + ttl
+            self._tickets[ticket] = (now + ttl, int(token_version))
         return ticket
 
-    def consume(self, ticket: str) -> bool:
+    def consume(self, ticket: str, current_token_version: int = 1) -> bool:
         if not ticket:
             return False
         now = time.monotonic()
         with self._lock:
             self._prune_locked(now)
-            exp = self._tickets.pop(ticket, None)
-        return exp is not None and exp >= now
+            item = self._tickets.pop(ticket, None)
+        if item is None:
+            return False
+        exp, tv = item
+        return exp >= now and tv == int(current_token_version)
+
+    def revoke_all(self) -> None:
+        with self._lock:
+            self._tickets.clear()
+
+
+@dataclass
+class _SSESubscriber:
+    queue: "queue.Queue[Tuple[int, str, Dict[str, Any]]]"
+    session_id: str
+    token_version: int
+    closed_event: threading.Event
 
 
 class EventHub:
-    """Thread-safe in-process pub/sub hub for ordered SSE dashboard updates."""
+    """Thread-safe pub/sub hub with single monotonic version, bounded subscribers, and active close."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_subscribers: int = SSE_MAX_SUBSCRIBERS) -> None:
         self._lock = threading.Lock()
-        self._seq = 0
-        self._subscribers: List["queue.Queue[Tuple[int, str, Dict[str, Any]]]"] = []
+        self._publish_lock = threading.Lock()
+        self._version = 0
+        self._subscribers: List[_SSESubscriber] = []
+        self._max_subscribers = max(1, int(max_subscribers))
 
-    def subscribe(self) -> "queue.Queue[Tuple[int, str, Dict[str, Any]]]":
-        q: "queue.Queue[Tuple[int, str, Dict[str, Any]]]" = queue.Queue(maxsize=128)
+    def subscribe(
+        self,
+        *,
+        session_id: str = "",
+        token_version: int = 0,
+    ) -> Optional[_SSESubscriber]:
         with self._lock:
-            self._subscribers.append(q)
-        return q
+            if len(self._subscribers) >= self._max_subscribers:
+                return None
+            sub = _SSESubscriber(
+                queue=queue.Queue(maxsize=128),
+                session_id=session_id,
+                token_version=int(token_version),
+                closed_event=threading.Event(),
+            )
+            self._subscribers.append(sub)
+            return sub
 
-    def unsubscribe(self, q: "queue.Queue[Tuple[int, str, Dict[str, Any]]]") -> None:
+    def unsubscribe(self, sub: Optional[_SSESubscriber]) -> None:
+        if sub is None:
+            return
+        sub.closed_event.set()
         with self._lock:
-            if q in self._subscribers:
-                self._subscribers.remove(q)
+            if sub in self._subscribers:
+                self._subscribers.remove(sub)
 
     def subscriber_count(self) -> int:
         with self._lock:
             return len(self._subscribers)
 
-    def publish(self, event_name: str, payload: Dict[str, Any]) -> int:
+    def next_version(self) -> int:
         with self._lock:
-            self._seq += 1
-            seq = self._seq
-            targets = list(self._subscribers)
-        for q in targets:
+            self._version += 1
+            return self._version
+
+    def current_version(self) -> int:
+        with self._lock:
+            return self._version
+
+    @staticmethod
+    def _enqueue(sub: _SSESubscriber, item: Tuple[int, str, Dict[str, Any]]) -> None:
+        try:
+            sub.queue.put_nowait(item)
+        except queue.Full:
             try:
-                q.put_nowait((seq, event_name, payload))
+                sub.queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                sub.queue.put_nowait(item)
             except queue.Full:
-                try:
-                    q.get_nowait()
-                except queue.Empty:
-                    pass
-                try:
-                    q.put_nowait((seq, event_name, payload))
-                except queue.Full:
-                    pass
-        return seq
+                pass
+
+    def publish_state(
+        self,
+        event_name: str,
+        reason: str,
+        state_builder: Callable[[], Dict[str, Any]],
+    ) -> int:
+        """Build snapshot, assign monotonic version, and enqueue to subscribers in strict order."""
+        with self._publish_lock:
+            snapshot = state_builder()
+            with self._lock:
+                self._version += 1
+                ver = self._version
+                targets = [s for s in self._subscribers if not s.closed_event.is_set()]
+            snapshot["state_version"] = ver
+            payload = {"reason": reason, "version": ver, "state": snapshot}
+            for sub in targets:
+                self._enqueue(sub, (ver, event_name, payload))
+            return ver
+
+    def snapshot_with_version(
+        self,
+        state_builder: Callable[[], Dict[str, Any]],
+    ) -> Tuple[int, Dict[str, Any]]:
+        """Build a snapshot linearized against publish_state and assign a monotonic state_version."""
+        with self._publish_lock:
+            snapshot = state_builder()
+            with self._lock:
+                self._version += 1
+                ver = self._version
+            snapshot["state_version"] = ver
+            return ver, snapshot
+
+    def close_all(self) -> None:
+        """Actively terminate all active SSE streams (e.g., on token rotation or daemon stop)."""
+        with self._lock:
+            targets = list(self._subscribers)
+        for sub in targets:
+            sub.closed_event.set()
+            self._enqueue(sub, (0, "__close__", {}))
+
+    def close_for_session(self, session_id: str) -> None:
+        """Terminate any active SSE streams belonging to a revoked session_id."""
+        if not session_id:
+            return
+        with self._lock:
+            targets = [s for s in self._subscribers if s.session_id == session_id]
+        for sub in targets:
+            sub.closed_event.set()
+            self._enqueue(sub, (0, "__close__", {}))
+
+
+def _strip_volatile_fields(obj: Any) -> Any:
+    if isinstance(obj, list):
+        return [_strip_volatile_fields(x) for x in obj]
+    if isinstance(obj, dict):
+        return {
+            k: _strip_volatile_fields(v)
+            for k, v in obj.items()
+            if k not in ("age_seconds", "claim_age_seconds")
+        }
+    return obj
+
+
+def compute_state_fingerprint(state: Dict[str, Any]) -> str:
+    """Compute a stable SHA-256 fingerprint over all visible dashboard state (ignoring clock ticks)."""
+    relevant = {
+        "peers": _strip_volatile_fields(state.get("peers") or []),
+        "active_waiters": state.get("active_waiters") or {},
+        "quotas": state.get("quotas") or [],
+        "missions": _strip_volatile_fields(state.get("missions") or []),
+        "latest_event_id": int(state.get("latest_event_id", 0)),
+    }
+    encoded = json.dumps(relevant, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def build_dashboard_state(
@@ -436,6 +605,11 @@ html, body {
   background: var(--status-danger-soft);
 }
 .btn-danger:hover:not(:disabled) { border-color: var(--status-danger); }
+.btn-subtle-danger:hover:not(:disabled) {
+  color: var(--status-danger);
+  border-color: rgba(220, 38, 38, 0.35);
+  background: var(--status-danger-soft);
+}
 
 /* Section Header */
 .section-head {
@@ -536,9 +710,11 @@ html, body {
 }
 .status-standby { background: var(--status-standby-soft); color: var(--status-standby); }
 .status-standby .status-dot { background: var(--status-standby); }
-.status-working, .status-active { background: var(--status-working-soft); color: var(--status-working); }
-.status-working .status-dot, .status-active .status-dot { background: var(--status-working); }
-.status-offline { background: var(--status-offline-soft); color: var(--text-muted); }
+.status-working { background: var(--status-working-soft); color: var(--status-working); }
+.status-working .status-dot { background: var(--status-working); }
+.status-online { background: var(--bg-subtle); color: var(--text-secondary); border: 1px solid var(--border-strong); }
+.status-online .status-dot { background: var(--text-secondary); }
+.status-offline { background: var(--status-offline-soft); color: var(--text-muted); opacity: 0.85; }
 .status-offline .status-dot { background: var(--status-offline); }
 .status-stale { background: var(--status-stale-soft); color: var(--status-stale); }
 .status-stale .status-dot { background: var(--status-stale); }
@@ -571,7 +747,15 @@ html, body {
   font-size: 12px;
   margin-bottom: 6px;
 }
-.quota-label { color: var(--text-muted); font-weight: 500; }
+.quota-label { color: var(--text-muted); font-weight: 500; display: inline-flex; align-items: center; gap: 6px; }
+.demo-tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--status-stale-soft);
+  color: var(--status-stale);
+}
 .quota-value { font-weight: 650; color: var(--text-primary); }
 .quota-value.unknown { color: var(--text-muted); font-weight: 500; }
 .bar-track {
@@ -768,8 +952,8 @@ html, body {
 
 .detail-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: 1fr;
+  gap: 16px;
 }
 
 .panel {
@@ -795,14 +979,20 @@ html, body {
   gap: 10px;
 }
 .kanban.cols-5 {
-  grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 .kanban-col {
   background: var(--bg-subtle);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 10px;
-  min-height: 92px;
+  min-height: 96px;
+  min-width: 0;
+}
+.kanban-col.empty-col {
+  background: transparent;
+  border-style: dashed;
+  opacity: 0.78;
 }
 .kanban-head {
   display: flex;
@@ -841,6 +1031,19 @@ html, body {
   border: 1px solid var(--border);
   color: var(--text-secondary);
 }
+.stale-pill {
+  background: var(--status-stale-soft);
+  border-color: transparent;
+  color: var(--status-stale);
+}
+.attempt-pill {
+  font-size: 10.5px;
+  font-weight: 550;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+}
 .task-branch {
   font-size: 11px;
   color: var(--text-secondary);
@@ -855,9 +1058,18 @@ html, body {
   white-space: nowrap;
 }
 .task-note {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--text-secondary);
   word-break: break-word;
+  line-height: 1.55;
+}
+.task-note code, .tl-desc code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  padding: 1px 4px;
+  border-radius: 4px;
 }
 .task-foot {
   margin-top: 8px;
@@ -903,14 +1115,35 @@ html, body {
 .md-body pre code { border: none; padding: 0; background: transparent; }
 
 /* Event Timeline */
+.timeline-wrap {
+  position: relative;
+}
 .timeline {
   position: relative;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 540px;
-  overflow-y: auto;
-  padding-right: 4px;
+}
+.timeline-fade {
+  position: relative;
+  margin-top: -28px;
+  padding-top: 34px;
+  display: flex;
+  justify-content: center;
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0), var(--bg-surface) 62%);
+}
+:root[data-theme="dark"] .timeline-fade {
+  background: linear-gradient(to bottom, rgba(19, 24, 34, 0), var(--bg-surface) 62%);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] .timeline-fade {
+    background: linear-gradient(to bottom, rgba(19, 24, 34, 0), var(--bg-surface) 62%);
+  }
+}
+.timeline-more-row {
+  margin-top: 10px;
+  display: flex;
+  justify-content: center;
 }
 .tl-item {
   display: grid;
@@ -966,6 +1199,8 @@ html, body {
 .delivery-hot { background: var(--status-standby-soft); color: var(--status-standby); }
 .delivery-cold { background: var(--status-stale-soft); color: var(--status-stale); }
 .delivery-err { background: var(--status-danger-soft); color: var(--status-danger); }
+.delivery-claim { background: var(--status-working-soft); color: var(--status-working); }
+.delivery-muted { background: var(--status-offline-soft); color: var(--text-muted); }
 .tl-desc {
   font-size: 12px;
   color: var(--text-secondary);
@@ -1032,7 +1267,7 @@ html, body {
 }
 
 @media (max-width: 1120px) {
-  .kanban, .kanban.cols-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kanban, .kanban.cols-5 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
 }
 @media (max-width: 960px) {
   .detail-grid { grid-template-columns: 1fr; }
@@ -1044,7 +1279,7 @@ html, body {
   .app-shell { padding: 14px 14px 36px; }
 }
 @media (max-width: 640px) {
-  .kanban, .kanban.cols-5 { grid-template-columns: 1fr; }
+  .kanban, .kanban.cols-5 { grid-template-columns: 1fr !important; }
 }
 </style>
 </head>
@@ -1129,16 +1364,17 @@ html, body {
 <script>
 (function () {
   const PEER_META = {
-    claude: { name: "Claude", prefix: "claude/", monogram: "C" },
-    chatgpt: { name: "ChatGPT / Codex", prefix: "codex/", monogram: "G" },
-    antigravity: { name: "Antigravity", prefix: "gemini/", monogram: "A" }
+    claude: { name: "Claude", subtitle: "Claude.app · Code", prefix: "claude/", monogram: "C" },
+    chatgpt: { name: "ChatGPT / Codex", subtitle: "ChatGPT.app · Codex", prefix: "codex/", monogram: "G" },
+    antigravity: { name: "Antigravity", subtitle: "Antigravity.app", prefix: "gemini/", monogram: "A" }
   };
   const STATUS_TEXT = {
     standby: "待命",
     working: "工作中",
-    active: "工作中",
+    online: "在线",
+    active: "在线",
     offline: "离线",
-    stale: "已超时"
+    stale: "陈旧"
   };
   const MISSION_STATUS_TEXT = {
     active: "进行中",
@@ -1154,14 +1390,19 @@ html, body {
     review_request: "交叉审核",
     loop_guard_reached: "触发轮次上限",
     task_requeued: "任务重新入队",
+    task_stale: "执行超时（陈旧）",
     mission_closed: "关闭 Mission"
   };
 
   let appState = null;
+  let csrfToken = "";
+  let lastStateVersion = 0;
   let expandedMissionIds = new Set();
+  let expandedTimelines = new Set();
   let autoExpandedOnce = false;
   let eventSource = null;
   let pollTimer = null;
+  let sseReconnectTimer = null;
   let uptimeTimer = null;
   let baseUptime = 0;
   let baseUptimeStamp = Date.now();
@@ -1203,6 +1444,13 @@ html, body {
     return dt.toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
   }
 
+  function renderInline(text) {
+    let s = esc(text);
+    s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    return s;
+  }
+
   function renderMarkdown(raw) {
     if (!raw) return "";
     const lines = String(raw).replace(/\r\n/g, "\n").split("\n");
@@ -1211,12 +1459,6 @@ html, body {
     let inCode = false;
     function closeList() {
       if (inList) { html += "</" + inList + ">"; inList = null; }
-    }
-    function inline(text) {
-      let s = esc(text);
-      s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
-      s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-      return s;
     }
     for (const line of lines) {
       if (line.trim().startsWith("```")) {
@@ -1231,20 +1473,20 @@ html, body {
       const h1 = line.match(/^#\s+(.+)/);
       const ul = line.match(/^\s*[-*]\s+(.+)/);
       const ol = line.match(/^\s*\d+\.\s+(.+)/);
-      if (h3) { closeList(); html += "<h3>" + inline(h3[1]) + "</h3>"; }
-      else if (h2) { closeList(); html += "<h2>" + inline(h2[1]) + "</h2>"; }
-      else if (h1) { closeList(); html += "<h1>" + inline(h1[1]) + "</h1>"; }
+      if (h3) { closeList(); html += "<h3>" + renderInline(h3[1]) + "</h3>"; }
+      else if (h2) { closeList(); html += "<h2>" + renderInline(h2[1]) + "</h2>"; }
+      else if (h1) { closeList(); html += "<h1>" + renderInline(h1[1]) + "</h1>"; }
       else if (ul) {
         if (inList !== "ul") { closeList(); html += "<ul>"; inList = "ul"; }
-        html += "<li>" + inline(ul[1]) + "</li>";
+        html += "<li>" + renderInline(ul[1]) + "</li>";
       } else if (ol) {
         if (inList !== "ol") { closeList(); html += "<ol>"; inList = "ol"; }
-        html += "<li>" + inline(ol[1]) + "</li>";
+        html += "<li>" + renderInline(ol[1]) + "</li>";
       } else if (line.trim() === "") {
         closeList();
       } else {
         closeList();
-        html += "<p>" + inline(line) + "</p>";
+        html += "<p>" + renderInline(line) + "</p>";
       }
     }
     closeList();
@@ -1259,6 +1501,7 @@ html, body {
       task_done: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 13l4 4L19 7"/></svg>',
       review_request: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 10l5-5 5 5M17 14l-5 5-5-5"/></svg>',
       loop_guard_reached: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.6L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.6a2 2 0 00-3.4 0z"/></svg>',
+      task_stale: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.6L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.6a2 2 0 00-3.4 0z"/></svg>',
       task_requeued: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>',
       mission_closed: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 12l2 2 4-4"/></svg>'
     };
@@ -1292,15 +1535,16 @@ html, body {
     const cards = orderedPeers.map(pid => {
       const p = peerById[pid] || { peer_id: pid, status: "offline", task_counts: { queued: 0, claimed: 0, running: 0 } };
       const q = quotasByPeer[pid] || { min_remaining_percent: null, earliest_reset_in_human: "", windows: [] };
-      const meta = PEER_META[pid] || { name: pid, prefix: "", monogram: pid[0].toUpperCase() };
+      const meta = PEER_META[pid] || { name: pid, subtitle: pid, prefix: "", monogram: pid[0].toUpperCase() };
       const st = p.status || "offline";
-      if (st === "standby" || st === "working" || st === "active") onlineCount += 1;
+      if (st === "standby" || st === "working" || st === "online" || st === "active") onlineCount += 1;
 
       const hasQuota = q.min_remaining_percent !== null && q.min_remaining_percent !== undefined;
       const pct = hasQuota ? Math.max(0, Math.min(100, Number(q.min_remaining_percent))) : 0;
-      const barCls = !hasQuota ? "unknown" : (pct <= 0 ? "empty" : (pct <= 15 ? "low" : ""));
+      const barCls = !hasQuota ? "unknown" : (pct <= 0 ? "empty" : (pct < 20 ? "low" : ""));
       const quotaText = hasQuota ? pct.toFixed(pct % 1 === 0 ? 0 : 1) + "%" : "未知";
       const resetText = hasQuota && q.earliest_reset_in_human ? ("重置 " + q.earliest_reset_in_human) : (hasQuota ? "无重置倒计时" : "暂无本地配额数据");
+      const isDemoQuota = (q.windows || []).some(w => w.source === "demo" || w.account_id === "demo");
       const tc = p.task_counts || { queued: 0, claimed: 0, running: 0 };
 
       return `
@@ -1310,7 +1554,7 @@ html, body {
               <div class="peer-badge">${esc(meta.monogram)}</div>
               <div>
                 <div class="peer-name">${esc(meta.name)}</div>
-                <div class="peer-branch-prefix mono">${esc(meta.prefix)}</div>
+                <div class="peer-branch-prefix" title="${esc(meta.prefix ? ("分支前缀：" + meta.prefix) : "")}">${esc(meta.subtitle || meta.prefix)}</div>
               </div>
             </div>
             <span class="status-pill status-${esc(st)}">
@@ -1323,7 +1567,7 @@ html, body {
           </div>
           <div class="quota-box">
             <div class="quota-head">
-              <span class="quota-label">剩余配额</span>
+              <span class="quota-label">剩余配额${isDemoQuota ? `<span class="demo-tag">演示数据</span>` : ""}</span>
               <span class="quota-value nums ${hasQuota ? "" : "unknown"}">${esc(quotaText)}</span>
             </div>
             <div class="bar-track"><div class="bar-fill ${barCls}" style="width:${hasQuota ? pct : 0}%"></div></div>
@@ -1355,49 +1599,80 @@ html, body {
     ];
     const visibleCols = cols.filter(c => c.key !== "other" || tasks.some(t => c.filter(t.status)));
     const cls = visibleCols.length > 4 ? "kanban cols-5" : "kanban";
-    return `<div class="${cls}">` + visibleCols.map(col => {
+    const anyNonEmpty = visibleCols.some(c => tasks.some(t => c.filter(t.status)));
+    const colTrack = anyNonEmpty
+      ? visibleCols.map(c => tasks.some(t => c.filter(t.status)) ? "minmax(220px, 1fr)" : "minmax(84px, 0.34fr)").join(" ")
+      : `repeat(${visibleCols.length}, minmax(0, 1fr))`;
+
+    return `<div class="${cls}" style="grid-template-columns:${colTrack}">` + visibleCols.map(col => {
       const items = tasks.filter(t => col.filter(t.status));
-      const cardsHtml = items.length ? items.map(t => {
-        const canRequeue = !closed && t.status !== "queued";
-        const note = t.result_summary || t.progress_note || t.prompt || "";
+      const isEmpty = items.length === 0;
+      const cardsHtml = !isEmpty ? items.map(t => {
+        const canRequeue = !closed && ["claimed", "running", "failed", "blocked"].includes(t.status);
+        const noteRaw = t.result_summary || t.progress_note || t.prompt || "";
+        const noteClip = noteRaw.length > 180 ? (noteRaw.slice(0, 180) + "…") : noteRaw;
+        const stalePill = (t.running_stale || t.claim_stale) ? `<span class="tier-pill stale-pill">陈旧</span>` : "";
+        const histCnt = Array.isArray(t.attempt_history) ? t.attempt_history.length : 0;
+        const attemptPill = histCnt > 0 ? `<span class="attempt-pill nums" title="已归档历史尝试 ${histCnt} 次">第 ${Number(t.attempt_seq || (histCnt + 1))} 次</span>` : "";
         return `
           <div class="task-card">
             <div class="task-top">
               <span class="peer-tag ${esc(t.assignee_peer)}">${esc(t.assignee_peer)}</span>
-              <span class="tier-pill mono">${esc(t.model_tier)}</span>
+              <span style="display:inline-flex;gap:4px;align-items:center;flex-wrap:wrap;">
+                ${stalePill}${attemptPill}
+                <span class="tier-pill mono">${esc(t.model_tier)}</span>
+              </span>
             </div>
             ${t.worktree_branch ? `<div class="task-branch mono" title="${esc(t.worktree_branch)}">${esc(t.worktree_branch)}</div>` : ""}
-            <div class="task-note">${esc(note.slice(0, 140))}${note.length > 140 ? "…" : ""}</div>
+            <div class="task-note">${renderInline(noteClip)}</div>
             <div class="task-foot">
               <span class="task-id mono">${esc(t.task_id)}</span>
               ${canRequeue ? `<button class="btn btn-xs" data-requeue-task="${esc(t.task_id)}">重新入队</button>` : ""}
             </div>
           </div>`;
-      }).join("") : `<div style="font-size:12px;color:var(--text-muted);padding:8px 2px;">无任务</div>`;
-      return `<div class="kanban-col"><div class="kanban-head"><span>${col.label}</span><span class="nums">${items.length}</span></div>${cardsHtml}</div>`;
+      }).join("") : `<div style="font-size:11.5px;color:var(--text-muted);padding:6px 0;">空</div>`;
+      return `<div class="kanban-col${isEmpty ? " empty-col" : ""}"><div class="kanban-head"><span>${col.label}</span><span class="nums">${items.length}</span></div>${cardsHtml}</div>`;
     }).join("") + `</div>`;
   }
 
-  function renderTimeline(events) {
+  function renderTimeline(events, missionId) {
     if (!events || !events.length) {
       return `<div style="font-size:12.5px;color:var(--text-muted);">暂无事件</div>`;
     }
-    return `<div class="timeline">` + events.map(ev => {
+    const LIMIT = 6;
+    const isExpanded = expandedTimelines.has(missionId);
+    const hasMore = events.length > LIMIT;
+    const visibleEvents = (hasMore && !isExpanded) ? events.slice(0, LIMIT) : events;
+
+    const itemsHtml = visibleEvents.map(ev => {
       const p = ev.payload || {};
       const mode = p.delivery_mode || "";
       const lat = p.wakeup_latency_ms;
-      let badgeHtml = "";
+      const claimLat = p.claim_latency_ms;
+      let badges = [];
+      if (claimLat !== undefined && claimLat !== null) {
+        badges.push(`<span class="delivery-pill delivery-claim nums">⏱ 认领 ${Number(claimLat).toFixed(2)} ms</span>`);
+      }
       if (mode === "hot_wakeup") {
         const latStr = (lat !== undefined && lat !== null) ? (" · " + Number(lat).toFixed(2) + " ms") : "";
-        badgeHtml = `<span class="delivery-pill delivery-hot nums">⚡ 热唤醒${esc(latStr)}</span>`;
+        badges.push(`<span class="delivery-pill delivery-hot nums">⚡ 热唤醒${esc(latStr)}</span>`);
       } else if (mode === "cold_notification") {
-        badgeHtml = `<span class="delivery-pill delivery-cold">🔔 冷通知${p.dry_run ? " (dry-run)" : ""}</span>`;
+        let cmdLabel = "🔔 冷通知";
+        if (p.dry_run) cmdLabel = "🔔 冷通知 · dry-run";
+        else if (p.command_ok || p.notified) cmdLabel = "🔔 已尝试 · 系统已投递";
+        else if (p.delivery_attempted) cmdLabel = "🔔 已尝试 · 系统命令失败";
+        badges.push(`<span class="delivery-pill delivery-cold">${esc(cmdLabel)}</span>`);
+        const acked = Boolean(ev.acked_at || p.peer_acked);
+        badges.push(`<span class="delivery-pill ${acked ? "delivery-hot" : "delivery-muted"}">${acked ? "✓ 对方已确认" : "待对方确认"}</span>`);
       } else if (mode === "error") {
-        badgeHtml = `<span class="delivery-pill delivery-err">⚠ 投递异常</span>`;
+        badges.push(`<span class="delivery-pill delivery-err">⚠ 投递异常</span>`);
       }
-      const iconCls = ev.kind === "loop_guard_reached" ? "guard" : (ev.kind === "task_done" || ev.kind === "mission_closed" ? "done" : "");
-      const desc = p.result_summary || p.progress_note || p.question || p.reason || p.prompt_preview || p.final_summary || "";
-      const roundBadge = p.round ? `<span class="tier-pill mono nums">R${p.round}/${p.max_rounds || ""}</span>` : "";
+      if (p.round) {
+        badges.push(`<span class="tier-pill mono nums">R${p.round}/${p.max_rounds || ""}</span>`);
+      }
+      const iconCls = (ev.kind === "loop_guard_reached" || ev.kind === "task_stale") ? "guard" : (ev.kind === "task_done" || ev.kind === "mission_closed" ? "done" : "");
+      const descRaw = p.result_summary || p.progress_note || p.question || p.summary || p.reason || p.prompt_preview || p.final_summary || "";
+      const descClip = String(descRaw).length > 180 ? (String(descRaw).slice(0, 180) + "…") : String(descRaw);
       return `
         <div class="tl-item">
           <div class="tl-icon ${iconCls}">${eventIconSvg(ev.kind)}</div>
@@ -1406,11 +1681,19 @@ html, body {
               <span class="tl-kind">${esc(EVENT_LABELS[ev.kind] || ev.kind)} <span class="mono" style="color:var(--text-muted);font-weight:500;">${esc(ev.from_peer)} → ${esc(ev.to_peer)}</span></span>
               <span class="tl-time mono nums">#${ev.event_id} · ${esc(formatClock(ev.created_at))}</span>
             </div>
-            <div class="tl-badges">${badgeHtml}${roundBadge}</div>
-            ${desc ? `<div class="tl-desc">${esc(String(desc).slice(0, 180))}</div>` : ""}
+            ${badges.length ? `<div class="tl-badges">${badges.join("")}</div>` : ""}
+            ${descClip ? `<div class="tl-desc">${renderInline(descClip)}</div>` : ""}
           </div>
         </div>`;
-    }).join("") + `</div>`;
+    }).join("");
+
+    let toggleHtml = "";
+    if (hasMore && !isExpanded) {
+      toggleHtml = `<div class="timeline-fade"><button class="btn btn-xs" data-toggle-timeline="${esc(missionId)}">显示更多（余 ${events.length - LIMIT} 条）</button></div>`;
+    } else if (hasMore && isExpanded) {
+      toggleHtml = `<div class="timeline-more-row"><button class="btn btn-xs" data-toggle-timeline="${esc(missionId)}">收起时间线</button></div>`;
+    }
+    return `<div class="timeline-wrap"><div class="timeline">${itemsHtml}</div>${toggleHtml}</div>`;
   }
 
   function renderMissions(state) {
@@ -1429,9 +1712,15 @@ html, body {
     stack.innerHTML = missions.map(m => {
       const expanded = expandedMissionIds.has(m.mission_id);
       const tasks = m.tasks || [];
-      const doneCnt = tasks.filter(t => ["done", "failed", "blocked", "cancelled"].includes(t.status)).length;
+      const doneOnlyCnt = tasks.filter(t => t.status === "done").length;
+      const settledCnt = tasks.filter(t => ["done", "failed", "blocked", "cancelled"].includes(t.status)).length;
       const totalCnt = tasks.length;
-      const pct = totalCnt ? Math.round((doneCnt / totalCnt) * 100) : 0;
+      const pct = totalCnt ? Math.round((settledCnt / totalCnt) * 100) : 0;
+      const hasFailed = tasks.some(t => t.status === "failed");
+      const hasBlocked = tasks.some(t => ["blocked", "cancelled"].includes(t.status));
+      const progColor = (totalCnt > 0 && doneOnlyCnt === totalCnt)
+        ? "var(--status-standby)"
+        : (hasFailed ? "var(--status-danger)" : (hasBlocked ? "var(--status-stale)" : "var(--status-working)"));
       const maxR = Math.max(1, Number(m.max_rounds || 3));
       const curR = Number(m.current_round || 0);
       let dotsHtml = "";
@@ -1452,20 +1741,18 @@ html, body {
                 <span class="detail-chip nums">更新：${esc(formatRelTime(m.updated_at))}</span>
               </div>
               <div>
-                <button class="btn btn-danger" data-close-mission="${esc(m.mission_id)}" ${isClosed ? "disabled" : ""}>关闭 Mission</button>
+                <button class="btn btn-subtle-danger" data-close-mission="${esc(m.mission_id)}" ${isClosed ? "disabled" : ""}>关闭 Mission</button>
               </div>
             </div>
             <div class="detail-grid">
-              <div>
-                <div class="panel">
-                  <div class="panel-title"><span>任务看板</span><span class="nums">${doneCnt}/${totalCnt} 完成</span></div>
-                  ${renderTaskBoard(m)}
-                </div>
-                ${m.final_summary ? `<div class="summary-box"><div class="panel-title"><span>最终汇总 · Final Summary</span></div><div class="md-body">${renderMarkdown(m.final_summary)}</div></div>` : ""}
+              <div class="panel">
+                <div class="panel-title"><span>任务看板</span><span class="nums">${settledCnt}/${totalCnt} 完成</span></div>
+                ${renderTaskBoard(m)}
               </div>
+              ${m.final_summary ? `<div class="summary-box" style="margin-top:0;"><div class="panel-title"><span>最终汇总 · Final Summary</span></div><div class="md-body">${renderMarkdown(m.final_summary)}</div></div>` : ""}
               <div class="panel">
                 <div class="panel-title"><span>事件时间线（倒序）</span><span class="nums">${(m.events || []).length} 条</span></div>
-                ${renderTimeline(m.events || [])}
+                ${renderTimeline(m.events || [], m.mission_id)}
               </div>
             </div>
           </div>`;
@@ -1483,8 +1770,8 @@ html, body {
             </div>
             <div><span class="peer-tag ${esc(m.coordinator_peer)}">协调：${esc(m.coordinator_peer)}</span></div>
             <div class="progress-wrap">
-              <div class="progress-top nums"><span>进度</span><span>${doneCnt}/${totalCnt}</span></div>
-              <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:var(--status-working)"></div></div>
+              <div class="progress-top nums"><span>进度</span><span>${settledCnt}/${totalCnt}</span></div>
+              <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${progColor}"></div></div>
             </div>
             <div class="rounds-wrap nums" title="交叉审核轮次">
               <span class="round-dots">${dotsHtml}</span>
@@ -1498,6 +1785,22 @@ html, body {
           ${detailHtml}
         </article>`;
     }).join("");
+  }
+
+  function applyStateData(data) {
+    if (!data || typeof data !== "object") return;
+    if (typeof data.csrf_token === "string" && data.csrf_token) {
+      csrfToken = data.csrf_token;
+    }
+    const ver = Number(data.state_version || 0);
+    if (ver > 0 && lastStateVersion > 0 && ver < lastStateVersion) {
+      return;
+    }
+    if (ver > lastStateVersion) {
+      lastStateVersion = ver;
+    }
+    showLogin(false);
+    renderAll(data);
   }
 
   function renderAll(state) {
@@ -1537,14 +1840,15 @@ html, body {
     const res = await fetch("/api/state", { credentials: "same-origin", cache: "no-store" });
     if (res.status === 401) {
       stopStreams();
+      csrfToken = "";
+      lastStateVersion = 0;
       setConn("", "待登录");
       showLogin(true);
       return false;
     }
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
-    showLogin(false);
-    renderAll(data);
+    applyStateData(data);
     return true;
   }
 
@@ -1556,53 +1860,85 @@ html, body {
     }, 3000);
   }
 
+  function scheduleSSEReconnect() {
+    if (sseReconnectTimer) return;
+    sseReconnectTimer = setInterval(() => {
+      if (eventSource) return;
+      connectSSE();
+    }, 6000);
+  }
+
   function stopStreams() {
     if (eventSource) { eventSource.close(); eventSource = null; }
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (sseReconnectTimer) { clearInterval(sseReconnectTimer); sseReconnectTimer = null; }
   }
 
   function connectSSE() {
-    stopStreams();
+    if (eventSource) { eventSource.close(); eventSource = null; }
     if (typeof EventSource === "undefined") {
       startPollingFallback();
       return;
     }
-    setConn("", "连接中");
+    if (!pollTimer) setConn("", "连接中");
     const es = new EventSource("/api/stream");
     eventSource = es;
-    let failedCount = 0;
 
     es.onopen = () => {
-      failedCount = 0;
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      if (sseReconnectTimer) { clearInterval(sseReconnectTimer); sseReconnectTimer = null; }
       setConn("live", "SSE 实时");
     };
     es.addEventListener("state", ev => {
       try {
-        const data = JSON.parse(ev.data);
-        showLogin(false);
-        renderAll(data);
+        applyStateData(JSON.parse(ev.data));
       } catch (_) {}
     });
     es.addEventListener("update", ev => {
       try {
         const payload = JSON.parse(ev.data);
-        if (payload.state) renderAll(payload.state);
+        if (payload.state) applyStateData(payload.state);
       } catch (_) {}
     });
     es.onerror = () => {
-      failedCount += 1;
-      if (failedCount >= 3) {
+      if (eventSource === es) {
         es.close();
         eventSource = null;
-        fetchState().then(ok => { if (ok) startPollingFallback(); }).catch(() => startPollingFallback());
       } else {
-        setConn("poll", "重连中");
+        try { es.close(); } catch (_) {}
       }
+      fetchState()
+        .then(ok => {
+          if (ok) {
+            startPollingFallback();
+            scheduleSSEReconnect();
+          }
+        })
+        .catch(() => {
+          startPollingFallback();
+          scheduleSSEReconnect();
+        });
     };
   }
 
-  // Event delegation for expand, close mission, requeue task
+  function writeHeaders() {
+    const hdrs = { "Content-Type": "application/json" };
+    if (csrfToken) hdrs["X-Consilium-CSRF"] = csrfToken;
+    return hdrs;
+  }
+
+  // Event delegation for expand, timeline toggle, close mission, requeue task
   document.getElementById("missions-stack").addEventListener("click", ev => {
+    const tlBtn = ev.target.closest("[data-toggle-timeline]");
+    if (tlBtn) {
+      ev.stopPropagation();
+      const mid = tlBtn.getAttribute("data-toggle-timeline");
+      if (expandedTimelines.has(mid)) expandedTimelines.delete(mid);
+      else expandedTimelines.add(mid);
+      if (appState) renderMissions(appState);
+      return;
+    }
+
     const closeBtn = ev.target.closest("[data-close-mission]");
     if (closeBtn) {
       ev.stopPropagation();
@@ -1626,9 +1962,18 @@ html, body {
           const r = await fetch("/api/missions/" + encodeURIComponent(mid) + "/close", {
             method: "POST",
             credentials: "same-origin",
-            headers: { "Content-Type": "application/json" },
+            headers: writeHeaders(),
             body: JSON.stringify({ final_summary: summary, status, force })
           });
+          if (r.status === 401) {
+            closeConfirm();
+            stopStreams();
+            csrfToken = "";
+            lastStateVersion = 0;
+            setConn("", "待登录");
+            showLogin(true);
+            return;
+          }
           const body = await r.json();
           if (!r.ok) throw new Error(body.error || ("HTTP " + r.status));
           await fetchState();
@@ -1650,9 +1995,18 @@ html, body {
           const r = await fetch("/api/tasks/" + encodeURIComponent(tid) + "/requeue", {
             method: "POST",
             credentials: "same-origin",
-            headers: { "Content-Type": "application/json" },
+            headers: writeHeaders(),
             body: JSON.stringify({ reason })
           });
+          if (r.status === 401) {
+            closeConfirm();
+            stopStreams();
+            csrfToken = "";
+            lastStateVersion = 0;
+            setConn("", "待登录");
+            showLogin(true);
+            return;
+          }
           const body = await r.json();
           if (!r.ok) throw new Error(body.error || ("HTTP " + r.status));
           await fetchState();
@@ -1691,6 +2045,9 @@ html, body {
         errEl.textContent = body.error || "令牌无效";
         return;
       }
+      const loginBody = await r.json().catch(() => ({}));
+      if (loginBody.csrf_token) csrfToken = loginBody.csrf_token;
+      lastStateVersion = 0;
       document.getElementById("token-input").value = "";
       showLogin(false);
       await fetchState();
@@ -1705,7 +2062,14 @@ html, body {
 
   document.getElementById("logout-btn").addEventListener("click", async () => {
     stopStreams();
-    await fetch("/api/logout", { method: "POST", credentials: "same-origin" }).catch(() => {});
+    await fetch("/api/logout", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: writeHeaders(),
+      body: "{}"
+    }).catch(() => {});
+    csrfToken = "";
+    lastStateVersion = 0;
     setConn("", "已退出");
     showLogin(true);
   });

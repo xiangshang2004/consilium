@@ -22,8 +22,14 @@ VALID_TASK_STATUSES = (
     "cancelled",
 )
 NON_TERMINAL_TASK_STATUSES = ("queued", "claimed", "running")
+PROGRESS_TASK_STATUSES = ("claimed", "running")
 TERMINAL_TASK_STATUSES = ("done", "failed", "blocked", "cancelled")
+REQUEUEABLE_TASK_STATUSES = ("claimed", "running", "failed", "blocked")
 VALID_MISSION_CLOSE_STATUSES = ("completed", "cancelled", "failed")
+
+
+class ConflictError(ValueError):
+    """Raised when a client_request_id collides with a different operation, caller, or payload."""
 
 DEFAULT_CLAIM_TIMEOUT_SEC = 900
 DEFAULT_RUNNING_TIMEOUT_SEC = 7200
