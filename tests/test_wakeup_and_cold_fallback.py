@@ -170,7 +170,12 @@ class WakeupAndColdFallbackTests(unittest.TestCase):
         )
         self.assertTrue(res["woke"])
         self.assertEqual(res["source"], "immediate")
-        self.assertEqual(len(res["inbox"]["claimed_tasks"]), 1)
+        self.assertIsNone(res["inbox"])
+        self.assertTrue(res.get("auto_pickup_ignored"))
+        self.assertIn("read-only", res.get("notice", ""))
+        self.assertEqual(self.store.count_queued_tasks("antigravity"), 1)
+        picked = self.store.pickup_inbox("antigravity", claim_tasks=True)
+        self.assertEqual(len(picked["claimed_tasks"]), 1)
 
     def test_deeplink_utf8_pre_encode_truncation_and_codex_prompt_param(self) -> None:
         chinese_prompt = "/请立即审查中文长提示词" * 30

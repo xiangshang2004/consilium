@@ -70,18 +70,24 @@ class StoreAndLoopGuardTests(unittest.TestCase):
         mission_id = created["mission"]["mission_id"]
         t1, t2 = created["tasks"]
 
+        in_claude = self.store.pickup_inbox("claude", session_label="c-sess", claim_tasks=True)
+        in_gpt = self.store.pickup_inbox("chatgpt", session_label="g-sess", claim_tasks=True)
+        a1 = in_claude["claimed_tasks"][0]["attempt_id"]
+        a2 = in_gpt["claimed_tasks"][0]["attempt_id"]
+
         # Non-assignee cannot update progress or complete task.
         with self.assertRaises(ValueError):
-            self.store.report_progress(t1["task_id"], "chatgpt", "wrong peer")
+            self.store.report_progress(t1["task_id"], "chatgpt", "wrong peer", attempt_id=a1)
         with self.assertRaises(ValueError):
-            self.store.complete_task(t1["task_id"], "chatgpt", "wrong peer")
+            self.store.complete_task(t1["task_id"], "chatgpt", "wrong peer", attempt_id=a1)
         # report_progress cannot jump straight to terminal status.
         with self.assertRaises(ValueError):
-            self.store.report_progress(t1["task_id"], "claude", "sneak done", status="done")
+            self.store.report_progress(t1["task_id"], "claude", "sneak done", status="done", attempt_id=a1)
 
         done1 = self.store.complete_task(
             task_id=t1["task_id"],
             peer_id="claude",
+            attempt_id=a1,
             result_summary="Design looks good",
             artifacts=["reviews/design.md"],
         )
@@ -90,11 +96,12 @@ class StoreAndLoopGuardTests(unittest.TestCase):
 
         # Re-completing terminal task must fail.
         with self.assertRaises(ValueError):
-            self.store.complete_task(t1["task_id"], "claude", "duplicate")
+            self.store.complete_task(t1["task_id"], "claude", "duplicate", attempt_id=a1)
 
         done2 = self.store.complete_task(
             task_id=t2["task_id"],
             peer_id="chatgpt",
+            attempt_id=a2,
             result_summary="Tests added",
             artifacts=["tests/test_x.py"],
         )

@@ -264,18 +264,21 @@ class R006RegressionsTests(unittest.TestCase):
         )
         self.assertEqual(s_new_ok, 200)
 
-    # ---- R005 3.4: Expired running task re-queued by daemon reaper ----
+    # ---- R005 3.4 + R010 Item 5: Expired running task marked stale and notifies coordinator + assignee ----
     def test_3_4_daemon_reaper_requeues_expired_running_task_and_notifies_coordinator(self) -> None:
         store = BusStore(self.tmp_state, rendezvous_dir=self.tmp_rv)
         created = store.create_mission(
             title="Stuck running",
-            goal="Requeue stale running task",
+            goal="Mark stale running task",
             coordinator_peer="claude",
             tasks=[{"assignee_peer": "chatgpt", "prompt": "Long job"}],
         )
         task_id = created["tasks"][0]["task_id"]
-        store.pickup_inbox("chatgpt", session_label="s1", claim_tasks=True)
-        store.report_progress(task_id, "chatgpt", "Started work", status="running")
+        picked = store.pickup_inbox("chatgpt", session_label="s1", claim_tasks=True)
+        attempt_id = picked["claimed_tasks"][0]["attempt_id"]
+        store.report_progress(
+            task_id, "chatgpt", "Started work", status="running", attempt_id=attempt_id
+        )
 
         # Backdate updated_at so running task exceeds timeout.
         with sqlite3.connect(store.db_path) as conn:
@@ -293,11 +296,17 @@ class R006RegressionsTests(unittest.TestCase):
         )
         released = daemon.run_reaper_once()
         self.assertEqual(len(released), 1)
-        self.assertEqual(released[0]["status"], "queued")
+        self.assertEqual(released[0]["status"], "running")
+        self.assertEqual(released[0]["reaper_action"], "marked_stale")
+        self.assertTrue(released[0]["stale_at"])
 
         coord_inbox = store.pickup_inbox("claude", claim_tasks=False)
-        kinds = [e["kind"] for e in coord_inbox["events"]]
-        self.assertIn("task_requeued", kinds)
+        coord_kinds = [e["kind"] for e in coord_inbox["events"]]
+        self.assertIn("task_stale", coord_kinds)
+
+        assignee_inbox = store.pickup_inbox("chatgpt", claim_tasks=False)
+        assignee_kinds = [e["kind"] for e in assignee_inbox["events"]]
+        self.assertIn("task_stale", assignee_kinds)
 
     # ---- R005 3.5: ring_peer error isolated + client_request_id idempotency ----
     def test_3_5_ring_error_returns_committed_true_and_idempotency_prevents_duplicates(self) -> None:

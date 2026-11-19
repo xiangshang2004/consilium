@@ -23,8 +23,10 @@ class DashboardAndSSETests(unittest.TestCase):
         self.tmp_home = tempfile.mkdtemp(prefix="dbell-uihome-", dir="/tmp")
         self._prev_dry = os.environ.get("CONSILIUM_DRY_RUN")
         self._prev_home = os.environ.get("CONSILIUM_USER_HOME")
+        self._prev_no_quota = os.environ.get("CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC")
         os.environ["CONSILIUM_DRY_RUN"] = "1"
         os.environ["CONSILIUM_USER_HOME"] = self.tmp_home
+        os.environ["CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC"] = "1"
         self.daemon = ConsiliumDaemon(
             home_dir=self.tmp_state,
             rendezvous_dir=self.tmp_rv,
@@ -42,6 +44,10 @@ class DashboardAndSSETests(unittest.TestCase):
             os.environ.pop("CONSILIUM_USER_HOME", None)
         else:
             os.environ["CONSILIUM_USER_HOME"] = self._prev_home
+        if self._prev_no_quota is None:
+            os.environ.pop("CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC", None)
+        else:
+            os.environ["CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC"] = self._prev_no_quota
         shutil.rmtree(self.tmp_state, ignore_errors=True)
         shutil.rmtree(self.tmp_rv, ignore_errors=True)
         shutil.rmtree(self.tmp_home, ignore_errors=True)
@@ -55,6 +61,8 @@ class DashboardAndSSETests(unittest.TestCase):
         self.assertEqual(st, 200)
         self.assertIn("text/html", hdrs.get("content-type", ""))
         self.assertIn("default-src 'none'", hdrs.get("content-security-policy", ""))
+        self.assertIn("frame-ancestors 'none'", hdrs.get("content-security-policy", ""))
+        self.assertEqual(hdrs.get("x-content-type-options"), "nosniff")
         html = raw.decode("utf-8")
         self.assertIn("Consilium", html)
         self.assertIn("tabular-nums", html)
@@ -139,11 +147,28 @@ class DashboardAndSSETests(unittest.TestCase):
         self.assertEqual(len(m["tasks"]), 1)
         self.assertGreaterEqual(len(m["events"]), 1)
         self.assertEqual(m["events"][0]["payload"]["delivery_mode"], "cold_notification")
+        csrf_token = state["csrf_token"]
+        self.assertTrue(csrf_token)
 
-        # Logout clears cookie
-        st_out, hdrs_out, _ = _raw_http_roundtrip(self.daemon, "POST", "/api/logout", {})
+        # Logout revokes server session and clears cookie
+        st_out, hdrs_out, _ = _raw_http_roundtrip(
+            self.daemon,
+            "POST",
+            "/api/logout",
+            {
+                "Cookie": cookie_pair,
+                "Origin": "http://127.0.0.1:18920",
+                "Content-Type": "application/json",
+                "X-Consilium-CSRF": csrf_token,
+            },
+            body=b"{}",
+        )
         self.assertEqual(st_out, 200)
         self.assertIn("Max-Age=0", hdrs_out.get("set-cookie", ""))
+        st_after_logout, _, _ = _raw_http_roundtrip(
+            self.daemon, "GET", "/api/state", {"Cookie": cookie_pair}
+        )
+        self.assertEqual(st_after_logout, 401)
 
     def test_dashboard_requeue_and_close_actions(self) -> None:
         auth = {"Authorization": f"Bearer {self.daemon.auth_token}", "Content-Type": "application/json"}
@@ -214,16 +239,33 @@ class DashboardAndSSETests(unittest.TestCase):
                 }
             )["result"]["structuredContent"]
             tid = c["tasks"][0]["task_id"]
-            self.daemon.dispatcher.handle_payload(
+            picked = self.daemon.dispatcher.handle_payload(
                 {
                     "jsonrpc": "2.0",
                     "id": 11,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "consilium_pickup_inbox",
+                        "arguments": {
+                            "peer_id": "chatgpt",
+                            "session_label": "sse-worker",
+                            "claim_tasks": True,
+                        },
+                    },
+                }
+            )["result"]["structuredContent"]
+            aid = picked["claimed_tasks"][0]["attempt_id"]
+            self.daemon.dispatcher.handle_payload(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 12,
                     "method": "tools/call",
                     "params": {
                         "name": "consilium_complete_task",
                         "arguments": {
                             "task_id": tid,
                             "peer_id": "chatgpt",
+                            "attempt_id": aid,
                             "result_summary": "Finished step 1",
                         },
                     },
@@ -235,7 +277,7 @@ class DashboardAndSSETests(unittest.TestCase):
 
         try:
             raw_req = (
-                "GET /api/stream?max_events=3 HTTP/1.1\r\n"
+                "GET /api/stream?max_events=4 HTTP/1.1\r\n"
                 "Host: 127.0.0.1:18920\r\n"
                 f"Authorization: Bearer {self.daemon.auth_token}\r\n"
                 "Connection: close\r\n\r\n"
@@ -255,7 +297,7 @@ class DashboardAndSSETests(unittest.TestCase):
             srv_thread.join(timeout=3.0)
 
         blocks = [b.strip() for b in body.strip().split("\n\n") if b.strip()]
-        self.assertEqual(len(blocks), 3)
+        self.assertEqual(len(blocks), 4)
         events = []
         for blk in blocks:
             ev_name = ""
@@ -273,9 +315,13 @@ class DashboardAndSSETests(unittest.TestCase):
         self.assertEqual(events[0][0], "state")
         self.assertEqual(events[1][0], "update")
         self.assertEqual(events[2][0], "update")
+        self.assertEqual(events[3][0], "update")
         self.assertEqual(events[1][2]["reason"], "create_mission")
-        self.assertEqual(events[2][2]["reason"], "complete_task")
+        self.assertEqual(events[2][2]["reason"], "pickup_inbox")
+        self.assertEqual(events[3][2]["reason"], "complete_task")
+        self.assertLess(events[0][1], events[1][1])
         self.assertLess(events[1][1], events[2][1])
+        self.assertLess(events[2][1], events[3][1])
 
     def test_sse_detects_waiter_change_and_latency_only_stamps_unacked(self) -> None:
         from consilium.wakeup import _acquire_lease, _release_lease

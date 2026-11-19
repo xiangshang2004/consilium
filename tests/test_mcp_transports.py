@@ -111,9 +111,10 @@ class MCPTransportsTests(unittest.TestCase):
         self.assertEqual(lines[0]["result"]["protocolVersion"], "2025-03-26")
 
         tool_names = [t["name"] for t in lines[1]["result"]["tools"]]
-        self.assertEqual(len(tool_names), 10)
+        self.assertEqual(len(tool_names), 11)
         self.assertIn("consilium_create_mission", tool_names)
         self.assertIn("consilium_wait", tool_names)
+        self.assertIn("consilium_requeue_task", tool_names)
         self.assertIn("consilium_quota", tool_names)
         self.assertIn("consilium_close_mission", tool_names)
 
@@ -124,6 +125,8 @@ class MCPTransportsTests(unittest.TestCase):
         pickup_payload = lines[3]["result"]["structuredContent"]
         self.assertEqual(len(pickup_payload["claimed_tasks"]), 1)
         self.assertEqual(pickup_payload["claimed_tasks"][0]["status"], "claimed")
+        attempt_id = pickup_payload["claimed_tasks"][0]["attempt_id"]
+        self.assertTrue(attempt_id)
 
         # Complete and close mission via stdio
         req2 = [
@@ -136,6 +139,7 @@ class MCPTransportsTests(unittest.TestCase):
                     "arguments": {
                         "task_id": pickup_payload["claimed_tasks"][0]["task_id"],
                         "peer_id": "chatgpt",
+                        "attempt_id": attempt_id,
                         "result_summary": "Done",
                     },
                 },
@@ -225,7 +229,7 @@ class MCPTransportsTests(unittest.TestCase):
         self.assertEqual(parsed["id"], 1)
         self.assertEqual(parsed["result"], {})
 
-        # 5. Authorized local POST /mcp via ?token= query param -> 200
+        # 5. ?token= query parameter authentication must be rejected with 401
         status5, _, _ = _raw_http_roundtrip(
             daemon,
             "POST",
@@ -233,7 +237,7 @@ class MCPTransportsTests(unittest.TestCase):
             {"Content-Type": "application/json"},
             body=body,
         )
-        self.assertEqual(status5, 200)
+        self.assertEqual(status5, 401)
 
         # 6. GET /mcp -> 405 with Allow: POST (per Streamable HTTP spec)
         status6, hdrs6, _ = _raw_http_roundtrip(
