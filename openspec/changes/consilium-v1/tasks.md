@@ -19,10 +19,10 @@
 - [ ] ★ **Gate 1**: Submit R006 for Claude and Codex review approval.
 
 ## Stage 2: Consilium Live Dashboard (Separate Commit)
-- [ ] 2.1 Implement `deskbell/dashboard.py` and mount `/ui`, `/api/login`, `/api/logout`, `/api/state`, `/api/stream` (SSE), `/api/missions/<id>/close`, `/api/tasks/<id>/requeue` in `DeskBellDaemon`.
-- [ ] 2.2 Record delivery/wakeup metadata on events so dashboard displays hot/cold badges and ms wakeup latency.
-- [ ] 2.3 Write unit/wire tests for dashboard API shape, cookie auth, Host/Origin checks, write actions, and ordered SSE streaming.
-- [ ] 2.4 Drive dashboard live with Level-A demo script, capture Light & Dark mode screenshots (and live progression evidence) into `13_Consilium/03_演示记录/`, commit cleanly (author `2084413277`), and write `reviews/R007-antigravity-dashboard.md`.
+- [x] 2.1 Implement `deskbell/dashboard.py` and mount `/ui`, `/api/login`, `/api/logout`, `/api/state`, `/api/stream` (SSE), `/api/missions/<id>/close`, `/api/tasks/<id>/requeue` in `DeskBellDaemon`.
+- [x] 2.2 Record delivery/wakeup metadata on events so dashboard displays hot/cold badges and ms wakeup latency.
+- [x] 2.3 Write unit/wire tests for dashboard API shape, cookie auth, Host/Origin checks, write actions, and ordered SSE streaming.
+- [x] 2.4 Drive dashboard live with Level-A demo script, capture Light & Dark mode screenshots (and live progression evidence) into `13_Consilium/03_演示记录/`, commit cleanly (author `2084413277`), and write `reviews/R007-antigravity-dashboard.md`.
 - [ ] ★ **Gate 2**: User reviews Light & Dark screenshots and confirms dashboard appearance.
 
 ## Stage 3: Level-B Real App Trial (Blocked on ★ Gates 1 & 2)

@@ -6,13 +6,24 @@ import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import queue
 import socket
 import sys
 import threading
+import time
 import urllib.parse
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from deskbell import __version__
+from deskbell.dashboard import (
+    SESSION_COOKIE_NAME,
+    EventHub,
+    LoginTicketStore,
+    build_dashboard_state,
+    derive_session_cookie,
+    parse_cookie_header,
+    render_dashboard_html,
+)
 from deskbell.models import (
     DEFAULT_HTTP_HOST,
     DEFAULT_HTTP_PORT,
@@ -25,6 +36,7 @@ from deskbell.models import (
     read_auth_token,
     resolve_rendezvous_dir,
     resolve_state_dir,
+    utc_now_iso,
 )
 from deskbell.quota import sync_local_quotas
 from deskbell.store import BusStore
@@ -263,11 +275,20 @@ class DeskBellMCPDispatcher:
         home_dir: Optional[str] = None,
         default_peer: str = "",
         rendezvous_dir: Optional[str] = None,
+        on_mutation: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.home_dir = resolve_state_dir(home_dir)
         self.rendezvous_dir = resolve_rendezvous_dir(rendezvous_dir, fallback_dir=home_dir)
         self.default_peer = default_peer
         self.store = BusStore(self.home_dir, rendezvous_dir=self.rendezvous_dir)
+        self._on_mutation = on_mutation
+
+    def _emit_mutation(self, reason: str) -> None:
+        if self._on_mutation is not None:
+            try:
+                self._on_mutation(reason)
+            except Exception:
+                pass
 
     def handle_payload(self, payload: Any) -> Optional[Any]:
         """Handle a single JSON-RPC object or batch; return None for pure notifications."""
@@ -402,6 +423,7 @@ class DeskBellMCPDispatcher:
                 task_ids = ", ".join(t["task_id"] for t in peer_tasks)
                 tiers = ", ".join(sorted({t["model_tier"] for t in peer_tasks}))
                 peer_eids = events_by_peer.get(assignee, [])
+                ring_ms = time.time() * 1000.0
                 receipt = _safe_ring_peer(
                     store=self.store,
                     home_dir=self.rendezvous_dir,
@@ -416,8 +438,9 @@ class DeskBellMCPDispatcher:
                     open_deeplink=open_deeplink,
                     event_ids=peer_eids,
                 )
-                self.store.record_event_delivery(peer_eids, receipt)
+                self.store.record_event_delivery(peer_eids, receipt, ring_sent_at_ms=ring_ms)
                 deliveries.append(receipt)
+            self._emit_mutation("create_mission")
             delivery_summary: Dict[str, Any] = {
                 "deliveries": deliveries,
                 "errors": [d for d in deliveries if d.get("delivery") == "error"],
@@ -458,6 +481,7 @@ class DeskBellMCPDispatcher:
             mission = dispatched["mission"]
             task = dispatched["task"]
             evt_id = int(dispatched["event"]["event_id"])
+            ring_ms = time.time() * 1000.0
             delivery = _safe_ring_peer(
                 store=self.store,
                 home_dir=self.rendezvous_dir,
@@ -472,7 +496,8 @@ class DeskBellMCPDispatcher:
                 open_deeplink=open_deeplink,
                 event_ids=[evt_id],
             )
-            self.store.record_event_delivery([evt_id], delivery)
+            self.store.record_event_delivery([evt_id], delivery, ring_sent_at_ms=ring_ms)
+            self._emit_mutation("dispatch_task")
             return {
                 **dispatched,
                 "committed": True,
@@ -487,12 +512,14 @@ class DeskBellMCPDispatcher:
                 self.store.release_stale_claims()
             except Exception:
                 pass
-            return self.store.pickup_inbox(
+            picked = self.store.pickup_inbox(
                 peer_id=peer,
                 session_label=str(args.get("session_label", "")),
                 claim_tasks=claim_tasks,
                 limit=int(args.get("limit", 20)),
             )
+            self._emit_mutation("pickup_inbox")
+            return picked
 
         if name == "deskbell_report_progress":
             notify_coord = _parse_bool(args, "notify_coordinator", False)
@@ -510,6 +537,7 @@ class DeskBellMCPDispatcher:
                 delivery = {"delivery": "replayed", "idempotent_replay": True}
             elif res.get("event") and res.get("coordinator_peer"):
                 evt_id = int(res["event"]["event_id"])
+                ring_ms = time.time() * 1000.0
                 delivery = _safe_ring_peer(
                     store=self.store,
                     home_dir=self.rendezvous_dir,
@@ -522,9 +550,10 @@ class DeskBellMCPDispatcher:
                     ),
                     event_ids=[evt_id],
                 )
-                self.store.record_event_delivery([evt_id], delivery)
+                self.store.record_event_delivery([evt_id], delivery, ring_sent_at_ms=ring_ms)
             else:
                 delivery = {"delivery": "none"}
+            self._emit_mutation("report_progress")
             return {**res, "committed": True, "result": res, "delivery": delivery}
 
         if name == "deskbell_complete_task":
@@ -542,6 +571,7 @@ class DeskBellMCPDispatcher:
             else:
                 coord = res["coordinator_peer"]
                 evt_id = int(res["event"]["event_id"])
+                ring_ms = time.time() * 1000.0
                 delivery = _safe_ring_peer(
                     store=self.store,
                     home_dir=self.rendezvous_dir,
@@ -557,7 +587,8 @@ class DeskBellMCPDispatcher:
                     ),
                     event_ids=[evt_id],
                 )
-                self.store.record_event_delivery([evt_id], delivery)
+                self.store.record_event_delivery([evt_id], delivery, ring_sent_at_ms=ring_ms)
+            self._emit_mutation("complete_task")
             return {**res, "committed": True, "result": res, "delivery": delivery}
 
         if name == "deskbell_request_review":
@@ -577,6 +608,7 @@ class DeskBellMCPDispatcher:
                 target = str(args["to_peer"]) if res["allowed"] else res["coordinator_peer"]
                 sender_norm = str(args["from_peer"]).strip().lower()
                 evt_id = int(res["event"]["event_id"])
+                ring_ms = time.time() * 1000.0
                 if not res["allowed"] and target == sender_norm:
                     delivery = {"delivery": "self_coordinator", "peer_id": target}
                 else:
@@ -598,14 +630,15 @@ class DeskBellMCPDispatcher:
                         ),
                         event_ids=[evt_id],
                     )
-                self.store.record_event_delivery([evt_id], delivery)
+                self.store.record_event_delivery([evt_id], delivery, ring_sent_at_ms=ring_ms)
+            self._emit_mutation("request_review")
             return {**res, "committed": True, "result": res, "delivery": delivery}
 
         if name == "deskbell_wait":
             peer = str(args.get("peer_id") or self.default_peer)
             timeout_sec = min(300.0, max(0.1, float(args.get("timeout_sec", 45.0))))
             auto_pickup = _parse_bool(args, "auto_pickup", False)
-            return wait_for_doorbell(
+            wres = wait_for_doorbell(
                 store=self.store,
                 home_dir=self.rendezvous_dir,
                 peer_id=peer,
@@ -614,6 +647,18 @@ class DeskBellMCPDispatcher:
                 auto_pickup=auto_pickup,
                 rendezvous_dir=self.rendezvous_dir,
             )
+            if wres.get("woke") and wres.get("source") in (
+                "kqueue",
+                "socket",
+                "immediate_after_register",
+            ):
+                try:
+                    woke_ms = time.time() * 1000.0
+                    self.store.record_peer_wakeup_latency(peer, woke_ms)
+                    self._emit_mutation("wait_woke")
+                except Exception:
+                    pass
+            return wres
 
         if name == "deskbell_quota":
             report_windows = args.get("report_windows") or []
@@ -655,6 +700,7 @@ class DeskBellMCPDispatcher:
             deliveries = []
             for evt in res.get("events", []):
                 eid = int(evt["event_id"])
+                ring_ms = time.time() * 1000.0
                 receipt = _safe_ring_peer(
                     store=self.store,
                     home_dir=self.rendezvous_dir,
@@ -667,8 +713,9 @@ class DeskBellMCPDispatcher:
                     ),
                     event_ids=[eid],
                 )
-                self.store.record_event_delivery([eid], receipt)
+                self.store.record_event_delivery([eid], receipt, ring_sent_at_ms=ring_ms)
                 deliveries.append(receipt)
+            self._emit_mutation("close_mission")
             delivery_summary = {
                 "deliveries": deliveries,
                 "errors": [d for d in deliveries if d.get("delivery") == "error"],
@@ -791,14 +838,40 @@ class DeskBellDaemon:
         self.reaper_interval_sec = max(0.05, float(reaper_interval_sec))
         self.claim_timeout_sec = claim_timeout_sec
         self.running_timeout_sec = running_timeout_sec
+        self.started_at = utc_now_iso()
+        self.started_monotonic = time.monotonic()
+        self.event_hub = EventHub()
+        self.ticket_store = LoginTicketStore()
         self.dispatcher = DeskBellMCPDispatcher(
-            home_dir=self.home_dir, rendezvous_dir=self.rendezvous_dir
+            home_dir=self.home_dir,
+            rendezvous_dir=self.rendezvous_dir,
+            on_mutation=self.publish_state_update,
         )
         self.wake_broker = WakeBrokerServer(rendezvous_dir=self.rendezvous_dir)
         self._httpd: Optional[ThreadingHTTPServer] = None
         self._http_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._reaper_thread: Optional[threading.Thread] = None
+
+    def get_dashboard_state(self, *, sync_quotas: bool = True) -> Dict[str, Any]:
+        """Return full dashboard snapshot JSON."""
+        return build_dashboard_state(
+            self.dispatcher.store,
+            self.rendezvous_dir,
+            started_at=self.started_at,
+            started_monotonic=self.started_monotonic,
+            host=self.host,
+            port=self.port,
+            sse_clients=self.event_hub.subscriber_count(),
+            sync_quotas=sync_quotas,
+        )
+
+    def publish_state_update(self, reason: str = "mutation") -> int:
+        """Broadcast an ordered state update to all connected SSE dashboard clients."""
+        if self.event_hub.subscriber_count() == 0:
+            return 0
+        snapshot = self.get_dashboard_state(sync_quotas=False)
+        return self.event_hub.publish("update", {"reason": reason, "state": snapshot})
 
     def _read_token_stat(self) -> Optional[Tuple[int, int]]:
         token_path = os.path.join(self.home_dir, "auth.token")
@@ -843,6 +916,8 @@ class DeskBellDaemon:
                     event_ids=[eid],
                 )
                 self.dispatcher.store.record_event_delivery([eid], receipt)
+        if released:
+            self.publish_state_update("reaper_requeued")
         return released
 
     def _reaper_loop(self) -> None:
@@ -864,7 +939,7 @@ class DeskBellDaemon:
             def log_message(self, format: str, *args: Any) -> None:
                 return
 
-            def _check_security(self) -> bool:
+            def _check_host_origin(self) -> bool:
                 host_hdr = self.headers.get("Host", "")
                 if not _is_valid_host(host_hdr):
                     self._send_json(403, {"error": "Forbidden Host header"})
@@ -873,21 +948,38 @@ class DeskBellDaemon:
                 if not _is_valid_origin(origin_hdr):
                     self._send_json(403, {"error": "Forbidden cross-origin request"})
                     return False
-                if daemon.require_token:
-                    active_token = daemon.get_active_token()
-                    auth_hdr = self.headers.get("Authorization", "")
-                    expected_hdr = f"Bearer {active_token}"
-                    query_token = ""
-                    parsed = urllib.parse.urlparse(self.path)
-                    if parsed.query:
-                        query_token = urllib.parse.parse_qs(parsed.query).get("token", [""])[0]
-                    hdr_ok = hmac.compare_digest(auth_hdr, expected_hdr)
-                    qry_ok = bool(query_token) and hmac.compare_digest(
-                        query_token, active_token
-                    )
-                    if not (hdr_ok or qry_ok):
-                        self._send_json(401, {"error": "Unauthorized"})
-                        return False
+                return True
+
+            def _is_authenticated(self, *, allow_cookie: bool = False) -> bool:
+                if not daemon.require_token:
+                    return True
+                active_token = daemon.get_active_token()
+                auth_hdr = self.headers.get("Authorization", "")
+                expected_hdr = f"Bearer {active_token}"
+                query_token = ""
+                parsed = urllib.parse.urlparse(self.path)
+                if parsed.query:
+                    query_token = urllib.parse.parse_qs(parsed.query).get("token", [""])[0]
+                hdr_ok = hmac.compare_digest(auth_hdr, expected_hdr)
+                qry_ok = bool(query_token) and hmac.compare_digest(
+                    query_token, active_token
+                )
+                if hdr_ok or qry_ok:
+                    return True
+                if allow_cookie:
+                    cookies = parse_cookie_header(self.headers.get("Cookie", ""))
+                    sess = cookies.get(SESSION_COOKIE_NAME, "")
+                    expected_cookie = derive_session_cookie(active_token)
+                    if sess and hmac.compare_digest(sess, expected_cookie):
+                        return True
+                return False
+
+            def _check_security(self, *, allow_cookie: bool = False) -> bool:
+                if not self._check_host_origin():
+                    return False
+                if not self._is_authenticated(allow_cookie=allow_cookie):
+                    self._send_json(401, {"error": "Unauthorized"})
+                    return False
                 return True
 
             def _send_json(
@@ -909,10 +1001,184 @@ class DeskBellDaemon:
                 self.end_headers()
                 self.wfile.write(encoded)
 
+            def _send_html(self, status: int, html: str) -> None:
+                encoded = html.encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header(
+                    "Content-Security-Policy",
+                    "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:;",
+                )
+                if self.close_connection:
+                    self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def _read_json_body(self) -> Tuple[bool, Any]:
+                raw_len = self.headers.get("Content-Length")
+                if raw_len is None or raw_len.strip() == "":
+                    self._send_json(400, {"error": "Missing or invalid Content-Length"})
+                    return False, None
+                try:
+                    length = int(raw_len.strip())
+                except ValueError:
+                    self._send_json(400, {"error": "Invalid Content-Length"})
+                    return False, None
+                if length < 0:
+                    self._send_json(400, {"error": "Negative Content-Length"})
+                    return False, None
+                if length > 2 * 1024 * 1024:
+                    self._send_json(413, {"error": "Payload too large"})
+                    return False, None
+                raw = self.rfile.read(length) if length > 0 else b""
+                if not raw:
+                    return True, {}
+                try:
+                    return True, json.loads(raw.decode("utf-8"))
+                except ValueError as exc:
+                    self._send_json(
+                        400,
+                        daemon.dispatcher._error(None, -32700, f"Parse error: {exc}"),
+                    )
+                    return False, None
+
+            def _handle_sse_stream(self, parsed_url: urllib.parse.ParseResult) -> None:
+                qs = urllib.parse.parse_qs(parsed_url.query)
+                max_events = 0
+                if "max_events" in qs:
+                    try:
+                        max_events = max(1, int(qs["max_events"][0]))
+                    except ValueError:
+                        max_events = 0
+
+                self.connection.settimeout(None)
+                self.close_connection = True
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                self.end_headers()
+
+                sub_q = daemon.event_hub.subscribe()
+                sent_count = 0
+                last_ping = time.monotonic()
+                try:
+                    initial = daemon.get_dashboard_state(sync_quotas=False)
+                    last_eid = int(initial.get("latest_event_id", 0))
+                    last_waiters = dict(initial.get("active_waiters") or {})
+                    frame = (
+                        f"id: {last_eid}\n"
+                        f"event: state\n"
+                        f"data: {json.dumps(initial, ensure_ascii=False)}\n\n"
+                    ).encode("utf-8")
+                    self.wfile.write(frame)
+                    self.wfile.flush()
+                    sent_count += 1
+                    if max_events and sent_count >= max_events:
+                        return
+
+                    while not daemon._stop_event.is_set():
+                        try:
+                            seq, ev_name, payload = sub_q.get(timeout=0.5)
+                            ev_frame = (
+                                f"id: {seq}\n"
+                                f"event: {ev_name}\n"
+                                f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                            ).encode("utf-8")
+                            self.wfile.write(ev_frame)
+                            self.wfile.flush()
+                            st = payload.get("state") or {}
+                            last_eid = max(last_eid, int(st.get("latest_event_id", 0)))
+                            if isinstance(st.get("active_waiters"), dict):
+                                last_waiters = dict(st["active_waiters"])
+                            sent_count += 1
+                            if max_events and sent_count >= max_events:
+                                return
+                        except queue.Empty:
+                            # Detect external stdio/CLI DB mutations or standby waiter lease changes.
+                            cur_state = daemon.get_dashboard_state(sync_quotas=False)
+                            cur_eid = int(cur_state.get("latest_event_id", 0))
+                            cur_waiters = dict(cur_state.get("active_waiters") or {})
+                            if cur_eid > last_eid or cur_waiters != last_waiters:
+                                reason = "external_db" if cur_eid > last_eid else "waiter_change"
+                                last_eid = max(last_eid, cur_eid)
+                                last_waiters = cur_waiters
+                                ext_frame = (
+                                    f"id: {last_eid}\n"
+                                    f"event: update\n"
+                                    f"data: {json.dumps({'reason': reason, 'state': cur_state}, ensure_ascii=False)}\n\n"
+                                ).encode("utf-8")
+                                self.wfile.write(ext_frame)
+                                self.wfile.flush()
+                                sent_count += 1
+                                if max_events and sent_count >= max_events:
+                                    return
+                            elif time.monotonic() - last_ping >= 15.0:
+                                self.wfile.write(b": keepalive\n\n")
+                                self.wfile.flush()
+                                last_ping = time.monotonic()
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
+                finally:
+                    daemon.event_hub.unsubscribe(sub_q)
+
             def do_GET(self) -> None:
+                parsed = urllib.parse.urlparse(self.path)
+                route = parsed.path
+                if route in ("/", "/ui", "/ui/auth"):
+                    if not self._check_host_origin():
+                        return
+                    if route == "/ui/auth":
+                        qs = urllib.parse.parse_qs(parsed.query)
+                        ticket = (qs.get("ticket") or [""])[0].strip()
+                        self.send_response(302)
+                        self.send_header("Location", "/ui")
+                        self.send_header("Cache-Control", "no-store")
+                        self.send_header("Referrer-Policy", "no-referrer")
+                        if not daemon.require_token:
+                            cookie_val = "open"
+                            self.send_header(
+                                "Set-Cookie",
+                                f"{SESSION_COOKIE_NAME}={cookie_val}; HttpOnly; SameSite=Strict; Path=/",
+                            )
+                        elif daemon.ticket_store.consume(ticket):
+                            cookie_val = derive_session_cookie(daemon.get_active_token())
+                            self.send_header(
+                                "Set-Cookie",
+                                f"{SESSION_COOKIE_NAME}={cookie_val}; HttpOnly; SameSite=Strict; Path=/",
+                            )
+                        self.send_header("Content-Length", "0")
+                        if self.close_connection:
+                            self.send_header("Connection", "close")
+                        self.end_headers()
+                        return
+                    if route == "/":
+                        self.send_response(302)
+                        self.send_header("Location", "/ui")
+                        self.send_header("Content-Length", "0")
+                        if self.close_connection:
+                            self.send_header("Connection", "close")
+                        self.end_headers()
+                        return
+                    self._send_html(200, render_dashboard_html(__version__))
+                    return
+
+                if route == "/api/state":
+                    if not self._check_security(allow_cookie=True):
+                        return
+                    self._send_json(200, daemon.get_dashboard_state(sync_quotas=True))
+                    return
+
+                if route == "/api/stream":
+                    if not self._check_security(allow_cookie=True):
+                        return
+                    self._handle_sse_stream(parsed)
+                    return
+
                 if not self._check_security():
                     return
-                route = self.path.split("?", 1)[0]
                 if route == "/health":
                     self._send_json(
                         200,
@@ -933,34 +1199,171 @@ class DeskBellDaemon:
                 self._send_json(404, {"error": "Not found"})
 
             def do_POST(self) -> None:
+                route = urllib.parse.urlparse(self.path).path
+
+                if route == "/api/login":
+                    if not self._check_host_origin():
+                        return
+                    ok, payload = self._read_json_body()
+                    if not ok:
+                        return
+                    if not isinstance(payload, dict):
+                        self._send_json(400, {"error": "Expected JSON object"})
+                        return
+                    supplied = str(payload.get("token") or "").strip()
+                    if not supplied:
+                        auth_hdr = self.headers.get("Authorization", "")
+                        if auth_hdr.startswith("Bearer "):
+                            supplied = auth_hdr[7:].strip()
+                    if daemon.require_token:
+                        active = daemon.get_active_token()
+                        if not supplied or not hmac.compare_digest(supplied, active):
+                            self._send_json(401, {"error": "Invalid token"})
+                            return
+                        cookie_val = derive_session_cookie(active)
+                    else:
+                        cookie_val = "open"
+                    cookie_hdr = (
+                        f"{SESSION_COOKIE_NAME}={cookie_val}; "
+                        "HttpOnly; SameSite=Strict; Path=/"
+                    )
+                    self._send_json(
+                        200,
+                        {"ok": True},
+                        extra_headers={"Set-Cookie": cookie_hdr},
+                    )
+                    return
+
+                if route == "/api/ui-ticket":
+                    if not self._check_security(allow_cookie=False):
+                        return
+                    ticket = daemon.ticket_store.issue(ttl_sec=30.0)
+                    auth_url = f"http://{daemon.host}:{daemon.port}/ui/auth?ticket={ticket}"
+                    self._send_json(
+                        200,
+                        {"ok": True, "ticket": ticket, "expires_in": 30, "url": auth_url},
+                    )
+                    return
+
+                if route == "/api/logout":
+                    if not self._check_host_origin():
+                        return
+                    self._send_json(
+                        200,
+                        {"ok": True},
+                        extra_headers={
+                            "Set-Cookie": (
+                                f"{SESSION_COOKIE_NAME}=; Max-Age=0; "
+                                "HttpOnly; SameSite=Strict; Path=/"
+                            )
+                        },
+                    )
+                    return
+
+                if route.startswith("/api/missions/") and route.endswith("/close"):
+                    if not self._check_security(allow_cookie=True):
+                        return
+                    mid = urllib.parse.unquote(route[len("/api/missions/") : -len("/close")])
+                    ok, payload = self._read_json_body()
+                    if not ok:
+                        return
+                    if not isinstance(payload, dict):
+                        self._send_json(400, {"error": "Expected JSON object"})
+                        return
+                    try:
+                        force = _parse_bool(payload, "force", False)
+                        res = daemon.dispatcher.store.close_mission(
+                            mission_id=mid,
+                            final_summary=str(payload.get("final_summary") or "Closed via dashboard."),
+                            peer_id=None,
+                            status=str(payload.get("status") or "completed"),
+                            force=force,
+                        )
+                        deliveries = []
+                        for evt in res.get("events", []):
+                            eid = int(evt["event_id"])
+                            ring_ms = time.time() * 1000.0
+                            receipt = _safe_ring_peer(
+                                store=daemon.dispatcher.store,
+                                home_dir=daemon.rendezvous_dir,
+                                peer_id=evt["to_peer"],
+                                title="DeskBell Mission Closed",
+                                body=f"Mission {res['mission_id']} closed ({res['status']})",
+                                pickup_prompt=(
+                                    f"Use deskbell_pickup_inbox(peer_id={evt['to_peer']!r}) "
+                                    f"for closed mission {res['mission_id']}."
+                                ),
+                                event_ids=[eid],
+                            )
+                            daemon.dispatcher.store.record_event_delivery(
+                                [eid], receipt, ring_sent_at_ms=ring_ms
+                            )
+                            deliveries.append(receipt)
+                        daemon.publish_state_update("ui_close_mission")
+                        self._send_json(
+                            200,
+                            {
+                                "committed": True,
+                                "result": res,
+                                "delivery": {"deliveries": deliveries},
+                            },
+                        )
+                    except KeyError as exc:
+                        self._send_json(404, {"error": str(exc)})
+                    except ValueError as exc:
+                        self._send_json(400, {"error": str(exc)})
+                    return
+
+                if route.startswith("/api/tasks/") and route.endswith("/requeue"):
+                    if not self._check_security(allow_cookie=True):
+                        return
+                    tid = urllib.parse.unquote(route[len("/api/tasks/") : -len("/requeue")])
+                    ok, payload = self._read_json_body()
+                    if not ok:
+                        return
+                    if not isinstance(payload, dict):
+                        self._send_json(400, {"error": "Expected JSON object"})
+                        return
+                    try:
+                        res = daemon.dispatcher.store.requeue_task(
+                            task_id=tid,
+                            reason=str(payload.get("reason") or "manual_requeue"),
+                        )
+                        eid = int(res["event"]["event_id"])
+                        ring_ms = time.time() * 1000.0
+                        delivery = _safe_ring_peer(
+                            store=daemon.dispatcher.store,
+                            home_dir=daemon.rendezvous_dir,
+                            peer_id=res["assignee_peer"],
+                            title="DeskBell Task Requeued",
+                            body=f"Task {tid} returned to queued",
+                            pickup_prompt=(
+                                f"Use deskbell_pickup_inbox(peer_id={res['assignee_peer']!r}) "
+                                f"to claim requeued task {tid}."
+                            ),
+                            event_ids=[eid],
+                        )
+                        daemon.dispatcher.store.record_event_delivery(
+                            [eid], delivery, ring_sent_at_ms=ring_ms
+                        )
+                        daemon.publish_state_update("ui_requeue_task")
+                        self._send_json(
+                            200,
+                            {"committed": True, "result": res, "delivery": delivery},
+                        )
+                    except KeyError as exc:
+                        self._send_json(404, {"error": str(exc)})
+                    except ValueError as exc:
+                        self._send_json(400, {"error": str(exc)})
+                    return
+
                 if not self._check_security():
                     return
-                if self.path.split("?", 1)[0] != "/mcp":
+                if route != "/mcp":
                     self._send_json(404, {"error": "Not found"})
                     return
-                raw_len = self.headers.get("Content-Length")
-                if raw_len is None or raw_len.strip() == "":
-                    self._send_json(400, {"error": "Missing or invalid Content-Length"})
-                    return
-                try:
-                    length = int(raw_len.strip())
-                except ValueError:
-                    self._send_json(400, {"error": "Invalid Content-Length"})
-                    return
-                if length < 0:
-                    self._send_json(400, {"error": "Negative Content-Length"})
-                    return
-                if length > 2 * 1024 * 1024:
-                    self._send_json(413, {"error": "Payload too large"})
-                    return
-                raw = self.rfile.read(length)
-                try:
-                    payload = json.loads(raw.decode("utf-8"))
-                except ValueError as exc:
-                    self._send_json(
-                        400,
-                        daemon.dispatcher._error(None, -32700, f"Parse error: {exc}"),
-                    )
+                ok, payload = self._read_json_body()
+                if not ok:
                     return
                 resp = daemon.dispatcher.handle_payload(payload)
                 if resp is None:

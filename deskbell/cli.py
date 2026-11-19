@@ -6,13 +6,17 @@ import argparse
 import json
 import os
 import signal
+import subprocess
 import sys
+import urllib.error
+import urllib.request
 from typing import List, Optional
 
 from deskbell.models import (
     DEFAULT_HTTP_HOST,
     DEFAULT_HTTP_PORT,
     VALID_PEERS,
+    read_auth_token,
     resolve_rendezvous_dir,
     resolve_state_dir,
 )
@@ -80,6 +84,12 @@ def _build_parser() -> argparse.ArgumentParser:
     rot_p.add_argument("--target-home", default=os.path.expanduser("~"))
     rot_p.add_argument("--data-dir", default=None)
     rot_p.add_argument("--port", type=int, default=DEFAULT_HTTP_PORT)
+
+    ui_p = sub.add_parser("ui", help="Open the Consilium dashboard already signed in via a one-time ticket.")
+    ui_p.add_argument("--host", default=DEFAULT_HTTP_HOST)
+    ui_p.add_argument("--port", type=int, default=DEFAULT_HTTP_PORT)
+    ui_p.add_argument("--data-dir", default=None)
+    ui_p.add_argument("--no-open", action="store_true", help="Print the one-time login URL without launching a browser.")
 
     return parser
 
@@ -174,6 +184,41 @@ def main(argv: Optional[List[str]] = None) -> int:
             state_dir=args.data_dir,
         )
         print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "ui":
+        state_dir = resolve_state_dir(args.data_dir)
+        token = read_auth_token(state_dir)
+        headers = {"Content-Length": "0"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        ticket_url = f"http://{args.host}:{args.port}/api/ui-ticket"
+        req = urllib.request.Request(ticket_url, data=b"", headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            sys.stderr.write(
+                f"Failed to request UI login ticket ({exc.code}): "
+                f"check that deskbell serve is running with the same --data-dir ({state_dir}).\n"
+            )
+            return 1
+        except urllib.error.URLError as exc:
+            sys.stderr.write(
+                f"Cannot reach deskbell daemon at http://{args.host}:{args.port} ({exc.reason}).\n"
+                f"Start it first: /usr/bin/python3 -m deskbell.cli serve --port {args.port}\n"
+            )
+            return 1
+        auth_url = str(data.get("url") or f"http://{args.host}:{args.port}/ui")
+        if args.no_open:
+            print(auth_url)
+            return 0
+        try:
+            subprocess.run(["open", auth_url], check=False)
+        except OSError:
+            print(auth_url)
+            return 0
+        print(f"Opened Consilium dashboard (signed in automatically): http://{args.host}:{args.port}/ui")
         return 0
 
     parser.print_help()

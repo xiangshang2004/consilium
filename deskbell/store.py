@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import json
 import os
 import sqlite3
+import time
 from typing import Any, Dict, Iterator, List, Optional
 import uuid
 
@@ -327,7 +328,9 @@ class BusStore:
         payload: Dict[str, Any],
         created_at: str,
     ) -> Dict[str, Any]:
-        payload_str = json.dumps(payload, ensure_ascii=False)
+        enriched_payload = dict(payload)
+        enriched_payload.setdefault("ring_sent_at_ms", round(time.time() * 1000.0, 2))
+        payload_str = json.dumps(enriched_payload, ensure_ascii=False)
         cur = conn.execute(
             """
             INSERT INTO events (
@@ -343,7 +346,7 @@ class BusStore:
             "from_peer": from_peer,
             "to_peer": to_peer,
             "kind": kind,
-            "payload": payload,
+            "payload": enriched_payload,
             "created_at": created_at,
             "acked_at": "",
         }
@@ -726,6 +729,7 @@ class BusStore:
         event_ids: List[int],
         delivery: Dict[str, Any],
         *,
+        ring_sent_at_ms: Optional[float] = None,
         wakeup_latency_ms: Optional[float] = None,
     ) -> None:
         """Attach delivery metadata (hot_wakeup/cold_notification/error) onto event payloads."""
@@ -750,12 +754,57 @@ class BusStore:
                         payload["delivery_error"] = str(delivery["error"])
                     if "dry_run" in delivery:
                         payload["dry_run"] = bool(delivery["dry_run"])
+                    if ring_sent_at_ms is not None:
+                        payload["ring_sent_at_ms"] = round(float(ring_sent_at_ms), 2)
                     if wakeup_latency_ms is not None:
                         payload["wakeup_latency_ms"] = round(float(wakeup_latency_ms), 2)
                     conn.execute(
                         "UPDATE events SET payload_json = ? WHERE event_id = ?",
                         (json.dumps(payload, ensure_ascii=False), int(eid)),
                     )
+
+    def record_peer_wakeup_latency(self, peer_id: str, woke_at_ms: float) -> Optional[float]:
+        """Stamp measured kqueue wakeup latency (ms) onto unacked events for peer_id."""
+        peer = validate_peer(peer_id)
+        recorded: Optional[float] = None
+        with self._connect() as conn:
+            with self._tx(conn):
+                rows = conn.execute(
+                    """
+                    SELECT event_id, payload_json
+                    FROM events
+                    WHERE to_peer = ? AND acked_at = ''
+                    ORDER BY event_id DESC
+                    LIMIT 5
+                    """,
+                    (peer,),
+                ).fetchall()
+                for row in rows:
+                    try:
+                        payload = json.loads(row["payload_json"])
+                    except ValueError:
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    if payload.get("delivery_mode") == "cold_notification":
+                        continue
+                    if "wakeup_latency_ms" in payload:
+                        continue
+                    sent_ms = payload.get("ring_sent_at_ms")
+                    if sent_ms is None:
+                        continue
+                    latency = max(0.0, round(float(woke_at_ms) - float(sent_ms), 2))
+                    if latency > 60000.0:
+                        continue
+                    payload["wakeup_latency_ms"] = latency
+                    payload.setdefault("delivery_mode", "hot_wakeup")
+                    conn.execute(
+                        "UPDATE events SET payload_json = ? WHERE event_id = ?",
+                        (json.dumps(payload, ensure_ascii=False), int(row["event_id"])),
+                    )
+                    if recorded is None:
+                        recorded = latency
+        return recorded
 
     def is_event_acked(self, event_id: int) -> bool:
         """Return True when an event has been acknowledged or no longer exists."""
@@ -1471,6 +1520,42 @@ class BusStore:
                 item["task_counts"] = {c["status"]: c["cnt"] for c in counts}
                 summaries.append(item)
         return {"missions": summaries}
+
+    def get_dashboard_missions(
+        self, limit: int = 20, events_per_mission: int = 100
+    ) -> tuple:
+        """Return enriched missions (with tasks and reverse-chronological events) and latest_event_id."""
+        with self._connect() as conn:
+            latest_row = conn.execute(
+                "SELECT COALESCE(MAX(event_id), 0) AS max_id FROM events"
+            ).fetchone()
+            latest_event_id = int(latest_row["max_id"] or 0) if latest_row else 0
+            mission_rows = conn.execute(
+                "SELECT * FROM missions ORDER BY updated_at DESC LIMIT ?",
+                (max(1, int(limit)),),
+            ).fetchall()
+            missions_out: List[Dict[str, Any]] = []
+            for m in mission_rows:
+                mid = m["mission_id"]
+                task_rows = conn.execute(
+                    "SELECT * FROM tasks WHERE mission_id = ? ORDER BY created_at ASC, task_id ASC",
+                    (mid,),
+                ).fetchall()
+                event_rows = conn.execute(
+                    "SELECT * FROM events WHERE mission_id = ? ORDER BY event_id DESC LIMIT ?",
+                    (mid, max(1, int(events_per_mission))),
+                ).fetchall()
+                tasks_dec = [self._decode_task(t) for t in task_rows]
+                counts: Dict[str, int] = {}
+                for t in tasks_dec:
+                    st = t["status"]
+                    counts[st] = counts.get(st, 0) + 1
+                item = _row_to_dict(m)
+                item["task_counts"] = counts
+                item["tasks"] = tasks_dec
+                item["events"] = [self._decode_event(e) for e in event_rows]
+                missions_out.append(item)
+        return missions_out, latest_event_id
 
     def _decode_quota_row(
         self, row: sqlite3.Row, now_dt: Optional[datetime] = None
