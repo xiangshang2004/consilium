@@ -19,9 +19,15 @@ class QuotaExtractionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp_bus = tempfile.mkdtemp(prefix="dbell-qbus-", dir="/tmp")
         self.tmp_user_home = tempfile.mkdtemp(prefix="dbell-qhome-", dir="/tmp")
+        self._prev_user_home = os.environ.get("DESKBELL_USER_HOME")
+        os.environ["DESKBELL_USER_HOME"] = self.tmp_user_home
         self.store = BusStore(self.tmp_bus)
 
     def tearDown(self) -> None:
+        if self._prev_user_home is None:
+            os.environ.pop("DESKBELL_USER_HOME", None)
+        else:
+            os.environ["DESKBELL_USER_HOME"] = self._prev_user_home
         shutil.rmtree(self.tmp_bus, ignore_errors=True)
         shutil.rmtree(self.tmp_user_home, ignore_errors=True)
 

@@ -41,6 +41,8 @@ class InstallerTests(unittest.TestCase):
             target_home=self.tmp_home,
             repo_dir=self.repo_dir,
             port=18920,
+            rendezvous_dir=os.environ["DESKBELL_RENDEZVOUS_DIR"],
+            claude_running_check=lambda: False,
         )
         self.assertEqual(report["mode"], "dry-run")
         self.assertEqual(report["backup_root"], "")
@@ -62,6 +64,8 @@ class InstallerTests(unittest.TestCase):
             target_home=self.tmp_home,
             repo_dir=self.repo_dir,
             port=18920,
+            rendezvous_dir=os.environ["DESKBELL_RENDEZVOUS_DIR"],
+            claude_running_check=lambda: False,
         )
         self.assertTrue(os.path.isdir(first["backup_root"]))
         token_path = os.path.join(
@@ -74,14 +78,19 @@ class InstallerTests(unittest.TestCase):
 
         gemini_cfg = os.path.join(self.tmp_home, ".gemini", "config", "mcp_config.json")
         with open(gemini_cfg, "r", encoding="utf-8") as handle:
-            gemini_data = json.load(handle)
+            gemini_raw = handle.read()
+            gemini_data = json.loads(gemini_raw)
+        self.assertNotIn("?token=", gemini_raw)
         self.assertIn("keep-me", gemini_data["mcpServers"])
         self.assertEqual(
-            gemini_data["mcpServers"]["deskbell"]["url"],
-            f"http://127.0.0.1:18920/mcp?token={token}",
+            gemini_data["mcpServers"]["deskbell"],
+            {
+                "url": "http://127.0.0.1:18920/mcp",
+                "headers": {"Authorization": f"Bearer {token}"},
+            },
         )
 
-        # Claude Code config written via `claude mcp add -s user`
+        # Claude Code config written via `claude mcp add-json -s user`
         claude_json = os.path.join(self.tmp_home, ".claude.json")
         self.assertTrue(os.path.exists(claude_json))
         with open(claude_json, "r", encoding="utf-8") as handle:
@@ -128,6 +137,8 @@ class InstallerTests(unittest.TestCase):
             target_home=self.tmp_home,
             repo_dir=self.repo_dir,
             port=18920,
+            rendezvous_dir=os.environ["DESKBELL_RENDEZVOUS_DIR"],
+            claude_running_check=lambda: False,
         )
         self.assertTrue(all(op["action"] == "unchanged" for op in second["operations"]))
 
@@ -143,6 +154,8 @@ class InstallerTests(unittest.TestCase):
             target_home=self.tmp_home,
             repo_dir=self.repo_dir,
             port=18920,
+            rendezvous_dir=os.environ["DESKBELL_RENDEZVOUS_DIR"],
+            claude_running_check=lambda: False,
         )
         ops_by_target = {op["target"]: op for op in uninstall_report["operations"]}
         self.assertEqual(ops_by_target["claude_skill"]["action"], "skipped_modified")
@@ -173,6 +186,8 @@ class InstallerTests(unittest.TestCase):
                 target_home=self.tmp_home,
                 repo_dir=self.repo_dir,
                 port=18920,
+                rendezvous_dir=os.environ["DESKBELL_RENDEZVOUS_DIR"],
+                claude_running_check=lambda: False,
             )
 
 

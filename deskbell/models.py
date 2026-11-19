@@ -25,7 +25,9 @@ NON_TERMINAL_TASK_STATUSES = ("queued", "claimed", "running")
 TERMINAL_TASK_STATUSES = ("done", "failed", "blocked", "cancelled")
 VALID_MISSION_CLOSE_STATUSES = ("completed", "cancelled", "failed")
 
-DEFAULT_CLAIM_TIMEOUT_SEC = 1800
+DEFAULT_CLAIM_TIMEOUT_SEC = 900
+DEFAULT_RUNNING_TIMEOUT_SEC = 7200
+DEFAULT_REAPER_INTERVAL_SEC = 60.0
 DEFAULT_HTTP_HOST = "127.0.0.1"
 DEFAULT_HTTP_PORT = 18920
 
@@ -88,29 +90,46 @@ def resolve_home_dir(override: Optional[str] = None) -> str:
     return resolve_state_dir(override)
 
 
-def resolve_rendezvous_dir(override: Optional[str] = None) -> str:
-    """Resolve the ephemeral /tmp rendezvous directory for kqueue signals, leases, and wake.sock."""
+def resolve_rendezvous_dir(
+    override: Optional[str] = None,
+    fallback_dir: Optional[str] = None,
+) -> str:
+    """Resolve the ephemeral /tmp rendezvous directory for kqueue signals, leases, and wake.sock.
+
+    Precedence: explicit override -> DESKBELL_RENDEZVOUS_DIR env -> optional fallback_dir -> /tmp/deskbell-<uid>.
+    """
     default_dir = f"/tmp/deskbell-{os.getuid()}"
-    raw = override or os.environ.get("DESKBELL_RENDEZVOUS_DIR") or default_dir
+    raw = (
+        override
+        or os.environ.get("DESKBELL_RENDEZVOUS_DIR")
+        or fallback_dir
+        or default_dir
+    )
     return _ensure_private_dir(raw, "rendezvous")
 
 
-def ensure_auth_token(state_dir: str) -> str:
-    """Return the local Bearer token stored in <state_dir>/auth.token (0600)."""
+def read_auth_token(state_dir: str) -> str:
+    """Read existing Bearer token from <state_dir>/auth.token, or return empty string."""
     resolved_dir = resolve_state_dir(state_dir)
     token_path = os.path.join(resolved_dir, "auth.token")
-    if os.path.exists(token_path):
-        with open(token_path, "r", encoding="utf-8") as handle:
-            existing = handle.read().strip()
-        if existing:
-            return existing
+    if not os.path.exists(token_path):
+        return ""
+    with open(token_path, "r", encoding="utf-8") as handle:
+        return handle.read().strip()
 
-    token = secrets.token_hex(32)
+
+def write_auth_token(state_dir: str, token: str) -> str:
+    """Atomically write a Bearer token into <state_dir>/auth.token (0600)."""
+    clean = (token or "").strip()
+    if not clean:
+        raise ValueError("Auth token must not be empty")
+    resolved_dir = resolve_state_dir(state_dir)
+    token_path = os.path.join(resolved_dir, "auth.token")
     fd, tmp_path = tempfile.mkstemp(prefix=".auth.token.", dir=resolved_dir)
     try:
         os.chmod(tmp_path, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(token + "\n")
+            handle.write(clean + "\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_path, token_path)
@@ -124,4 +143,17 @@ def ensure_auth_token(state_dir: str) -> str:
         os.chmod(token_path, 0o600)
     except OSError:
         pass
-    return token
+    return clean
+
+
+def generate_auth_token() -> str:
+    """Generate a new 256-bit hex Bearer token."""
+    return secrets.token_hex(32)
+
+
+def ensure_auth_token(state_dir: str) -> str:
+    """Return the local Bearer token stored in <state_dir>/auth.token (0600)."""
+    existing = read_auth_token(state_dir)
+    if existing:
+        return existing
+    return write_auth_token(state_dir, generate_auth_token())

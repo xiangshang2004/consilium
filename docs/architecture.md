@@ -22,23 +22,24 @@ All persistent state lives in `<state_dir>/bus.db` (`SQLite` WAL mode, `busy_tim
 - **`quota_windows`**: Per-peer and per-account rolling quota percentages (`5h`, `7d`, model groups), normalized UTC `reset_at` timestamps, countdown calculation (`reset_in_human`), and `dispatch_recommended` posture.
 
 ### Key Invariants
-- **Atomic Claiming & Stale Recovery**: `pickup_inbox` runs inside `BEGIN IMMEDIATE`, records `claimed_at`, and updates `WHERE status = 'queued'`. `release_stale_claims()` re-queues orphaned claims past `DEFAULT_CLAIM_TIMEOUT_SEC` (1800s).
-- **Strict State Machine**: `report_progress` allows non-terminal states only and enforces `peer == assignee_peer`; `complete_task` enforces `peer == assignee_peer` and rejects duplicate completion; `dispatch_task` rejects closed missions and transitions `ready_to_report` back to `active`; `close_mission` requires `peer_id == coordinator_peer` and cancels non-terminal tasks only with `force=True`.
+- **Atomic Claiming & Stale Recovery**: `pickup_inbox` runs inside `BEGIN IMMEDIATE`, records `claimed_at`, and updates `WHERE status = 'queued'`. `release_stale_claims()` re-queues orphaned `claimed` tasks (default 15m) and stalled `running` tasks (default 2h, heartbeat via `report_progress.updated_at`), emitting `task_requeued` to `coordinator_peer`. `DeskBellDaemon` runs this reaper every 60s and `deskbell_pickup_inbox` invokes it before claiming.
+- **Strict State Machine**: `report_progress` allows non-terminal states only and enforces `peer == assignee_peer`; `complete_task` enforces `peer == assignee_peer` and rejects duplicate completion; `dispatch_task` rejects closed missions and transitions `ready_to_report` back to `active`; `request_review` rejects closed missions and validates optional `task_id` membership; `close_mission` requires `peer_id == coordinator_peer` and cancels non-terminal tasks only with `force=True`.
+- **Uniform Write Envelope & Idempotency**: Write tools return `{"committed": true, "result": {...}, "delivery": {...}}`, isolate `ring_peer` errors without returning `isError=true`, and accept optional `client_request_id` backed by the `idempotency_keys` table.
 - **Loop Guard**: `request_review` checks `current_round < max_rounds` inside `BEGIN IMMEDIATE` and emits `loop_guard_reached` once exhausted.
-- **Monotonic `.seq` Sync**: After each commit touching `events`, `BusStore` atomically writes `<rendezvous_dir>/signals/<peer>.seq` (`seq`, `unacked`) without pulsing `.sig` prematurely.
+- **Locked `.seq` Sync & Rebuild**: After each commit touching `events` or `tasks`, `BusStore.sync_peer_seq` locks `signals/<peer>.seq.lock` (`fcntl.flock`), re-queries SQLite for authoritative `(max_event_id, unacked, queued_tasks)`, and atomically writes `signals/<peer>.seq`. Both `DeskBellDaemon.start()` and `run_stdio_server()` rebuild all three peers' `.seq` files from SQLite on startup.
 
 ## 3. Wakeup Layer (`deskbell/wakeup.py`)
 
 ### Hot Standby (`wait_for_doorbell`)
-1. Reads `signals/<peer>.seq` (`unacked > 0` returns immediately with `source="immediate"`). Never writes to `bus.db` during wait.
+1. Reads `signals/<peer>.seq` (`unacked > 0` or `queued_tasks > 0` returns immediately with `source="immediate"`). Defaults to `auto_pickup=False` in both CLI and MCP. Never writes to `bus.db` during wait.
 2. Acquires an exclusive kernel `fcntl.flock(LOCK_EX | LOCK_NB)` on `<rendezvous_dir>/waiters/<peer>/<pid>-<tid>.lease` (immune to PID reuse).
-3. Registers `KQ_FILTER_VNODE` on `signals/<peer>.sig`, re-checks `signals/<peer>.seq` (`immediate_after_register`), and sleeps at 0% CPU until `notify_peer` pulses `<peer>.sig` and `signals/<peer>.seq` advances.
+3. Registers `KQ_FILTER_VNODE` (including `KQ_NOTE_DELETE | KQ_NOTE_RENAME`) on `signals/<peer>.sig`, re-checks `signals/<peer>.seq` (`immediate_after_register`), re-attaches automatically if `.sig` is deleted/renamed, ignores spurious empty wakeups, and sleeps at 0% CPU until `.seq` advances.
 4. On exit (`finally:`), unlinks the `.lease` file and releases `flock`.
-5. **Cold Escalation Backup**: When `ring_peer` sends a hot wakeup with `event_ids`, a daemon timer (default `60s`) checks `store.is_event_acked(eid)` and escalates to `ColdDoorbell` if the event remains unacknowledged.
+5. **Cold Escalation Backup**: When `ring_peer` sends a hot wakeup with `event_ids`, a daemon `threading.Timer` (default `60s`) checks `store.is_event_acked(eid)` and escalates to `ColdDoorbell` if the event remains unacknowledged. (Because the timer is a daemon thread, it persists only for the lifetime of the long-lived daemon/stdio process, which is accepted for v1.)
 
 ### Cold Fallback (`ColdDoorbell`)
-- Passes notification title, body, and subtitle via `osascript` `argv` (`on run argv`).
-- Truncates prompts **before** UTF-8 percent-encoding (`_truncate_pre_encode`), strips leading `/`, preserves `folder` on `claude://code/new?q=...&folder=...`, and uses `codex://new?prompt=...` (with `[cwd: ...]` in body) for Codex Desktop.
+- Passes notification title, body, and subtitle via `osascript` `argv` (`on run argv`). Notifications do not steal focus or auto-open deep links on click; `open_deeplink=True` is opt-in per mission after user consent.
+- Truncates prompts **before** UTF-8 percent-encoding (`_truncate_pre_encode`), strips leading `/`, uses `claude://code/new?q=...` (with optional `&folder=...`) for Claude, and uses `codex://new?prompt=...&path=...` for Codex Desktop.
 
 ## 4. MCP Tools (`deskbell/mcp_server.py`)
 

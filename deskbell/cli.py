@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import sys
 from typing import List, Optional
@@ -33,6 +34,8 @@ def _build_parser() -> argparse.ArgumentParser:
     serve_p.add_argument("--port", type=int, default=DEFAULT_HTTP_PORT)
     serve_p.add_argument("--data-dir", default=None)
     serve_p.add_argument("--rendezvous-dir", default=None)
+    serve_p.add_argument("--claim-timeout", type=int, default=None, help="Stale claimed task timeout in seconds (default 900).")
+    serve_p.add_argument("--running-timeout", type=int, default=None, help="Stale running task timeout in seconds (default 7200).")
     tok_grp = serve_p.add_mutually_exclusive_group()
     tok_grp.add_argument(
         "--require-token",
@@ -73,6 +76,11 @@ def _build_parser() -> argparse.ArgumentParser:
     quota_p.add_argument("--rendezvous-dir", default=None)
     quota_p.add_argument("--no-sync", action="store_true")
 
+    rot_p = sub.add_parser("rotate-token", help="Rotate Bearer token across configured clients first, then auth.token.")
+    rot_p.add_argument("--target-home", default=os.path.expanduser("~"))
+    rot_p.add_argument("--data-dir", default=None)
+    rot_p.add_argument("--port", type=int, default=DEFAULT_HTTP_PORT)
+
     return parser
 
 
@@ -83,13 +91,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "serve":
         state_dir = resolve_state_dir(args.data_dir)
-        rv_dir = resolve_rendezvous_dir(args.rendezvous_dir or args.data_dir)
+        rv_dir = resolve_rendezvous_dir(args.rendezvous_dir, fallback_dir=args.data_dir)
         daemon = DeskBellDaemon(
             home_dir=state_dir,
             rendezvous_dir=rv_dir,
             host=args.host,
             port=args.port,
             require_token=args.require_token,
+            claim_timeout_sec=args.claim_timeout,
+            running_timeout_sec=args.running_timeout,
         )
 
         def _handle_sigterm(signum: int, frame: object) -> None:
@@ -102,12 +112,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "mcp-stdio":
         state_dir = resolve_state_dir(args.data_dir)
-        rv_dir = resolve_rendezvous_dir(args.rendezvous_dir or args.data_dir)
+        rv_dir = resolve_rendezvous_dir(args.rendezvous_dir, fallback_dir=args.data_dir)
         run_stdio_server(home_dir=state_dir, default_peer=args.peer, rendezvous_dir=rv_dir)
         return 0
 
     if args.command == "wait":
-        rv_dir = resolve_rendezvous_dir(args.rendezvous_dir or args.data_dir)
+        rv_dir = resolve_rendezvous_dir(args.rendezvous_dir, fallback_dir=args.data_dir)
         store = (
             BusStore(resolve_state_dir(args.data_dir), rendezvous_dir=rv_dir)
             if args.pickup
@@ -127,7 +137,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "status":
         state_dir = resolve_state_dir(args.data_dir)
-        rv_dir = resolve_rendezvous_dir(args.rendezvous_dir or args.data_dir)
+        rv_dir = resolve_rendezvous_dir(args.rendezvous_dir, fallback_dir=args.data_dir)
         store = BusStore(state_dir, rendezvous_dir=rv_dir)
         try:
             sync_local_quotas(store)
@@ -147,12 +157,23 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "quota":
         state_dir = resolve_state_dir(args.data_dir)
-        rv_dir = resolve_rendezvous_dir(args.rendezvous_dir or args.data_dir)
+        rv_dir = resolve_rendezvous_dir(args.rendezvous_dir, fallback_dir=args.data_dir)
         store = BusStore(state_dir, rendezvous_dir=rv_dir)
         if not args.no_sync:
             sync_local_quotas(store, user_home=args.user_home)
         output = store.list_quota_windows(peer_id=args.peer)
         print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "rotate-token":
+        from scripts.install import rotate_token
+
+        report = rotate_token(
+            target_home=args.target_home,
+            port=args.port,
+            state_dir=args.data_dir,
+        )
+        print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
 
     parser.print_help()

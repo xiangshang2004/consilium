@@ -1,7 +1,10 @@
 {
   "mcpServers": {
     "deskbell": {
-      "url": "http://127.0.0.1:18920/mcp?token=__DESKBELL_TOKEN__"
+      "url": "http://127.0.0.1:18920/mcp",
+      "headers": {
+        "Authorization": "Bearer __DESKBELL_TOKEN__"
+      }
     }
   }
 }

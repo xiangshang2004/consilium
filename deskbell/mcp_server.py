@@ -16,11 +16,13 @@ from deskbell import __version__
 from deskbell.models import (
     DEFAULT_HTTP_HOST,
     DEFAULT_HTTP_PORT,
+    DEFAULT_REAPER_INTERVAL_SEC,
     VALID_ISOLATION,
     VALID_MISSION_CLOSE_STATUSES,
     VALID_MODEL_TIERS,
     VALID_PEERS,
     ensure_auth_token,
+    read_auth_token,
     resolve_rendezvous_dir,
     resolve_state_dir,
 )
@@ -29,6 +31,7 @@ from deskbell.store import BusStore
 from deskbell.wakeup import (
     WakeBrokerServer,
     query_active_waiters,
+    rebuild_all_peer_seqs,
     ring_peer,
     wait_for_doorbell,
 )
@@ -36,6 +39,30 @@ from deskbell.wakeup import (
 SUPPORTED_PROTOCOL_VERSION = "2025-03-26"
 SUPPORTED_PROTOCOL_VERSIONS = ("2025-03-26", "2024-11-05")
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+HTTP_READ_TIMEOUT_SEC = 30.0
+
+
+def _parse_bool(args: Dict[str, Any], key: str, default: bool) -> bool:
+    """Strictly parse a boolean tool argument; reject strings like 'false'."""
+    if key not in args or args[key] is None:
+        return default
+    val = args[key]
+    if not isinstance(val, bool):
+        raise ValueError(f"Parameter {key!r} must be a boolean, got {type(val).__name__}")
+    return val
+
+
+def _safe_ring_peer(**kwargs: Any) -> Dict[str, Any]:
+    """Invoke ring_peer without letting notification errors fail an already-committed DB write."""
+    peer_id = str(kwargs.get("peer_id", ""))
+    try:
+        return ring_peer(**kwargs)
+    except Exception as exc:
+        return {
+            "delivery": "error",
+            "peer_id": peer_id,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
 TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
@@ -62,6 +89,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "isolation_policy": {"type": "string", "enum": list(VALID_ISOLATION), "default": "worktree"},
                 "max_rounds": {"type": "integer", "minimum": 1, "default": 3},
                 "open_deeplink": {"type": "boolean", "default": False},
+                "client_request_id": {"type": "string"},
                 "tasks": {
                     "type": "array",
                     "items": {
@@ -95,6 +123,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "parallel_fanout": {"type": "integer", "minimum": 1, "default": 1},
                 "worktree_branch": {"type": "string"},
                 "open_deeplink": {"type": "boolean", "default": False},
+                "client_request_id": {"type": "string"},
             },
         },
     },
@@ -125,6 +154,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "status": {"type": "string", "default": "running"},
                 "worktree_branch": {"type": "string"},
                 "notify_coordinator": {"type": "boolean", "default": False},
+                "client_request_id": {"type": "string"},
             },
         },
     },
@@ -140,6 +170,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "result_summary": {"type": "string"},
                 "artifacts": {"type": "array", "items": {"type": "string"}},
                 "status": {"type": "string", "enum": ["done", "failed", "blocked"], "default": "done"},
+                "client_request_id": {"type": "string"},
             },
         },
     },
@@ -156,12 +187,13 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "summary": {"type": "string"},
                 "question": {"type": "string"},
                 "task_id": {"type": "string"},
+                "client_request_id": {"type": "string"},
             },
         },
     },
     {
         "name": "deskbell_wait",
-        "description": "Block silently until a doorbell event arrives for peer_id or timeout expires (max 300s).",
+        "description": "Block silently until a doorbell event arrives for peer_id or timeout expires (max 300s). Does not auto-pickup by default.",
         "inputSchema": {
             "type": "object",
             "required": ["peer_id"],
@@ -169,7 +201,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "peer_id": {"type": "string", "enum": list(VALID_PEERS)},
                 "timeout_sec": {"type": "number", "minimum": 0.1, "maximum": 300, "default": 45},
                 "session_label": {"type": "string"},
-                "auto_pickup": {"type": "boolean", "default": True},
+                "auto_pickup": {"type": "boolean", "default": False},
             },
         },
     },
@@ -216,6 +248,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "default": "completed",
                 },
                 "force": {"type": "boolean", "default": False},
+                "client_request_id": {"type": "string"},
             },
         },
     },
@@ -232,14 +265,23 @@ class DeskBellMCPDispatcher:
         rendezvous_dir: Optional[str] = None,
     ) -> None:
         self.home_dir = resolve_state_dir(home_dir)
-        self.rendezvous_dir = resolve_rendezvous_dir(rendezvous_dir or home_dir)
+        self.rendezvous_dir = resolve_rendezvous_dir(rendezvous_dir, fallback_dir=home_dir)
         self.default_peer = default_peer
         self.store = BusStore(self.home_dir, rendezvous_dir=self.rendezvous_dir)
 
     def handle_payload(self, payload: Any) -> Optional[Any]:
         """Handle a single JSON-RPC object or batch; return None for pure notifications."""
         if isinstance(payload, list):
-            responses = [self._handle_one(item) for item in payload]
+            if not payload:
+                return self._error(None, -32600, "Invalid Request: empty batch")
+            responses = []
+            for item in payload:
+                if not isinstance(item, dict):
+                    responses.append(
+                        self._error(None, -32600, "Invalid Request: batch element must be an object")
+                    )
+                else:
+                    responses.append(self._handle_one(item))
             filtered = [r for r in responses if r is not None]
             return filtered or None
         if not isinstance(payload, dict):
@@ -249,7 +291,10 @@ class DeskBellMCPDispatcher:
     def _handle_one(self, req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         req_id = req.get("id")
         method = req.get("method")
-        params = req.get("params") or {}
+        raw_params = req.get("params")
+        if raw_params is not None and not isinstance(raw_params, dict):
+            return self._error(req_id, -32602, "Invalid params: expected object")
+        params = raw_params or {}
 
         if not isinstance(method, str):
             return self._error(req_id, -32600, "Invalid Request: missing method")
@@ -320,6 +365,8 @@ class DeskBellMCPDispatcher:
             }
 
         if name == "deskbell_create_mission":
+            open_deeplink = _parse_bool(args, "open_deeplink", False)
+            client_req_id = args.get("client_request_id")
             created = self.store.create_mission(
                 title=str(args["title"]),
                 goal=str(args["goal"]),
@@ -328,9 +375,22 @@ class DeskBellMCPDispatcher:
                 isolation_policy=str(args.get("isolation_policy", "worktree")),
                 max_rounds=int(args.get("max_rounds", 3)),
                 tasks=args.get("tasks") or [],
+                client_request_id=str(client_req_id) if client_req_id is not None else None,
             )
+            if created.get("idempotent_replay"):
+                replay_delivery: Dict[str, Any] = {
+                    "delivery": "replayed",
+                    "idempotent_replay": True,
+                    "deliveries": [],
+                }
+                return {
+                    **created,
+                    "committed": True,
+                    "result": created,
+                    "delivery": replay_delivery,
+                    "deliveries": [],
+                }
             mission = created["mission"]
-            open_deeplink = bool(args.get("open_deeplink", False))
             tasks_by_peer: Dict[str, List[Dict[str, Any]]] = {}
             events_by_peer: Dict[str, List[int]] = {}
             for task in created["tasks"]:
@@ -341,7 +401,8 @@ class DeskBellMCPDispatcher:
             for assignee, peer_tasks in tasks_by_peer.items():
                 task_ids = ", ".join(t["task_id"] for t in peer_tasks)
                 tiers = ", ".join(sorted({t["model_tier"] for t in peer_tasks}))
-                receipt = ring_peer(
+                peer_eids = events_by_peer.get(assignee, [])
+                receipt = _safe_ring_peer(
                     store=self.store,
                     home_dir=self.rendezvous_dir,
                     peer_id=assignee,
@@ -353,12 +414,29 @@ class DeskBellMCPDispatcher:
                     ),
                     workspace_path=mission.get("workspace_path", ""),
                     open_deeplink=open_deeplink,
-                    event_ids=events_by_peer.get(assignee, []),
+                    event_ids=peer_eids,
                 )
+                self.store.record_event_delivery(peer_eids, receipt)
                 deliveries.append(receipt)
-            return {**created, "deliveries": deliveries}
+            delivery_summary: Dict[str, Any] = {
+                "deliveries": deliveries,
+                "errors": [d for d in deliveries if d.get("delivery") == "error"],
+            }
+            if delivery_summary["errors"]:
+                delivery_summary["error"] = "; ".join(
+                    str(d.get("error", "")) for d in delivery_summary["errors"]
+                )
+            return {
+                **created,
+                "committed": True,
+                "result": created,
+                "delivery": delivery_summary,
+                "deliveries": deliveries,
+            }
 
         if name == "deskbell_dispatch_task":
+            open_deeplink = _parse_bool(args, "open_deeplink", False)
+            client_req_id = args.get("client_request_id")
             dispatched = self.store.dispatch_task(
                 mission_id=str(args["mission_id"]),
                 assignee_peer=str(args["assignee_peer"]),
@@ -367,11 +445,20 @@ class DeskBellMCPDispatcher:
                 model_hint=str(args.get("model_hint", "")),
                 parallel_fanout=int(args.get("parallel_fanout", 1)),
                 worktree_branch=str(args.get("worktree_branch", "")),
+                client_request_id=str(client_req_id) if client_req_id is not None else None,
             )
+            if dispatched.get("idempotent_replay"):
+                replay_delivery = {"delivery": "replayed", "idempotent_replay": True}
+                return {
+                    **dispatched,
+                    "committed": True,
+                    "result": dispatched,
+                    "delivery": replay_delivery,
+                }
             mission = dispatched["mission"]
             task = dispatched["task"]
             evt_id = int(dispatched["event"]["event_id"])
-            delivery = ring_peer(
+            delivery = _safe_ring_peer(
                 store=self.store,
                 home_dir=self.rendezvous_dir,
                 peer_id=task["assignee_peer"],
@@ -382,31 +469,48 @@ class DeskBellMCPDispatcher:
                     f"to claim task {task['task_id']} in mission {mission['mission_id']}."
                 ),
                 workspace_path=mission.get("workspace_path", ""),
-                open_deeplink=bool(args.get("open_deeplink", False)),
+                open_deeplink=open_deeplink,
                 event_ids=[evt_id],
             )
-            return {**dispatched, "delivery": delivery}
+            self.store.record_event_delivery([evt_id], delivery)
+            return {
+                **dispatched,
+                "committed": True,
+                "result": dispatched,
+                "delivery": delivery,
+            }
 
         if name == "deskbell_pickup_inbox":
             peer = str(args.get("peer_id") or self.default_peer)
+            claim_tasks = _parse_bool(args, "claim_tasks", True)
+            try:
+                self.store.release_stale_claims()
+            except Exception:
+                pass
             return self.store.pickup_inbox(
                 peer_id=peer,
                 session_label=str(args.get("session_label", "")),
-                claim_tasks=bool(args.get("claim_tasks", True)),
+                claim_tasks=claim_tasks,
                 limit=int(args.get("limit", 20)),
             )
 
         if name == "deskbell_report_progress":
+            notify_coord = _parse_bool(args, "notify_coordinator", False)
+            client_req_id = args.get("client_request_id")
             res = self.store.report_progress(
                 task_id=str(args["task_id"]),
                 peer_id=str(args["peer_id"]),
                 progress_note=str(args["progress_note"]),
                 status=str(args.get("status", "running")),
                 worktree_branch=args.get("worktree_branch"),
-                notify_coordinator=bool(args.get("notify_coordinator", False)),
+                notify_coordinator=notify_coord,
+                client_request_id=str(client_req_id) if client_req_id is not None else None,
             )
-            if res.get("event") and res.get("coordinator_peer"):
-                res["delivery"] = ring_peer(
+            if res.get("idempotent_replay"):
+                delivery = {"delivery": "replayed", "idempotent_replay": True}
+            elif res.get("event") and res.get("coordinator_peer"):
+                evt_id = int(res["event"]["event_id"])
+                delivery = _safe_ring_peer(
                     store=self.store,
                     home_dir=self.rendezvous_dir,
                     peer_id=res["coordinator_peer"],
@@ -416,37 +520,48 @@ class DeskBellMCPDispatcher:
                         f"Use deskbell_pickup_inbox(peer_id={res['coordinator_peer']!r}) "
                         f"to read progress on {args['task_id']}."
                     ),
-                    event_ids=[int(res["event"]["event_id"])],
+                    event_ids=[evt_id],
                 )
-            return res
+                self.store.record_event_delivery([evt_id], delivery)
+            else:
+                delivery = {"delivery": "none"}
+            return {**res, "committed": True, "result": res, "delivery": delivery}
 
         if name == "deskbell_complete_task":
+            client_req_id = args.get("client_request_id")
             res = self.store.complete_task(
                 task_id=str(args["task_id"]),
                 peer_id=str(args["peer_id"]),
                 result_summary=str(args["result_summary"]),
                 artifacts=args.get("artifacts") or [],
                 status=str(args.get("status", "done")),
+                client_request_id=str(client_req_id) if client_req_id is not None else None,
             )
-            coord = res["coordinator_peer"]
-            res["delivery"] = ring_peer(
-                store=self.store,
-                home_dir=self.rendezvous_dir,
-                peer_id=coord,
-                title="DeskBell Task Done",
-                body=(
-                    f"{args['peer_id']} finished {args['task_id']}"
-                    + (" (ALL TASKS FINISHED)" if res["all_tasks_finished"] else "")
-                ),
-                pickup_prompt=(
-                    f"Use deskbell_pickup_inbox(peer_id={coord!r}) to collect results "
-                    f"from {args['peer_id']} on {args['task_id']}."
-                ),
-                event_ids=[int(res["event"]["event_id"])],
-            )
-            return res
+            if res.get("idempotent_replay"):
+                delivery = {"delivery": "replayed", "idempotent_replay": True}
+            else:
+                coord = res["coordinator_peer"]
+                evt_id = int(res["event"]["event_id"])
+                delivery = _safe_ring_peer(
+                    store=self.store,
+                    home_dir=self.rendezvous_dir,
+                    peer_id=coord,
+                    title="DeskBell Task Done",
+                    body=(
+                        f"{args['peer_id']} finished {args['task_id']}"
+                        + (" (ALL TASKS FINISHED)" if res["all_tasks_finished"] else "")
+                    ),
+                    pickup_prompt=(
+                        f"Use deskbell_pickup_inbox(peer_id={coord!r}) to collect results "
+                        f"from {args['peer_id']} on {args['task_id']}."
+                    ),
+                    event_ids=[evt_id],
+                )
+                self.store.record_event_delivery([evt_id], delivery)
+            return {**res, "committed": True, "result": res, "delivery": delivery}
 
         if name == "deskbell_request_review":
+            client_req_id = args.get("client_request_id")
             res = self.store.request_review(
                 mission_id=str(args["mission_id"]),
                 from_peer=str(args["from_peer"]),
@@ -454,38 +569,49 @@ class DeskBellMCPDispatcher:
                 summary=str(args["summary"]),
                 question=str(args["question"]),
                 task_id=args.get("task_id"),
+                client_request_id=str(client_req_id) if client_req_id is not None else None,
             )
-            target = str(args["to_peer"]) if res["allowed"] else res["coordinator_peer"]
-            title = "DeskBell Review Request" if res["allowed"] else "DeskBell Loop Guard"
-            body = (
-                f"Round {res['round']}/{res['max_rounds']} from {args['from_peer']}"
-                if res["allowed"]
-                else res["reason"]
-            )
-            res["delivery"] = ring_peer(
-                store=self.store,
-                home_dir=self.rendezvous_dir,
-                peer_id=target,
-                title=title,
-                body=body,
-                pickup_prompt=(
-                    f"Use deskbell_pickup_inbox(peer_id={target!r}) to handle {title} "
-                    f"for mission {args['mission_id']}."
-                ),
-                event_ids=[int(res["event"]["event_id"])],
-            )
-            return res
+            if res.get("idempotent_replay"):
+                delivery = {"delivery": "replayed", "idempotent_replay": True}
+            else:
+                target = str(args["to_peer"]) if res["allowed"] else res["coordinator_peer"]
+                sender_norm = str(args["from_peer"]).strip().lower()
+                evt_id = int(res["event"]["event_id"])
+                if not res["allowed"] and target == sender_norm:
+                    delivery = {"delivery": "self_coordinator", "peer_id": target}
+                else:
+                    title = "DeskBell Review Request" if res["allowed"] else "DeskBell Loop Guard"
+                    body = (
+                        f"Round {res['round']}/{res['max_rounds']} from {args['from_peer']}"
+                        if res["allowed"]
+                        else res["reason"]
+                    )
+                    delivery = _safe_ring_peer(
+                        store=self.store,
+                        home_dir=self.rendezvous_dir,
+                        peer_id=target,
+                        title=title,
+                        body=body,
+                        pickup_prompt=(
+                            f"Use deskbell_pickup_inbox(peer_id={target!r}) to handle {title} "
+                            f"for mission {args['mission_id']}."
+                        ),
+                        event_ids=[evt_id],
+                    )
+                self.store.record_event_delivery([evt_id], delivery)
+            return {**res, "committed": True, "result": res, "delivery": delivery}
 
         if name == "deskbell_wait":
             peer = str(args.get("peer_id") or self.default_peer)
             timeout_sec = min(300.0, max(0.1, float(args.get("timeout_sec", 45.0))))
+            auto_pickup = _parse_bool(args, "auto_pickup", False)
             return wait_for_doorbell(
                 store=self.store,
                 home_dir=self.rendezvous_dir,
                 peer_id=peer,
                 timeout_sec=timeout_sec,
                 session_label=str(args.get("session_label", "")),
-                auto_pickup=bool(args.get("auto_pickup", True)),
+                auto_pickup=auto_pickup,
                 rendezvous_dir=self.rendezvous_dir,
             )
 
@@ -498,36 +624,66 @@ class DeskBellMCPDispatcher:
                     entry["source"] = "manual_report"
                     normalized_reports.append(entry)
                 self.store.upsert_quota_windows(normalized_reports)
-            if bool(args.get("sync_local", True)):
+            if _parse_bool(args, "sync_local", True):
                 sync_local_quotas(self.store, user_home=args.get("user_home"))
             return self.store.list_quota_windows(peer_id=args.get("peer_id"))
 
         if name == "deskbell_close_mission":
+            force = _parse_bool(args, "force", False)
+            client_req_id = args.get("client_request_id")
             res = self.store.close_mission(
                 mission_id=str(args["mission_id"]),
                 final_summary=str(args["final_summary"]),
                 peer_id=str(args["peer_id"]),
                 status=str(args.get("status", "completed")),
-                force=bool(args.get("force", False)),
+                force=force,
+                client_request_id=str(client_req_id) if client_req_id is not None else None,
             )
+            if res.get("idempotent_replay"):
+                replay_delivery = {
+                    "delivery": "replayed",
+                    "idempotent_replay": True,
+                    "deliveries": [],
+                }
+                return {
+                    **res,
+                    "committed": True,
+                    "result": res,
+                    "delivery": replay_delivery,
+                    "deliveries": [],
+                }
             deliveries = []
             for evt in res.get("events", []):
-                deliveries.append(
-                    ring_peer(
-                        store=self.store,
-                        home_dir=self.rendezvous_dir,
-                        peer_id=evt["to_peer"],
-                        title="DeskBell Mission Closed",
-                        body=f"Mission {res['mission_id']} closed ({res['status']})",
-                        pickup_prompt=(
-                            f"Use deskbell_pickup_inbox(peer_id={evt['to_peer']!r}) "
-                            f"for closed mission {res['mission_id']}."
-                        ),
-                        event_ids=[int(evt["event_id"])],
-                    )
+                eid = int(evt["event_id"])
+                receipt = _safe_ring_peer(
+                    store=self.store,
+                    home_dir=self.rendezvous_dir,
+                    peer_id=evt["to_peer"],
+                    title="DeskBell Mission Closed",
+                    body=f"Mission {res['mission_id']} closed ({res['status']})",
+                    pickup_prompt=(
+                        f"Use deskbell_pickup_inbox(peer_id={evt['to_peer']!r}) "
+                        f"for closed mission {res['mission_id']}."
+                    ),
+                    event_ids=[eid],
                 )
-            res["deliveries"] = deliveries
-            return res
+                self.store.record_event_delivery([eid], receipt)
+                deliveries.append(receipt)
+            delivery_summary = {
+                "deliveries": deliveries,
+                "errors": [d for d in deliveries if d.get("delivery") == "error"],
+            }
+            if delivery_summary["errors"]:
+                delivery_summary["error"] = "; ".join(
+                    str(d.get("error", "")) for d in delivery_summary["errors"]
+                )
+            return {
+                **res,
+                "committed": True,
+                "result": res,
+                "delivery": delivery_summary,
+                "deliveries": deliveries,
+            }
 
         raise ValueError(f"Unknown tool: {name}")
 
@@ -571,6 +727,7 @@ def run_stdio_server(
         default_peer=default_peer,
         rendezvous_dir=rendezvous_dir,
     )
+    rebuild_all_peer_seqs(dispatcher.store)
 
     for raw_line in in_stream:
         line = raw_line.strip()
@@ -620,25 +777,89 @@ class DeskBellDaemon:
         port: int = DEFAULT_HTTP_PORT,
         require_token: bool = True,
         rendezvous_dir: Optional[str] = None,
+        reaper_interval_sec: float = DEFAULT_REAPER_INTERVAL_SEC,
+        claim_timeout_sec: Optional[int] = None,
+        running_timeout_sec: Optional[int] = None,
     ) -> None:
         self.home_dir = resolve_state_dir(home_dir)
-        self.rendezvous_dir = resolve_rendezvous_dir(rendezvous_dir or home_dir)
+        self.rendezvous_dir = resolve_rendezvous_dir(rendezvous_dir, fallback_dir=home_dir)
         self.host = host
         self.port = int(port)
         self.require_token = bool(require_token)
         self.auth_token = ensure_auth_token(self.home_dir) if self.require_token else ""
+        self._token_stat_sig: Optional[Tuple[int, int]] = self._read_token_stat()
+        self.reaper_interval_sec = max(0.05, float(reaper_interval_sec))
+        self.claim_timeout_sec = claim_timeout_sec
+        self.running_timeout_sec = running_timeout_sec
         self.dispatcher = DeskBellMCPDispatcher(
             home_dir=self.home_dir, rendezvous_dir=self.rendezvous_dir
         )
         self.wake_broker = WakeBrokerServer(rendezvous_dir=self.rendezvous_dir)
         self._httpd: Optional[ThreadingHTTPServer] = None
         self._http_thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._reaper_thread: Optional[threading.Thread] = None
+
+    def _read_token_stat(self) -> Optional[Tuple[int, int]]:
+        token_path = os.path.join(self.home_dir, "auth.token")
+        try:
+            st = os.stat(token_path)
+            return (int(st.st_ino), int(st.st_mtime_ns))
+        except OSError:
+            return None
+
+    def get_active_token(self) -> str:
+        """Return the active auth token, live-reloading if auth.token was rotated on disk."""
+        if not self.require_token:
+            return ""
+        sig = self._read_token_stat()
+        if sig is not None and sig != self._token_stat_sig:
+            fresh = read_auth_token(self.home_dir)
+            if fresh:
+                self.auth_token = fresh
+                self._token_stat_sig = sig
+        return self.auth_token
+
+    def run_reaper_once(self) -> List[Dict[str, Any]]:
+        """Re-queue stale claimed/running tasks and notify their coordinators."""
+        released = self.dispatcher.store.release_stale_claims(
+            claimed_timeout_sec=self.claim_timeout_sec,
+            running_timeout_sec=self.running_timeout_sec,
+        )
+        for task in released:
+            coord = str(task.get("coordinator_peer") or "")
+            evt = task.get("requeue_event") or {}
+            if coord and evt:
+                eid = int(evt["event_id"])
+                receipt = _safe_ring_peer(
+                    store=self.dispatcher.store,
+                    home_dir=self.rendezvous_dir,
+                    peer_id=coord,
+                    title="DeskBell Task Requeued",
+                    body=f"Task {task['task_id']} timed out and returned to queued",
+                    pickup_prompt=(
+                        f"Use deskbell_pickup_inbox(peer_id={coord!r}) to handle requeued task {task['task_id']}."
+                    ),
+                    event_ids=[eid],
+                )
+                self.dispatcher.store.record_event_delivery([eid], receipt)
+        return released
+
+    def _reaper_loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                self.run_reaper_once()
+            except Exception:
+                pass
+            if self._stop_event.wait(self.reaper_interval_sec):
+                break
 
     def _make_handler_class(self) -> Any:
         daemon = self
 
         class _Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
+            timeout = HTTP_READ_TIMEOUT_SEC
 
             def log_message(self, format: str, *args: Any) -> None:
                 return
@@ -653,15 +874,16 @@ class DeskBellDaemon:
                     self._send_json(403, {"error": "Forbidden cross-origin request"})
                     return False
                 if daemon.require_token:
+                    active_token = daemon.get_active_token()
                     auth_hdr = self.headers.get("Authorization", "")
-                    expected_hdr = f"Bearer {daemon.auth_token}"
+                    expected_hdr = f"Bearer {active_token}"
                     query_token = ""
                     parsed = urllib.parse.urlparse(self.path)
                     if parsed.query:
                         query_token = urllib.parse.parse_qs(parsed.query).get("token", [""])[0]
                     hdr_ok = hmac.compare_digest(auth_hdr, expected_hdr)
                     qry_ok = bool(query_token) and hmac.compare_digest(
-                        query_token, daemon.auth_token
+                        query_token, active_token
                     )
                     if not (hdr_ok or qry_ok):
                         self._send_json(401, {"error": "Unauthorized"})
@@ -716,7 +938,18 @@ class DeskBellDaemon:
                 if self.path.split("?", 1)[0] != "/mcp":
                     self._send_json(404, {"error": "Not found"})
                     return
-                length = int(self.headers.get("Content-Length", "0") or 0)
+                raw_len = self.headers.get("Content-Length")
+                if raw_len is None or raw_len.strip() == "":
+                    self._send_json(400, {"error": "Missing or invalid Content-Length"})
+                    return
+                try:
+                    length = int(raw_len.strip())
+                except ValueError:
+                    self._send_json(400, {"error": "Invalid Content-Length"})
+                    return
+                if length < 0:
+                    self._send_json(400, {"error": "Negative Content-Length"})
+                    return
                 if length > 2 * 1024 * 1024:
                     self._send_json(413, {"error": "Payload too large"})
                     return
@@ -757,11 +990,13 @@ class DeskBellDaemon:
                 pass
 
     def start(self) -> Tuple[str, int]:
-        """Start both AF_UNIX wake broker and Streamable HTTP server."""
+        """Start AF_UNIX wake broker, .seq rebuild, reaper thread, and HTTP server."""
+        rebuild_all_peer_seqs(self.dispatcher.store)
         try:
             sync_local_quotas(self.dispatcher.store)
         except Exception:
             pass
+        self._stop_event.clear()
         self.wake_broker.start()
         handler_cls = self._make_handler_class()
 
@@ -778,10 +1013,20 @@ class DeskBellDaemon:
             daemon=True,
         )
         self._http_thread.start()
+        self._reaper_thread = threading.Thread(
+            target=self._reaper_loop,
+            name="deskbell-stale-reaper",
+            daemon=True,
+        )
+        self._reaper_thread.start()
         return str(bound_host), self.port
 
     def stop(self) -> None:
-        """Shut down HTTP server and AF_UNIX wake broker cleanly."""
+        """Shut down reaper thread, HTTP server, and AF_UNIX wake broker cleanly."""
+        self._stop_event.set()
+        if self._reaper_thread is not None:
+            self._reaper_thread.join(timeout=2.0)
+            self._reaper_thread = None
         if self._httpd is not None:
             try:
                 self._httpd.shutdown()

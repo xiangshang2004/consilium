@@ -196,9 +196,15 @@ class WakeupAndColdFallbackTests(unittest.TestCase):
         )
         self.assertTrue(codex_url.startswith("codex://new?prompt="))
         self.assertNotIn("&folder=", codex_url)
+        self.assertIn("&path=%2FUsers%2Fup%2Fcode%2Fgithub%2Fdeskbell", codex_url)
         codex_params = urllib.parse.parse_qs(urllib.parse.urlparse(codex_url).query)
-        self.assertIn("[cwd: /Users/up/code/github/deskbell]", codex_params["prompt"][0])
+        self.assertEqual(codex_params["path"][0], "/Users/up/code/github/deskbell")
+        self.assertNotIn("[cwd:", codex_params["prompt"][0])
         self.assertFalse(codex_params["prompt"][0].startswith("/"))
+
+        claude_no_folder = ColdDoorbell.build_deeplink("claude", "Check inbox")
+        self.assertTrue(claude_no_folder.startswith("claude://code/new?q="))
+        self.assertNotIn("&folder=", claude_no_folder)
 
     def test_cold_fallback_dry_run(self) -> None:
         delivery = ring_peer(

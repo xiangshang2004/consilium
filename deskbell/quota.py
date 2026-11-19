@@ -310,8 +310,27 @@ def _find_rate_limits_in_obj(obj: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _format_window_minutes(minutes: Any, fallback_key: str, fallback_label: str) -> Tuple[str, str]:
+    """Derive a compact window key and label from window_minutes when provided."""
+    if minutes is None or isinstance(minutes, bool):
+        return fallback_key, fallback_label
+    try:
+        mins = int(float(minutes))
+    except (TypeError, ValueError):
+        return fallback_key, fallback_label
+    if mins <= 0:
+        return fallback_key, fallback_label
+    if mins % 1440 == 0:
+        days = mins // 1440
+        return f"{days}d", f"{days}d ({mins}m)"
+    if mins % 60 == 0:
+        hours = mins // 60
+        return f"{hours}h", f"{hours}h ({mins}m)"
+    return f"{mins}m", f"{mins}m rolling"
+
+
 def _collect_codex_rollouts(codex_dir: str) -> List[Dict[str, Any]]:
-    """Extract latest rate_limits (5h/7d used_percent & resets_at) from Codex session logs."""
+    """Extract numeric rate_limits fields from Codex session logs without retaining raw lines."""
     sessions_dir = os.path.join(codex_dir, "sessions")
     if not os.path.isdir(sessions_dir):
         return []
@@ -345,7 +364,7 @@ def _collect_codex_rollouts(codex_dir: str) -> List[Dict[str, Any]]:
 
         for raw_line in reversed(tail.splitlines()):
             line = raw_line.strip()
-            if not line or "rate_limits" not in line:
+            if not line or '"rate_limits"' not in line:
                 continue
             try:
                 obj = json.loads(line)
@@ -356,9 +375,10 @@ def _collect_codex_rollouts(codex_dir: str) -> List[Dict[str, Any]]:
                 continue
 
             obs = normalize_ts_to_iso(obj.get("timestamp")) or normalize_ts_to_iso(mtime)
-            acct = str(rate_limits.get("limit_id") or "default")
+            # Do not treat limit_id as an account identifier (R005 P2.5).
+            acct = "default"
             records: List[Dict[str, Any]] = []
-            for slot, wkey, label in (
+            for slot, default_wkey, default_label in (
                 ("primary", "5h", "5h rolling"),
                 ("secondary", "7d", "7d weekly"),
             ):
@@ -371,6 +391,9 @@ def _collect_codex_rollouts(codex_dir: str) -> List[Dict[str, Any]]:
                 )
                 if pct is None:
                     continue
+                wkey, label = _format_window_minutes(
+                    slot_data.get("window_minutes"), default_wkey, default_label
+                )
                 records.append(
                     {
                         "peer_id": "chatgpt",
@@ -466,7 +489,10 @@ def sync_local_quotas(
     user_home: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Best-effort harvest of local quota & reset windows into BusStore."""
-    home = os.path.abspath(os.path.expanduser(user_home or "~"))
+    if os.environ.get("DESKBELL_DISABLE_LOCAL_QUOTA_SYNC") == "1" and user_home is None:
+        return store.list_quota_windows()
+    effective_home = user_home or os.environ.get("DESKBELL_USER_HOME") or "~"
+    home = os.path.abspath(os.path.expanduser(effective_home))
     discovered: List[Dict[str, Any]] = []
     discovered.extend(_collect_cockpit_sqlite(os.path.join(home, ".antigravity_cockpit")))
     discovered.extend(_collect_cockpit_json(os.path.join(home, ".antigravity_cockpit")))

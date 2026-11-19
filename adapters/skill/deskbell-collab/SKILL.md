@@ -33,9 +33,9 @@ Whenever the user gives an instruction here that asks to coordinate across model
 4. Call `deskbell_create_mission(...)` with `coordinator_peer` set to your own peer ID and `max_rounds: 3` (hard loop guard).
 5. Check `deliveries`:
    - `hot_wakeup`: target desktop standby session woke automatically (with cold escalation backup if unacked).
-   - `cold_notification`: target desktop had no active waiter; briefly tell the user a macOS doorbell notification was sent (with deep link) so they can press Return once if they want that cold app to join.
+   - `cold_notification`: target desktop had no active waiter; the macOS notification banner does **not** steal focus or open deep links on click. Tell the user briefly that a cold notification was sent so they can manually switch to the target app and run `deskbell_pickup_inbox(peer_id=<target>)`. Only enable mission-level `open_deeplink: true` after explicit user consent.
 6. Wait for results cleanly:
-   - In **Antigravity / Claude Code tab / Codex**: run `python3 -m deskbell.cli wait --peer <self>` in the background (without `--pickup`), or call `deskbell_wait(peer_id=<self>, timeout_sec=45)` in request-bounded surfaces (such as Claude Chat tab).
+   - In **Antigravity / Claude Code tab / Codex**: run `python3 -m deskbell.cli wait --peer <self>` in the background (without `--pickup`), or call `deskbell_wait(peer_id=<self>, timeout_sec=45)` (defaults to `auto_pickup=false`) in request-bounded surfaces (such as Claude Chat tab), then explicitly call `deskbell_pickup_inbox(peer_id=<self>)` upon wakeup.
 7. Once `all_tasks_finished` is true (or `loop_guard_reached` escalates back), synthesize a single unified report for the user citing exact files, test results, and worktree branches, and close the mission with `deskbell_close_mission(mission_id, peer_id=<self>, final_summary=...)`.
 
 ## 2. Standby Worker Mode (When Acting as a Background Doorbell Listener)
