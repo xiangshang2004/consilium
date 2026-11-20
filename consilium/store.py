@@ -149,6 +149,7 @@ CREATE TABLE IF NOT EXISTS user_messages (
     targets_json TEXT NOT NULL DEFAULT '[]',
     mode TEXT NOT NULL DEFAULT 'direct',
     reason TEXT NOT NULL DEFAULT '',
+    intent TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     created_ms REAL NOT NULL DEFAULT 0
 );
@@ -286,6 +287,7 @@ class BusStore:
                 "ALTER TABLE tasks ADD COLUMN origin TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE tasks ADD COLUMN model_used TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE user_messages ADD COLUMN reason TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE user_messages ADD COLUMN intent TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE user_messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'",
                 "ALTER TABLE user_messages ADD COLUMN ui_request_id TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE user_messages ADD COLUMN ui_request_hash TEXT NOT NULL DEFAULT ''",
@@ -2533,10 +2535,10 @@ class BusStore:
         targets = [str(t) for t in (message.get("targets") or [])]
         row = conn.execute(
             """INSERT INTO user_messages
-                (mission_id, text, targets_json, mode, reason, created_at, created_ms, attachments_json, ui_request_id, ui_request_hash)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (mission_id, text, targets_json, mode, reason, intent, created_at, created_ms, attachments_json, ui_request_id, ui_request_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (mission_id, text[:20000], json.dumps(targets, ensure_ascii=False), str(message.get("mode") or "direct"),
-             str(message.get("reason") or "")[:300], now, round(time.time() * 1000.0, 2),
+             str(message.get("reason") or "")[:300], message.get("intent") or "", now, round(time.time() * 1000.0, 2),
              json.dumps(attachments, ensure_ascii=False), message.get("ui_request_id") or "", message.get("ui_request_hash") or ""),
         )
         return row.lastrowid
@@ -2639,11 +2641,12 @@ class BusStore:
         """
         items: List[Dict[str, Any]] = []
         for r in conn.execute(
-            "SELECT text, created_at, created_ms, message_id, attachments_json FROM user_messages WHERE mission_id = ? ORDER BY message_id ASC",
+            "SELECT text, intent, created_at, created_ms, message_id, attachments_json "
+            "FROM user_messages WHERE mission_id = ? ORDER BY message_id ASC",
             (mission_id,),
         ).fetchall():
             items.append({"at": r["created_at"], "_ms": float(r["created_ms"] or 0), "_seq": int(r["message_id"]),
-                          "from": USER_PEER, "text": r["text"][:1500],
+                          "from": USER_PEER, "text": r["text"][:1500], "intent": r["intent"],
                           "attachments": json.loads(r["attachments_json"] or "[]")})
         for r in conn.execute(
             "SELECT event_id, from_peer, task_id, payload_json, created_at FROM events "
@@ -2991,6 +2994,7 @@ class BusStore:
                         "targets": json.loads(r["targets_json"] or "[]"),
                         "mode": r["mode"],
                         "reason": r["reason"] if "reason" in r.keys() else "",
+                        "intent": r["intent"],
                         "attachments": json.loads(r["attachments_json"] or "[]"),
                         "created_at": r["created_at"],
                     }

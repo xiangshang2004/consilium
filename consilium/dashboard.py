@@ -1156,6 +1156,8 @@ __PEER_ICON_CSS__
   bottom: calc(100% + 8px);
   width: 100%;
   max-width: 440px;
+  max-height: min(23rem, 46dvh);
+  overflow-y: auto;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: 12px;
@@ -1179,6 +1181,16 @@ __PEER_ICON_CSS__
 }
 .slash-item:hover { background: var(--bg-subtle); }
 .slash-cmd { font-family: var(--font-mono); font-weight: 600; color: var(--accent); flex-shrink: 0; }
+.composer-intent {
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 12px;
+  cursor: pointer;
+}
 
 .composer-box {
   border: 1px solid var(--border-strong);
@@ -1702,6 +1714,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
             <div id="account-notice" class="account-notice hidden" role="status"><span></span><button type="button" class="btn-link" id="dismiss-account-notice">知道了</button></div>
             <div class="composer-box" id="composer-box">
               <textarea id="composer-input" class="composer-input" rows="1" placeholder="说说要做的事…" aria-label="消息"></textarea>
+              <button type="button" id="composer-intent" class="composer-intent hidden"></button>
               <div id="composer-attachments" class="attachment-list" aria-label="图片草稿"></div>
               <div id="attachment-error" class="hidden" role="status"></div>
               <div class="composer-foot">
@@ -1827,15 +1840,24 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     chev: '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>',
     edit: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.2 2.4a1.4 1.4 0 0 1 2 2L5.6 12l-2.8.8.8-2.8 7.6-7.6z"/><path d="M9.6 4l2 2"/></svg>'
   };
+  const INTENT_LABELS = { plan: "计划", goal: "目标" };
   const SLASH_COMMANDS = [
-    { cmd: "/mission", desc: "打开或定位左侧会诊列表面板", action: "focus_mission" },
+    { cmd: "/new", desc: "新建独立会诊", action: "new_chat" },
+    { cmd: "/fork", desc: "在当前文件夹新建独立会诊", action: "fork_chat", needsFolder: true },
+    { cmd: "/switch", desc: "打开会诊列表，切换会诊", action: "focus_mission" },
+    { cmd: "/parallel", desc: "选中三端作为消息接收者", action: "parallel" },
+    { cmd: "/session-claude", desc: "为当前会诊打开 Claude 专属会话", action: "session:claude", needsMission: true },
+    { cmd: "/session-codex", desc: "为当前会诊打开 Codex 专属会话", action: "session:chatgpt", needsMission: true },
+    { cmd: "/session-antigravity", desc: "复制 Antigravity 专属会话绑定指令", action: "session:antigravity", needsMission: true },
+    { cmd: "/plan", desc: "下一条消息只出计划，等你确认", action: "intent:plan" },
+    { cmd: "/goal", desc: "下一条消息作为目标，持续执行并验证", action: "intent:goal" },
+    { cmd: "/mission", desc: "定位左侧会诊列表", action: "focus_mission" },
     { cmd: "/files", desc: "打开右侧“文件”：各端改动或产出的文件", action: "tab:files" },
     { cmd: "/export", desc: "合成当前会诊 Markdown 并复制到剪贴板", action: "export_md" },
     { cmd: "/tasks", desc: "打开右侧“任务”：这个会诊拆出的每项任务", action: "tab:tasks" },
     { cmd: "/branches", desc: "打开右侧“分支”：各端用的分支", action: "tab:branches" },
     { cmd: "/accounts", desc: "设置：各端的账号和余量", action: "tab:accounts" },
-    { cmd: "/prefs", desc: "设置：查看和删除三端学到的使用偏好", action: "tab:prefs" },
-    { cmd: "/new", desc: "开始一个新会诊", action: "new_chat" }
+    { cmd: "/prefs", desc: "设置：查看和删除三端学到的使用偏好", action: "tab:prefs" }
   ];
 
   let appState = null;
@@ -1862,7 +1884,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   let openPopoverPeer = null;
   let handoffTarget = "claude";
   let composingNew = false;
-  let composeWorkspace = "";
+  let newDraftKey = "draft-0";
   let folderMenuOpen = false;
   let tierMenuOpen = false;
   let composeTier = "auto";
@@ -1911,7 +1933,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     return !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.consilium);
   }
   window.__consiliumFolderPicked = function (path) {
-    if (path) { composeWorkspace = path; rememberFolder(path); }
+    if (path && !getActiveMission(appState)) { activeDraft().workspace = path; rememberFolder(path); }
     folderMenuOpen = false;
     renderComposerBar(appState);
     document.getElementById("composer-input").focus();
@@ -1919,7 +1941,6 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   const AG_STANDBY_PROMPT = "请作为 Consilium 的 Antigravity 待命端（peer_id=antigravity）：反复调用 consilium_wait(peer_id=\"antigravity\", timeout_sec=300, session_label=\"antigravity-standby\", scope=\"consilium\")；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"antigravity\", session_label=\"antigravity-standby\", scope=\"consilium\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used、effort_used、tier_used 和 tier_reason；任务的 model_tier 是 auto 时由你按难度自己定档位并真的按它做，不要让使用者选；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步）；超时没消息就继续等。每轮少说话，不要停下来问我。";
   const CODEX_STANDBY_PROMPT = "请作为 Consilium 的 Codex 待命端（peer_id=chatgpt）：反复调用 consilium_wait(peer_id=\"chatgpt\", timeout_sec=300, session_label=\"chatgpt-standby\", scope=\"consilium\")；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"chatgpt\", session_label=\"chatgpt-standby\", scope=\"consilium\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used、effort_used、tier_used 和 tier_reason；任务的 model_tier 是 auto 时由你按难度自己定档位并真的按它做，不要让使用者选；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步）；超时没消息就继续等。每轮少说话，不要停下来问我。";
   const STANDBY_PROMPT = "请作为 Consilium 的 Claude 常驻待命端：先读 ~/.claude/skills/consilium-collab/SKILL.md 第 2、3 节；用 run_in_background 运行 `PYTHONPATH=/Applications/Consilium.app/Contents/Resources/python /usr/bin/python3 -B -m consilium.cli wait --peer claude --session-label claude-standby --scope consilium --timeout 86400`，被唤醒后用 consilium_pickup_inbox(peer_id=\"claude\", session_label=\"claude-standby\", scope=\"consilium\") 取任务（只取 Consilium 窗口里发起的，取到空就直接重新挂上）、处理、用 consilium_complete_task 回复（带上 model_used、effort_used、tier_used 和 tier_reason；任务的 model_tier 是 auto 时由你按难度自己定档位并真的按它做，不要让使用者选；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步），然后重新挂上等待。不要轮询，每轮少说话。";
-  let sendTargets = [];
   let currentDraftKey = null;
   const messageDrafts = new Map();
   let slashIndex = 0;
@@ -2086,6 +2107,33 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     return active || missions[0];
   }
 
+  function missionIsOpen(mission) {
+    return !!mission && !["completed", "cancelled", "failed"].includes(mission.status);
+  }
+
+  function openDedicatedSession(mission, peer) {
+    if (!missionIsOpen(mission) || !PEER_META[peer]) return;
+    const label = peerLabel(peer);
+    if ((mission.native_sessions || {})[peer]) {
+      showToast(label + " 专属会话已绑定，后续消息会转交给它");
+      return;
+    }
+    const mid = JSON.stringify(mission.mission_id);
+    const sessionHint = peer === "claude" ? '用 get_session("self")' :
+      peer === "chatgpt" ? "从当前 Codex 的 CODEX_THREAD_ID 或当前会话元数据" : "从当前 Antigravity 原生会话元数据";
+    const prompt = "接管 Consilium 会诊「" + mission.title + "」（mission_id=" + mid + "）。" +
+      "先调用 consilium_status(mission_id=" + mid + ") 核对会诊及绑定；已有此端专属会话时保留原绑定。" +
+      "若尚未绑定，" + sessionHint + "读取当前真实会话 ID，调用 consilium_bind_session(mission_id=" + mid +
+      ", peer_id=" + JSON.stringify(peer) + ", session_ref=<当前会话 ID>)。之后按 consilium-collab 技能处理这个会诊的转交任务。";
+    const url = buildHandoffDeeplink(peer, prompt, mission.workspace_path || "");
+    if (url) {
+      window.location.href = url;
+      showToast("已打开 " + label + " 新会话，发送预填指令即可绑定");
+    } else {
+      copyTextSafe(prompt, "已复制绑定指令，请在该项目的 " + label + " 新会话中粘贴并发送");
+    }
+  }
+
   function renderSidebar(state) {
     const sidebar = document.getElementById("sidebar");
     sidebar.classList.toggle("collapsed", !isSidebarOpen());
@@ -2094,10 +2142,13 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     document.getElementById("mission-count-pill").textContent = String(missions.length);
     const cur = getActiveMission(state);
     const listEl = document.getElementById("mission-list");
-    if (!missions.length) {
-      listEl.innerHTML = "";
-      return;
-    }
+    const drafts = Array.from(messageDrafts).filter(([key, draft]) => isNewDraftKey(key) && draftHasContent(draft));
+    const draftList = drafts.length ? '<div class="folder-group"><div class="folder-group-head">草稿</div>' +
+      drafts.map(([key, draft]) => '<button type="button" class="mission-item' +
+        (!cur && key === newDraftKey ? " active" : "") + '" data-select-draft="' + esc(key) + '">' +
+        '<span class="mi-title">' + esc(draft.text.trim().split("\n")[0] ||
+          (draft.images.length ? "图片草稿" : folderName(draft.workspace) || "新会诊草稿")) + '</span></button>'
+      ).join("") + '</div>' : "";
     const itemHtml = m => {
       const tasks = m.tasks || [];
       const closed = m.status === "completed" || m.status === "cancelled" || m.status === "failed";
@@ -2123,7 +2174,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       if (!g) { g = { key: key, items: [] }; groups.push(g); }
       g.items.push(m);
     });
-    listEl.innerHTML = groups.map(g =>
+    listEl.innerHTML = draftList + groups.map(g =>
       '<div class="folder-group">' +
         '<div class="folder-group-head" title="' + esc(g.key || "没有选文件夹的旧会诊") + '">' + esc(g.key ? folderName(g.key) : "其他") + '</div>' +
         g.items.map(itemHtml).join("") +
@@ -2161,13 +2212,15 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     document.getElementById("active-mission-badge").textContent = missionStatusText(cur);
     const actEl = document.getElementById("conv-actions");
     if (cur) {
-      const closedCur = cur.status === "completed" || cur.status === "cancelled" || cur.status === "failed";
+      const sessions = cur.native_sessions || {};
+      const sessionButtons = missionIsOpen(cur) ? Object.keys(PEER_META).map(peer => sessions[peer]
+        ? '<span class="menu-item muted">' + esc(peerLabel(peer)) + ' 专属会话已绑定</span>'
+        : '<button type="button" class="menu-item" data-dedicated-session="' + peer + '">' +
+          esc(peer === "antigravity" ? "复制 Antigravity 绑定指令" : "在 " + peerLabel(peer) + " 里开专属会话") + '</button>'
+      ).join("") : "";
       actEl.innerHTML =
         '<button type="button" class="menu-item" data-rename-mission="' + esc(cur.mission_id) + '">改名</button>' +
-        (closedCur ? "" : ((cur.native_sessions || {}).claude
-          ? '<span class="menu-item muted">Claude 专属会话已绑定</span>'
-          : '<button type="button" class="menu-item" data-dedicated-session="' + esc(cur.mission_id) + '" title="在这个文件夹里新开一个同名 Claude Code 会话，之后这个会诊的消息都交给它">在 Claude 里开专属会话</button>')) +
-        '<div class="menu-sep"></div>';
+        sessionButtons + '<div class="menu-sep"></div>';
     } else {
       actEl.innerHTML = "";
     }
@@ -2410,7 +2463,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 
   function renderUserMsg(u) {
     const targets = (u.targets || []).map(peerLabel).join("、");
-    const meta = u.mode === "auto" ? "自动 · " + (u.reason || ("交给 " + targets)) : "交给 " + targets;
+    const routing = u.mode === "auto" ? "自动 · " + (u.reason || ("交给 " + targets)) : "交给 " + targets;
+    const meta = [INTENT_LABELS[u.intent], routing].filter(Boolean).join(" · ");
     const images = (u.attachments || []).map(image => {
       const url = "/api/attachments/" + encodeURIComponent(image.id);
       return '<button type="button" class="sent-image" data-open-image="' + esc(url) + '" data-image-label="' + esc(image.name) +
@@ -2888,14 +2942,22 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     }
   }
 
-  function activeDraft() {
-    if (!messageDrafts.has(currentDraftKey)) messageDrafts.set(currentDraftKey, {text:"", images:[], receipt:null});
-    return messageDrafts.get(currentDraftKey);
+  function draftFor(key) {
+    if (!messageDrafts.has(key)) {
+      messageDrafts.set(key, {text:"", images:[], targets:[], intent:"", workspace:"", tier:"auto", receipt:null});
+    }
+    return messageDrafts.get(key);
+  }
+
+  function activeDraft() { return draftFor(currentDraftKey); }
+  function isNewDraftKey(key) { return typeof key === "string" && key.startsWith("draft-"); }
+  function draftHasContent(draft) {
+    return !!(draft.text.trim() || draft.images.length || draft.intent || draft.targets.length || draft.receipt);
   }
 
   function selectComposerDraft(mission, hasState) {
     if (!hasState && currentDraftKey === null) return;
-    const next = mission ? mission.mission_id : "new";
+    const next = mission ? mission.mission_id : newDraftKey;
     if (currentDraftKey === next) return;
     const input = document.getElementById("composer-input");
     const previousDraft = activeDraft();
@@ -2903,6 +2965,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     if (currentDraftKey === null) {
       if (!messageDrafts.has(next)) messageDrafts.set(next, previousDraft);
       messageDrafts.delete(null);
+    } else if (isNewDraftKey(currentDraftKey) && !draftHasContent(previousDraft)) {
+      messageDrafts.delete(currentDraftKey);
     }
     currentDraftKey = next;
     input.value = activeDraft().text;
@@ -2913,6 +2977,20 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   function newClientID() {
     return Array.from(crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2,"0")).join("");
   }
+
+  function showNewDraft(key, folder = "") {
+    newDraftKey = key;
+    if (folder) draftFor(key).workspace = folder;
+    composingNew = true;
+    selectedMissionId = null;
+    folderMenuOpen = false;
+    tierMenuOpen = false;
+    if (isNarrowViewport()) sidebarMobileOpen = false;
+    if (appState) renderAll(appState);
+    document.getElementById("composer-input").focus();
+  }
+
+  function isSlashQuery(value) { return /^\/[a-z-]*$/i.test(value); }
 
   function renderDraftAttachments() {
     const items = activeDraft().images;
@@ -2977,6 +3055,13 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     const waiters = (state && state.active_waiters) || {};
     const curMission = getActiveMission(state);
     selectComposerDraft(curMission, !!state);
+    const draft = activeDraft();
+    const sendTargets = draft.targets;
+    const intentChip = document.getElementById("composer-intent");
+    const intentLabel = INTENT_LABELS[draft.intent] || "";
+    intentChip.classList.toggle("hidden", !intentLabel);
+    intentChip.textContent = intentLabel ? intentLabel + " · 下一条消息 ×" : "";
+    intentChip.setAttribute("aria-label", "取消" + intentLabel + "模式");
     renderDraftAttachments();
     renderAccountNotices(state);
     const compact = !curMission;
@@ -2991,9 +3076,9 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 
     const optsEl = document.getElementById("compose-opts");
     if (optsEl) {
-      const tierScope = curMission ? curMission.mission_id : "new";
+      const tierScope = currentDraftKey;
       if (tierSyncedFor !== tierScope) {
-        composeTier = curMission ? tierFromMission(curMission) : "auto";
+        composeTier = curMission ? tierFromMission(curMission) : draft.tier;
         tierSyncedFor = tierScope;
       }
       const tierLabel = (TIERS.find(t => t[0] === composeTier) || TIERS[0])[1];
@@ -3009,7 +3094,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
         optsEl.innerHTML = closedMission ? "" : tierBtnHtml + tierMenuHtml;
       } else {
         const recents = recentFolders(state);
-        if (!composeWorkspace && recents.length) composeWorkspace = recents[0];
+        if (!draft.workspace && recents.length) draft.workspace = recents[0];
+        const composeWorkspace = draft.workspace;
         optsEl.innerHTML =
           '<button type="button" class="folder-btn' + (composeWorkspace ? "" : " missing") + '" data-folder-menu="1" title="' + esc(composeWorkspace || "这个会诊在哪个文件夹里工作") + '">📁 <span class="name">' + esc(composeWorkspace ? folderName(composeWorkspace) : "选择文件夹") + '</span> <span class="caret">▾</span></button>' +
           tierBtnHtml +
@@ -3058,12 +3144,18 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       banner.classList.add("hidden");
     }
     const val = document.getElementById("composer-input").value || "";
-    document.getElementById("btn-send").disabled = sending || (!val.trim() && !activeDraft().images.length);
-
     const pal = document.getElementById("slash-palette");
-    const q = /^\/[a-z]*$/i.test(val) ? val.toLowerCase() : null;
+    const q = isSlashQuery(val) ? val.toLowerCase() : null;
     const showPal = slashOpen || (q !== null && val !== slashDismissed);
-    const matches = showPal ? SLASH_COMMANDS.filter(c => !q || q === "/" || c.cmd.startsWith(q)) : [];
+    const matches = showPal ? SLASH_COMMANDS.filter(c =>
+      (!q || c.cmd.startsWith(q)) && (!c.needsMission || missionIsOpen(curMission)) &&
+      (!c.needsFolder || (curMission && curMission.workspace_path))
+    ) : [];
+    const send = document.getElementById("btn-send");
+    send.disabled = sending || (!val.trim() && !draft.images.length && !matches.length);
+    const sendLabel = matches.length ? "执行指令" : "发送";
+    send.setAttribute("aria-label", sendLabel);
+    send.title = sendLabel + "（Enter）";
     slashIndex = Math.min(slashIndex, Math.max(0, matches.length - 1));
     const commands = matches.map((c, index) =>
       '<button type="button" class="slash-item" id="slash-command-' + index + '" data-slash-act="' + c.action +
@@ -3360,21 +3452,22 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     const photos = draft.images.slice();
     if ((!text && !photos.length) || sending) return;
     const cur = getActiveMission(appState);
-    if (!cur && !composeWorkspace) {
+    if (!cur && !draft.workspace) {
       folderMenuOpen = true;
       renderComposerBar(appState);
       showToast("先选择这个会诊要在哪个文件夹里工作");
       return;
     }
-    const open = cur && !(cur.status === "completed" || cur.status === "cancelled" || cur.status === "failed");
+    const open = missionIsOpen(cur);
     const path = open ? "/api/missions/" + encodeURIComponent(cur.mission_id) + "/message" : "/api/conversations";
-    const recipients = sendTargets.slice();
-    const folder = cur ? (cur.workspace_path || "") : composeWorkspace;
+    const recipients = draft.targets.slice();
+    const folder = (cur && cur.workspace_path) || draft.workspace || (!open && recentFolders(appState)[0]) || "";
+    const intent = draft.intent;
     const payload = {
-      text, targets: recipients, tier: composeTier,
+      text, targets: recipients, tier: composeTier, intent,
       attachments:photos.map(image => ({id:image.id, name:image.file.name || "剪贴板图片"}))
     };
-    if (!open) payload.workspace = folder || composeWorkspace;
+    if (!open) payload.workspace = folder;
     const wire = JSON.stringify([path,payload]);
     if (!draft.receipt || draft.receipt.wire !== wire) draft.receipt = {wire, id:newClientID()};
     payload.client_request_id = draft.receipt.id;
@@ -3406,6 +3499,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       if (!res.ok) { restoreDraft(); showToast(data.error || ("发送失败（HTTP " + res.status + "）")); return; }
       accepted = true;
       draft.receipt = null;
+      if (draft.intent === intent) draft.intent = "";
       const sentIDs = new Set(photos.map(image => image.id));
       draft.images = draft.images.filter(image => !sentIDs.has(image.id));
       photos.forEach(image => URL.revokeObjectURL(image.preview));
@@ -3431,7 +3525,16 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     }
   }
 
-  document.getElementById("btn-send").addEventListener("click", sendMessage);
+  document.getElementById("btn-send").addEventListener("click", () => {
+    const selected = document.querySelector('#slash-palette:not(.hidden) [aria-selected="true"]');
+    if (selected) selected.click();
+    else sendMessage();
+  });
+  document.getElementById("composer-intent").addEventListener("click", () => {
+    activeDraft().intent = "";
+    renderComposerBar(appState);
+    document.getElementById("composer-input").focus();
+  });
   document.getElementById("dismiss-account-notice").addEventListener("click", () => {
     for (const [peer, text] of accountNotices) dismissedAccountNotices.set(peer, text);
     renderAccountNotices(appState);
@@ -3548,10 +3651,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     }
   });
   document.getElementById("new-chat-btn").addEventListener("click", () => {
-    composingNew = true;
-    selectedMissionId = null;
-    if (appState) renderAll(appState);
-    document.getElementById("composer-input").focus();
+    showNewDraft("draft-" + newClientID());
   });
 
   document.addEventListener("click", ev => {
@@ -3581,6 +3681,11 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       composingNew = false;
       if (isNarrowViewport()) sidebarMobileOpen = false;
       if (appState) renderAll(appState);
+      return;
+    }
+    const draftBtn = ev.target.closest("[data-select-draft]");
+    if (draftBtn) {
+      showNewDraft(draftBtn.dataset.selectDraft);
       return;
     }
 
@@ -3664,7 +3769,10 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       const act = slashActBtn.getAttribute("data-slash-act");
       slashOpen = false;
       const inp = document.getElementById("composer-input");
-      if (/^\/[a-z]*$/i.test(inp.value)) inp.value = "";
+      if (isSlashQuery(inp.value)) {
+        inp.value = "";
+        activeDraft().text = "";
+      }
       slashDismissed = inp.value;
       if (act === "focus_mission") {
         if (isNarrowViewport()) sidebarMobileOpen = true;
@@ -3676,22 +3784,29 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
         openPanel(act.slice(4), false);
       } else if (act === "export_md") {
         exportMissionMarkdown();
-      } else if (act === "new_chat") {
-        composingNew = true;
-        selectedMissionId = null;
-        if (appState) renderAll(appState);
+      } else if (act === "new_chat" || act === "fork_chat") {
+        const mission = getActiveMission(appState);
+        showNewDraft("draft-" + newClientID(), act === "fork_chat" && mission ? mission.workspace_path : "");
+        return;
+      } else if (act === "parallel") {
+        activeDraft().targets = Object.keys(PEER_META);
+      } else if (act.startsWith("intent:")) {
+        activeDraft().intent = act.slice(7);
+      } else if (act.startsWith("session:")) {
+        openDedicatedSession(getActiveMission(appState), act.slice(8));
       }
       renderComposerBar(appState);
-      if (act === "new_chat" || act === "focus_mission" || act === "export") inp.focus();
+      if (!act.startsWith("tab:")) inp.focus();
       return;
     }
 
     const sendTargetBtn = ev.target.closest("[data-send-target]");
     if (sendTargetBtn) {
       const tgt = sendTargetBtn.getAttribute("data-send-target");
-      if (tgt === "auto") sendTargets = [];
-      else if (sendTargets.indexOf(tgt) >= 0) sendTargets = sendTargets.filter(x => x !== tgt);
-      else sendTargets = sendTargets.concat([tgt]);
+      const draft = activeDraft();
+      if (tgt === "auto") draft.targets = [];
+      else if (draft.targets.includes(tgt)) draft.targets = draft.targets.filter(x => x !== tgt);
+      else draft.targets.push(tgt);
       renderComposerBar(appState);
       return;
     }
@@ -3721,7 +3836,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     }
     const pickFolderBtn = ev.target.closest("[data-pick-folder]");
     if (pickFolderBtn) {
-      composeWorkspace = pickFolderBtn.getAttribute("data-pick-folder");
+      activeDraft().workspace = pickFolderBtn.getAttribute("data-pick-folder");
       folderMenuOpen = false;
       renderComposerBar(appState);
       return;
@@ -3736,6 +3851,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     const tierBtn = ev.target.closest("[data-tier]");
     if (tierBtn) {
       composeTier = tierBtn.getAttribute("data-tier");
+      activeDraft().tier = composeTier;
       tierMenuOpen = false;
       renderComposerBar(appState);
       return;
@@ -3755,13 +3871,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     }
     const dedicatedBtn = ev.target.closest("[data-dedicated-session]");
     if (dedicatedBtn) {
-      const dmid = dedicatedBtn.getAttribute("data-dedicated-session");
-      const dm = ((appState && appState.missions) || []).find(x => x.mission_id === dmid) || {};
-      const prompt = "接管 Consilium 会诊「" + (dm.title || dmid) + "」（mission_id=" + dmid + "）：" +
-        "先用 get_session(\"self\") 拿到你自己的会话 id，再调用 consilium_bind_session(mission_id=\"" + dmid + "\", peer_id=\"claude\", session_ref=<你的会话 id>)；" +
-        "然后用 consilium_status(mission_id=\"" + dmid + "\") 读一下会诊内容。之后待命会话会把这个会诊的新消息转给你，按 consilium-collab 技能第 3 节处理，用 consilium_complete_task 回复。";
-      const url = buildHandoffDeeplink("claude", prompt, dm.workspace_path || "");
-      if (url) { window.location.href = url; showToast("已打开 Claude 新会话，按一次发送它就会接管这个会诊"); }
+      openDedicatedSession(getActiveMission(appState), dedicatedBtn.dataset.dedicatedSession);
       return;
     }
 

@@ -47,3 +47,15 @@ The composer MUST expose the existing local slash commands through a visible tri
 #### Scenario: Text starts with an unrecognized slash command
 - **WHEN** no slash menu command is selected or matched and the user explicitly sends the text
 - **THEN** the composer MUST allow ordinary message submission without treating the text as a local action.
+
+#### Scenario: Several conversations are composed in the same window
+- **WHEN** the user creates a new conversation or starts one in the current conversation's folder
+- **THEN** the composer MUST create an independent draft and keep existing drafts available in the conversation list.
+
+#### Scenario: Parallel routing or a native session is chosen
+- **WHEN** the user selects parallel routing or opens a peer's dedicated-session command
+- **THEN** the composer MUST select all three recipients for parallel routing or offer the selected peer's workspace-aware binding flow, preserving existing bindings.
+
+#### Scenario: The user selects plan or goal
+- **WHEN** a message is sent with plan or goal mode selected
+- **THEN** the UI MUST preserve the original message text, display the chosen mode, and deliver corresponding task instructions. The composer MUST clear the mode only after successful delivery or user cancellation.

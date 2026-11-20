@@ -1630,22 +1630,27 @@ class ConsiliumDaemon:
         tier: Optional[str] = None,
         attachments: Any = None,
         client_request_id: str = "",
+        intent: str = "",
     ) -> Dict[str, Any]:
         """Commit a user message once even when the client retries after disconnection."""
         request_id = str(client_request_id or "").strip()
-        request = json.dumps([text, targets, mission_id, workspace_hint, new_session, tier, attachments],
-                             ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if intent not in ("", "plan", "goal"):
+            raise ValueError("不支持的消息模式")
+        request_fields = [text, targets, mission_id, workspace_hint, new_session, tier, attachments]
+        if intent:
+            request_fields.append(intent)
+        request = json.dumps(request_fields, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         request_hash = hashlib.sha256(request.encode("utf-8")).hexdigest() if request_id else ""
         with self._ui_send_lock:
             cached = self.dispatcher.store.find_ui_message(request_id, request_hash)
             if cached is not None:
                 return cached
             return self._ui_send(text, targets, mission_id, workspace_hint, new_session, tier,
-                                 attachments, request_id, request_hash)
+                                 attachments, request_id, request_hash, intent)
 
     def _ui_send(
         self, text: str, targets: Any, mission_id: Optional[str], workspace_hint: str,
-        new_session: bool, tier: Optional[str], attachments: Any, request_id: str, request_hash: str,
+        new_session: bool, tier: Optional[str], attachments: Any, request_id: str, request_hash: str, intent: str,
     ) -> Dict[str, Any]:
         body = str(text or "").strip()
         images = self.images.describe(attachments)
@@ -1687,12 +1692,19 @@ class ConsiliumDaemon:
         image_paths = self.images.native_paths(images)
 
         def _wrap(prompt: str) -> str:
-            if not image_paths:
-                return prompt
-            return prompt + "\n\n【使用者附图】请读取以下本机图片后回复：\n" + "\n".join(image_paths)
+            if intent == "plan":
+                prompt = ("【计划模式】只做调查和规划。给出步骤、关键决策和验证方式。保持文件与外部状态原样，"
+                          "提交计划后等待使用者确认，再开始执行。\n\n" + prompt)
+            elif intent == "goal":
+                prompt = ("【目标模式】使用者要求以这条消息作为执行目标。明确完成条件，持续推进直到达成并验证，"
+                          "或遇到需使用者解决的阻塞。当前客户端支持目标工具时，用真实目标创建记录；"
+                          "否则按相同完成条件执行并报告。\n\n" + prompt)
+            if image_paths:
+                prompt += "\n\n【使用者附图】请读取以下本机图片后回复：\n" + "\n".join(image_paths)
+            return prompt
 
         def message(recipients: List[str], reason: str) -> Dict[str, Any]:
-            return {"text": body, "targets": recipients, "mode": mode, "reason": reason, "attachments": images,
+            return {"text": body, "targets": recipients, "mode": mode, "reason": reason, "attachments": images, "intent": intent,
                     "ui_request_id": request_id, "ui_request_hash": request_hash}
 
         events: List[Dict[str, Any]] = []
@@ -2421,6 +2433,7 @@ class ConsiliumDaemon:
                             tier=(str(payload.get("tier") or "") if "tier" in payload else None),
                             attachments=payload.get("attachments"),
                             client_request_id=str(payload.get("client_request_id") or ""),
+                            intent=str(payload.get("intent") or ""),
                         )
                         self._send_json(200, {"committed": True, "result": res})
                     except ConflictError as exc:

@@ -303,7 +303,9 @@ class R017RegressionsTests(unittest.TestCase):
 
         html = render_dashboard_html("0.1.0")
         for needle in ("data-folder-menu", "data-open-folder-picker", "选择文件夹…", "pickFolder", "__consiliumFolderPicked",
-                       "data-tier", "data-rename-mission", "data-archive-mission", "data-dedicated-session", "在 Claude 里开专属会话", "folder-group", "已归档",
+                       "data-tier", "data-rename-mission", "data-archive-mission", "data-dedicated-session",
+                       "为当前会诊打开 Claude 专属会话", "为当前会诊打开 Codex 专属会话",
+                       "复制 Antigravity 专属会话绑定指令", "folder-group", "已归档",
                        "data-start-standby", "让它们待命"):
             self.assertIn(needle, html)
         for gone in ("compose-ws-input", "data-edit-workspace", "新开会话处理", "工作区绝对路径", "/Users/…/项目文件夹"):

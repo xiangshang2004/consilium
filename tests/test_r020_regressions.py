@@ -140,7 +140,9 @@ class R020RegressionsTests(unittest.TestCase):
         self.assertNotIn("esc(cur.mission_id) + '\"' + (cur.archived", html, "archive left the top-right menu")
         self.assertEqual(html.count('scope=\\"consilium\\"'), 5, "standby prompts wait and pick up only for the window's work")
         self.assertIn("--session-label claude-standby --scope consilium --timeout 86400", html)
-        self.assertNotIn("<button type=\"button\" class=\"mission-item", html, "no button nested inside a button")
+        mission_row = html[html.index("const itemHtml = m =>"):html.index("const live = missions.filter")]
+        self.assertIn('<div role="button" tabindex="0" class="mission-item', mission_row)
+        self.assertNotIn('<button type="button" class="mission-item', mission_row, "archive must not nest inside a button")
 
     def test_composer_ignores_ime_enter_clears_on_send_and_follows_the_latest_message(self) -> None:
         html = render_dashboard_html("0.1.0")
