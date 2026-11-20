@@ -23,7 +23,7 @@
 - [x] 2.2 Record delivery/wakeup metadata on events so dashboard displays hot/cold badges and ms wakeup latency.
 - [x] 2.3 Write unit/wire tests for dashboard API shape, cookie auth, Host/Origin checks, write actions, and ordered SSE streaming.
 - [x] 2.4 Drive dashboard live with Level-A demo script, capture Light & Dark mode screenshots (and live progression evidence) into `13_Consilium/03_演示记录/`, commit cleanly (author `2084413277`), and write `reviews/R007-antigravity-dashboard.md`.
-- [ ] ★ **Gate 2**: User reviews Light & Dark screenshots and confirms dashboard appearance.
+- [x] ★ **Gate 2**: User reviews Light & Dark screenshots and confirms dashboard appearance. (2026-11-20: approved `2026-11-20` minimalist chat `/ui` screenshots; user requested keeping Claude informed to review/guide subsequent UI optimizations.)
 
 ## Stage 2.5: R008/R009 Remediation & Closed-Loop Sync (R010, Before Crossing Gates 1 & 2)
 - [x] 2.5.1 Harden truth & wakeup layers: move `.seq` lock to `<rendezvous_dir>/.<peer>.seq.lock`, single-snapshot `query_peer_seq_counts`, `OSError(ENOENT|EINVAL)` retries, atomic `.lease`, strictly read-only `wait`, `attempt_id` fencing + `attempt_history`, `task_stale` for expired `running` tasks on background `_reaper_thread`, scoped `idempotency_keys` (`ConflictError`/409), `consilium_requeue_task`, and `delivery.warnings` post-commit fault isolation.
