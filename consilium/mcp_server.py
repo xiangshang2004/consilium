@@ -36,6 +36,7 @@ from consilium.models import (
     VALID_MISSION_CLOSE_STATUSES,
     VALID_MODEL_TIERS,
     VALID_PEERS,
+    USER_PEER,
     ensure_auth_token,
     read_auth_token,
     resolve_rendezvous_dir,
@@ -71,6 +72,8 @@ def _parse_bool(args: Dict[str, Any], key: str, default: bool) -> bool:
 def _safe_ring_peer(**kwargs: Any) -> Dict[str, Any]:
     """Invoke ring_peer without letting notification errors fail an already-committed DB write."""
     peer_id = str(kwargs.get("peer_id", ""))
+    if peer_id == USER_PEER:
+        return {"delivery": "ui", "peer_id": USER_PEER}
     store = kwargs.get("store")
     event_ids = kwargs.get("event_ids")
     if store is not None and event_ids and kwargs.get("on_escalate") is None:
@@ -239,6 +242,75 @@ def _deliver_reaper_notifications(
                     warnings.append(w)
     return warnings
 
+PEER_LABELS = {"claude": "Claude", "chatgpt": "Codex", "antigravity": "Antigravity", USER_PEER: "使用者"}
+
+
+def peer_quota_digest(store: BusStore, rendezvous_dir: str) -> List[Dict[str, Any]]:
+    """Compact per-peer standby + current-account quota view for routing and handoff decisions."""
+    waiters = query_active_waiters(rendezvous_dir) or {}
+    quotas = {q["peer_id"]: q for q in store.list_quota_windows()["peers"]}
+    out: List[Dict[str, Any]] = []
+    for pid in ("claude", "chatgpt", "antigravity"):
+        q = quotas.get(pid) or {}
+        unknown = bool(q.get("current_account_unknown") or q.get("account_switch_suspected")) or (
+            q.get("min_remaining_percent") is None
+        )
+        out.append(
+            {
+                "peer_id": pid,
+                "label": PEER_LABELS[pid],
+                "standby": int(waiters.get(pid, 0) or 0) > 0,
+                "remaining_percent": None if unknown else q.get("min_remaining_percent"),
+                "exhausted": bool(q.get("exhausted")) and not unknown,
+                "switch_hint": q.get("switch_hint") or "",
+            }
+        )
+    return out
+
+
+def choose_auto_coordinator(digest: List[Dict[str, Any]]) -> str:
+    """Pick the peer that should coordinate an un-addressed message: standby first, then quota."""
+    best, best_score = "claude", None
+    for rank, item in enumerate(digest):
+        if item["exhausted"]:
+            continue
+        rem = item["remaining_percent"]
+        score = (2 if item["standby"] else 0) + (1 if rem is None or rem >= 20 else 0) - rank * 0.01
+        if best_score is None or score > best_score:
+            best, best_score = item["peer_id"], score
+    return best
+
+
+def _quota_line(item: Dict[str, Any]) -> str:
+    rem = item["remaining_percent"]
+    rem_txt = "余量未知" if rem is None else f"余量 {round(float(rem))}%"
+    state = "待命中" if item["standby"] else "未待命"
+    return f"- {item['label']}（{item['peer_id']}）：{state}，{rem_txt}" + ("，已耗尽" if item["exhausted"] else "")
+
+
+def build_auto_coordinator_prompt(
+    text: str, coordinator: str, digest: List[Dict[str, Any]], preferences: List[Dict[str, Any]],
+    routing: List[Dict[str, Any]],
+) -> str:
+    pref_lines = "\n".join(f"- {p['text']}" for p in preferences) or "- （还没有记录）"
+    route_lines = "\n".join(
+        f"- 「{r['text'][:60]}」→ {', '.join(PEER_LABELS.get(t, t) for t in r['targets'])}" for r in routing[:8]
+    ) or "- （还没有记录）"
+    return (
+        f"{text}\n\n"
+        "———— 以上是使用者的原话 ————\n"
+        f"你是这次会诊的协调者（使用者没有点名，由你自动分配）。\n"
+        "1. 先判断自己做还是拆分：需要另一端时，用 consilium_dispatch_task 把子任务派给它（chatgpt=Codex，antigravity=Antigravity，claude=Claude），"
+        "优先派给待命中、余量充足的一端；余量未知可以照常派，已耗尽的不要派。\n"
+        "2. 收齐结果后，用 consilium_complete_task 交付你自己的这个任务：result_summary 直接写给使用者看的最终回答。\n"
+        "3. 如果这次看出使用者稳定的习惯（例如某类事固定交给谁、喜欢的回答方式），用 consilium_learn_preference 记一句话；不确定就不记。\n"
+        "4. 你自己的额度快用完时，用 consilium_handoff_task 把任务连同进度交给另一端。切换账号由使用者手动完成，需要时在回答里提醒。\n\n"
+        f"【各端状态】\n" + "\n".join(_quota_line(i) for i in digest) + "\n\n"
+        f"【使用者偏好】\n{pref_lines}\n\n"
+        f"【使用者最近的点名分配】\n{route_lines}"
+    )
+
+
 TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "name": "consilium_status",
@@ -362,6 +434,38 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "peer_id": {"type": "string", "enum": list(VALID_PEERS)},
                 "reason": {"type": "string"},
                 "client_request_id": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "consilium_preferences",
+        "description": "Read the user's learned preferences, recent explicit routing choices, and each peer's standby/quota digest before deciding who should do what.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "consilium_learn_preference",
+        "description": "Record one short, stable preference of the user (e.g. 'code review goes to Codex'). The user can see and delete it. Do not record guesses.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["peer_id", "text"],
+            "properties": {
+                "peer_id": {"type": "string", "enum": list(VALID_PEERS)},
+                "text": {"type": "string", "maxLength": 300},
+            },
+        },
+    },
+    {
+        "name": "consilium_handoff_task",
+        "description": "Hand your active task (with the current attempt_id) to another peer, e.g. when your quota is low. The note must say what is done so far and why.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["task_id", "peer_id", "attempt_id", "to_peer", "note"],
+            "properties": {
+                "task_id": {"type": "string"},
+                "peer_id": {"type": "string", "enum": list(VALID_PEERS)},
+                "attempt_id": {"type": "string"},
+                "to_peer": {"type": "string", "enum": list(VALID_PEERS)},
+                "note": {"type": "string"},
             },
         },
     },
@@ -881,6 +985,54 @@ class ConsiliumMCPDispatcher:
                 _safe_save_idempotency_delivery(self.store, client_req_id, delivery)
             return {**res, "committed": True, "result": res, "delivery": delivery}
 
+        if name == "consilium_preferences":
+            try:
+                sync_local_quotas(self.store)
+            except Exception:
+                pass
+            return {
+                "preferences": self.store.list_preferences(),
+                "recent_user_routing": self.store.recent_user_routing(),
+                "peers": peer_quota_digest(self.store, self.rendezvous_dir),
+            }
+
+        if name == "consilium_learn_preference":
+            res = self.store.add_preference(str(args["text"]), source=str(args["peer_id"]))
+            pub_warn = self._emit_mutation("learn_preference")
+            return {"committed": True, "result": res, "delivery": {"warnings": [pub_warn] if pub_warn else []}}
+
+        if name == "consilium_handoff_task":
+            res = self.store.handoff_task(
+                task_id=str(args["task_id"]),
+                peer_id=str(args["peer_id"]),
+                attempt_id=str(args["attempt_id"]),
+                to_peer=str(args["to_peer"]),
+                note=str(args["note"]),
+            )
+            eid = int(res["event"]["event_id"])
+            ring_ms = time.time() * 1000.0
+            target = res["task"]["assignee_peer"]
+            delivery = _safe_ring_peer(
+                store=self.store,
+                home_dir=self.rendezvous_dir,
+                peer_id=target,
+                title="Consilium 交接",
+                body=f"{PEER_LABELS.get(str(args['peer_id']), args['peer_id'])} 把任务交给了你",
+                pickup_prompt=f"Use consilium_pickup_inbox(peer_id={target!r}) to claim handed-off task {args['task_id']}.",
+                event_ids=[eid],
+            )
+            rec = []
+            rw = _safe_record_event_delivery(self.store, [eid], delivery, ring_sent_at_ms=ring_ms)
+            if rw:
+                rec.append(rw)
+            pub_warn = self._emit_mutation("handoff_task")
+            if pub_warn:
+                rec.append(pub_warn)
+            warns = _collect_post_commit_warnings(res.get("post_commit_warnings"), delivery, rec)
+            if warns:
+                delivery["warnings"] = warns
+            return {**res, "committed": True, "result": res, "delivery": delivery}
+
         if name == "consilium_request_review":
             client_req_id = args.get("client_request_id")
             res = self.store.request_review(
@@ -1302,6 +1454,121 @@ class ConsiliumDaemon:
         actions = {str(r.get("reaper_action") or "requeued") for r in released}
         reason = "reaper_stale" if actions == {"marked_stale"} else "reaper_requeued"
         self.publish_state_update(reason)
+
+    def ui_send(
+        self, text: str, targets: Any, mission_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Send a message typed in the dashboard: @-mentioned peers get it directly; no mention = auto."""
+        body = str(text or "").strip()
+        if not body:
+            raise ValueError("message must not be empty")
+        if len(body) > 20000:
+            raise ValueError("message too long (max 20000 characters)")
+        if targets is None:
+            targets = []
+        if not isinstance(targets, list):
+            raise ValueError("targets must be a list")
+        chosen: List[str] = []
+        for t in targets:
+            pid = str(t or "").strip().lower()
+            if pid not in VALID_PEERS:
+                raise ValueError(f"Unknown target {t!r}")
+            if pid not in chosen:
+                chosen.append(pid)
+        store = self.dispatcher.store
+        try:
+            sync_local_quotas(store)
+        except Exception:
+            pass
+        digest = peer_quota_digest(store, self.rendezvous_dir)
+        title = body.splitlines()[0][:40]
+        mode = "direct" if chosen else "auto"
+        events: List[Dict[str, Any]] = []
+
+        if mission_id is None:
+            if chosen:
+                coordinator = USER_PEER
+                task_specs = [{"assignee_peer": pid, "prompt": body, "origin": "user"} for pid in chosen]
+            else:
+                coordinator = choose_auto_coordinator(digest)
+                prompt = build_auto_coordinator_prompt(
+                    body, coordinator, digest, store.list_preferences(), store.recent_user_routing()
+                )
+                task_specs = [{"assignee_peer": coordinator, "prompt": prompt, "origin": "user"}]
+            res = store.create_mission(
+                title=title,
+                goal=body,
+                coordinator_peer=coordinator,
+                isolation_policy="shared",
+                tasks=task_specs,
+                allow_user_coordinator=True,
+                user_message={"text": body, "targets": chosen or [coordinator], "mode": mode},
+            )
+            mid = res["mission"]["mission_id"]
+            events = list(res.get("events") or [])
+            warnings = list(res.get("post_commit_warnings") or [])
+        else:
+            snap = store.get_mission_snapshot(mission_id=mission_id)
+            mission = snap.get("mission") or {}
+            if mission.get("status") in VALID_MISSION_CLOSE_STATUSES:
+                raise ValueError("这个会诊已经关闭，请新开一个")
+            mid = mission_id
+            coord = mission.get("coordinator_peer") or USER_PEER
+            if chosen:
+                plan = [(pid, body) for pid in chosen]
+            elif coord != USER_PEER:
+                plan = [(coord, f"【使用者追问】\n{body}\n\n（你是这次会诊的协调者，按需继续分配，最后交付给使用者。）")]
+            else:
+                pick = choose_auto_coordinator(digest)
+                plan = [(pick, build_auto_coordinator_prompt(
+                    body, pick, digest, store.list_preferences(), store.recent_user_routing()
+                ))]
+            warnings = []
+            for idx, (pid, prompt) in enumerate(plan):
+                r = store.dispatch_task(
+                    mission_id=mid,
+                    assignee_peer=pid,
+                    prompt=prompt,
+                    origin="user",
+                    user_message=(
+                        {"text": body, "targets": chosen or [plan[0][0]], "mode": mode} if idx == 0 else None
+                    ),
+                )
+                events.append(r["event"])
+                warnings.extend(r.get("post_commit_warnings") or [])
+
+        deliveries: List[Dict[str, Any]] = []
+        for evt in events:
+            eid = int(evt["event_id"])
+            pid = evt["to_peer"]
+            ring_ms = time.time() * 1000.0
+            receipt = _safe_ring_peer(
+                store=store,
+                home_dir=self.rendezvous_dir,
+                peer_id=pid,
+                title="Consilium 新消息",
+                body=f"使用者：{title}",
+                pickup_prompt=(
+                    f"Use consilium_pickup_inbox(peer_id={pid!r}) to claim the new Consilium message, "
+                    "then follow the consilium-collab skill."
+                ),
+                event_ids=[eid],
+            )
+            rw = _safe_record_event_delivery(store, [eid], receipt, ring_sent_at_ms=ring_ms)
+            if rw:
+                warnings.append(rw)
+            deliveries.append(receipt)
+        try:
+            self.publish_state_update("ui_send")
+        except Exception as exc:
+            warnings.append(f"publish_state_update: {exc}")
+        return {
+            "mission_id": mid,
+            "mode": mode,
+            "targets": [e["to_peer"] for e in events],
+            "deliveries": deliveries,
+            "warnings": [w for w in warnings if w],
+        }
 
     def run_reaper_once(self) -> List[Dict[str, Any]]:
         """Re-queue stale claimed tasks, mark stale running tasks, and notify peers."""
@@ -1828,6 +2095,55 @@ class ConsiliumDaemon:
                             )
                         },
                     )
+                    return
+
+                if route == "/api/conversations" or (
+                    route.startswith("/api/missions/") and route.endswith("/message")
+                ):
+                    ok_sec, auth_mode, session_rec, _ver = self._check_security(allow_cookie=True)
+                    if not ok_sec or auth_mode is None:
+                        return
+                    if not self._check_cookie_write_csrf(auth_mode, session_rec):
+                        return
+                    ok, payload = self._read_json_body()
+                    if not ok:
+                        return
+                    if not isinstance(payload, dict):
+                        self._send_json(400, {"error": "Expected JSON object"})
+                        return
+                    target_mid = None
+                    if route != "/api/conversations":
+                        target_mid = urllib.parse.unquote(route[len("/api/missions/") : -len("/message")])
+                    try:
+                        res = daemon.ui_send(
+                            str(payload.get("text") or ""), payload.get("targets") or [], target_mid
+                        )
+                        self._send_json(200, {"committed": True, "result": res})
+                    except KeyError as exc:
+                        self._send_json(404, {"error": str(exc)})
+                    except ValueError as exc:
+                        self._send_json(400, {"error": str(exc)})
+                    return
+
+                if route.startswith("/api/preferences/") and route.endswith("/delete"):
+                    ok_sec, auth_mode, session_rec, _ver = self._check_security(allow_cookie=True)
+                    if not ok_sec or auth_mode is None:
+                        return
+                    if not self._check_cookie_write_csrf(auth_mode, session_rec):
+                        return
+                    if not self._consume_optional_body():
+                        return
+                    raw_id = route[len("/api/preferences/") : -len("/delete")]
+                    if not raw_id.isdigit():
+                        self._send_json(400, {"error": "Invalid preference id"})
+                        return
+                    removed = daemon.dispatcher.store.deactivate_preference(int(raw_id))
+                    if removed:
+                        try:
+                            daemon.publish_state_update("ui_delete_preference")
+                        except Exception:
+                            pass
+                    self._send_json(200 if removed else 404, {"committed": removed})
                     return
 
                 if route.startswith("/api/missions/") and route.endswith("/close"):
