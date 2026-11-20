@@ -64,7 +64,7 @@ The Consilium window works like the Claude Code desktop app: **the user picks a 
 **Routing (standby sessions)**:
 1. `native_session` is set: the user opened a dedicated session for this conversation. Forward the task to it (Claude Code: `SendMessage` to that session id with `task_id`, `attempt_id`, `peer_id` and the prompt) and keep standing by. If that session no longer exists, handle the task yourself as in step 2.
 2. Otherwise handle it yourself. The task's `conversation` field holds this conversation's earlier turns (the user's messages and each peer's replies, oldest first): read it so follow-ups stay in context. Work inside `workspace_path`. Do **not** start new sessions from a standby turn: Claude Desktop does not allow an automatically woken turn to start sessions. The user starts a dedicated session from the Consilium window ("在 Claude 里开专属会话") when they want one.
-3. Whoever does the work reports progress with `model_used` and answers with `consilium_complete_task` (the `result_summary` is what the user reads, in their language).
+3. Whoever does the work reports progress with `model_used` and `effort_used` (your reasoning effort, e.g. `high`; omit if your app has none) and answers with `consilium_complete_task` (the `result_summary` is what the user reads, in their language).
 4. A dedicated session opened from the Consilium window binds itself first: get its own session id (`get_session("self")`), call `consilium_bind_session(mission_id, peer_id, <id>)`, read the conversation with `consilium_status(mission_id)`, then handle forwarded tasks as in step 3.
 
 **Coordinating auto-routed messages** (the prompt says you are the coordinator): call `consilium_preferences` first; do it yourself or split it with `consilium_dispatch_task` (prefer peers on standby with quota; never an exhausted one); give the conversation a short title with `consilium_set_title` (at most 20 Chinese characters; ignored if the user renamed it); deliver the final answer with `consilium_complete_task`.
@@ -73,6 +73,8 @@ The Consilium window works like the Claude Code desktop app: **the user picks a 
 - A standby session serves the Consilium window only: always call `consilium_pickup_inbox(peer_id=<self>, session_label="<self>-standby", scope="consilium")`. If it returns nothing, re-arm silently and say nothing.
 - A session that created its own mission collects results with `consilium_pickup_inbox(peer_id=<self>, mission_id=<that mission>)` or reads `consilium_status(mission_id)`; it never picks up without `mission_id`, so it cannot claim the user's Consilium messages.
 - Missions created by a session do not appear in the Consilium window. Archiving in the window only hides a conversation there; it never touches a session in Claude, Codex or Antigravity.
+
+**Quota**: remaining quota is synced by Consilium from Cockpit's local records. Do not query, estimate or report your own quota, and do not ask other peers to; read `consilium_preferences` / `consilium_quota` when you need it.
 
 **Learning**: record a clearly stable habit of the user in one sentence with `consilium_learn_preference`; never record guesses. The user can delete any preference.
 

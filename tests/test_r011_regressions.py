@@ -395,8 +395,11 @@ class R011RegressionsTests(unittest.TestCase):
 
         by_peer = {p["peer_id"]: p for p in res["peers"]}
         gpt = by_peer["chatgpt"]
-        self.assertTrue(gpt["account_switch_suspected"])
-        self.assertIsNone(gpt["min_remaining_percent"])
+        # An hour-old Cockpit record is shown with its age, not hidden; it does not drive dispatch.
+        self.assertFalse(gpt["account_switch_suspected"])
+        self.assertTrue(gpt["quota_stale"])
+        self.assertGreaterEqual(gpt["sample_age_seconds"], 3600)
+        self.assertEqual(gpt["min_remaining_percent"], 88.0)
         self.assertIsNone(gpt["dispatch_recommended"])
 
         ag = by_peer["antigravity"]

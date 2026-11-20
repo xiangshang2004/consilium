@@ -344,6 +344,7 @@ def build_dashboard_state(
         "missions": missions,
         "preferences": store.list_preferences(),
         "peer_models": store.latest_model_by_peer(),
+        "peer_efforts": store.latest_effort_by_peer(),
         "latest_event_id": latest_event_id,
         "server_time": utc_now_iso(),
     }
@@ -1425,7 +1426,10 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 .dock-ic i.on { background: var(--status-standby); }
 .dock-ic i.busy { background: var(--status-working); }
 .dock-name { font-size: 13px; font-weight: 550; line-height: 1.25; display: block; }
-.dock-sub { font-size: 11.5px; color: var(--text-muted); line-height: 1.3; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dock-sub { font-size: 11.5px; color: var(--text-muted); line-height: 1.35; display: block; white-space: normal; overflow-wrap: break-word; }
+/* Model and effort get their own full-width line so a long name is never hidden behind the ring or button. */
+.dock-model { grid-column: 1 / -1; padding: 0 6px 4px 39px; margin-top: -3px; font-size: 11.5px; line-height: 1.35; color: var(--text-muted); overflow-wrap: break-word; cursor: pointer; }
+.dock-ring.stale { opacity: 0.5; }
 .dock-side { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; padding-right: 4px; }
 .dock-ring { width: 22px; height: 22px; transform: rotate(-90deg); }
 .dock-ring circle { fill: none; stroke-width: 3.2; }
@@ -1708,9 +1712,9 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     renderComposerBar(appState);
     document.getElementById("composer-input").focus();
   };
-  const AG_STANDBY_PROMPT = "请作为 Consilium 的 Antigravity 待命端（peer_id=antigravity）：反复调用 consilium_wait(peer_id=\"antigravity\", timeout_sec=300)；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"antigravity\", session_label=\"antigravity-standby\", scope=\"consilium\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used）；超时没消息就继续等。每轮少说话，不要停下来问我。";
-  const CODEX_STANDBY_PROMPT = "请作为 Consilium 的 Codex 待命端（peer_id=chatgpt）：反复调用 consilium_wait(peer_id=\"chatgpt\", timeout_sec=300)；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"chatgpt\", session_label=\"chatgpt-standby\", scope=\"consilium\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used）；超时没消息就继续等。每轮少说话，不要停下来问我。";
-  const STANDBY_PROMPT = "请作为 Consilium 的 Claude 常驻待命端：先读 ~/.claude/skills/consilium-collab/SKILL.md 第 2、3 节；用 run_in_background 运行 `PYTHONPATH=/Applications/Consilium.app/Contents/Resources/python /usr/bin/python3 -B -m consilium.cli wait --peer claude --session-label claude-standby --timeout 86400`，被唤醒后用 consilium_pickup_inbox(peer_id=\"claude\", session_label=\"claude-standby\", scope=\"consilium\") 取任务（只取 Consilium 窗口里发起的，取到空就直接重新挂上）、处理、用 consilium_complete_task 回复，然后重新挂上等待。不要轮询，每轮少说话。";
+  const AG_STANDBY_PROMPT = "请作为 Consilium 的 Antigravity 待命端（peer_id=antigravity）：反复调用 consilium_wait(peer_id=\"antigravity\", timeout_sec=300)；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"antigravity\", session_label=\"antigravity-standby\", scope=\"consilium\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used 和 effort_used；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步）；超时没消息就继续等。每轮少说话，不要停下来问我。";
+  const CODEX_STANDBY_PROMPT = "请作为 Consilium 的 Codex 待命端（peer_id=chatgpt）：反复调用 consilium_wait(peer_id=\"chatgpt\", timeout_sec=300)；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"chatgpt\", session_label=\"chatgpt-standby\", scope=\"consilium\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used 和 effort_used；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步）；超时没消息就继续等。每轮少说话，不要停下来问我。";
+  const STANDBY_PROMPT = "请作为 Consilium 的 Claude 常驻待命端：先读 ~/.claude/skills/consilium-collab/SKILL.md 第 2、3 节；用 run_in_background 运行 `PYTHONPATH=/Applications/Consilium.app/Contents/Resources/python /usr/bin/python3 -B -m consilium.cli wait --peer claude --session-label claude-standby --timeout 86400`，被唤醒后用 consilium_pickup_inbox(peer_id=\"claude\", session_label=\"claude-standby\", scope=\"consilium\") 取任务（只取 Consilium 窗口里发起的，取到空就直接重新挂上）、处理、用 consilium_complete_task 回复（带上 model_used 和 effort_used；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步），然后重新挂上等待。不要轮询，每轮少说话。";
   let sendTargets = [];
   let sending = false;
   let slashOpen = false;
@@ -2114,6 +2118,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     const waiters = (state && state.active_waiters) || {};
     const peers = (state && state.peers) || [];
     const models = (state && state.peer_models) || {};
+    const efforts = (state && state.peer_efforts) || {};
     const quotas = {};
     ((state && state.quotas) || []).forEach(q => { quotas[q.peer_id] = q; });
     const busyPeers = {};
@@ -2128,15 +2133,18 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       const pct = known ? Math.max(0, Math.min(100, Number(q.min_remaining_percent))) : 0;
       const stTxt = busy ? "处理中" : (standby ? "待命中" : "未待命");
       const outTxt = known && q.exhausted ? ("额度用完" + (q.earliest_reset_in_human ? "，" + q.earliest_reset_in_human + " 后恢复" : "")) : "";
-      const sub = [stTxt].concat(outTxt ? [outTxt] : (models[pid] ? [models[pid]] : [])).concat(q.account_switch_suspected ? ["账号可能已切换"] : []).join(" · ");
+      const modelTxt = [models[pid] || "", efforts[pid] || ""].filter(Boolean).join(" · ");
+      const sub = [stTxt].concat(outTxt ? [outTxt] : []).concat(q.account_switch_suspected ? ["账号可能已切换"] : []).join(" · ");
+      const ageTxt = (known && q.quota_stale && q.sample_age_seconds) ? agoText(q.sample_age_seconds) : "";
       const color = pid === "claude" ? "var(--peer-claude)" : (pid === "chatgpt" ? "var(--peer-chatgpt)" : "var(--peer-antigravity)");
       const ring = known
-        ? '<svg class="dock-ring" viewBox="0 0 24 24" aria-hidden="true"><circle class="bg" cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="9" stroke="' + color + '" stroke-linecap="round" stroke-dasharray="' + (pct * 0.5655).toFixed(1) + ' 56.6"/></svg>' + Math.round(pct) + '%'
+        ? '<svg class="dock-ring' + (q.quota_stale ? " stale" : "") + '" viewBox="0 0 24 24" aria-hidden="true"><circle class="bg" cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="9" stroke="' + color + '" stroke-linecap="round" stroke-dasharray="' + (pct * 0.5655).toFixed(1) + ' 56.6"/></svg>' + Math.round(pct) + '%'
         : "";
       const wake = (!standby && !busy) ? '<button type="button" class="wake-btn" data-start-standby="' + pid + '" title="让它开始待命，之后发给它的消息会自动处理">叫醒</button>' : "";
       const acctTxt = (q.active_account_alias || "") + (q.active_plan_type ? "（" + q.active_plan_type + "）" : "");
       const tip = PEER_META[pid].appName + (acctTxt ? " · " + acctTxt : "") +
-        (known ? " · 余量 " + Math.round(pct) + "%" + (q.earliest_reset_in_human ? "，" + q.earliest_reset_in_human + " 后重置" : "")
+        (modelTxt ? " · " + modelTxt : "") +
+        (known ? " · 余量 " + Math.round(pct) + "%" + (ageTxt ? "（Cockpit " + ageTxt + "的记录）" : "") + (q.earliest_reset_in_human ? "，" + q.earliest_reset_in_human + " 后重置" : "")
                : (q.account_switch_suspected ? " · 账号可能已切换" : (pid === "claude" ? " · Cockpit 没有 Claude 的余量记录" : " · 余量未知"))) +
         (q.switch_hint ? " · " + q.switch_hint : "");
       return '<div class="dock-row">' +
@@ -2145,9 +2153,17 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
           '<span style="min-width:0;"><span class="dock-name">' + esc(PEER_META[pid].label) + '</span><span class="dock-sub">' + esc(sub) + '</span></span>' +
         '</button>' +
         '<span class="dock-side">' + ring + wake + '</span>' +
+        (modelTxt ? '<div class="dock-model" data-peer-pill="' + pid + '" title="' + esc(tip) + '">' + esc(modelTxt) + '</div>' : "") +
       '</div>';
     }).join("");
     el.innerHTML = rows;
+  }
+
+  function agoText(seconds) {
+    const s = Math.max(0, Number(seconds) || 0);
+    if (s < 3600) return Math.max(1, Math.round(s / 60)) + " 分钟前";
+    if (s < 86400) return Math.round(s / 3600) + " 小时前";
+    return Math.round(s / 86400) + " 天前";
   }
 
   function peerLabel(pid) {
@@ -2178,7 +2194,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     const chips = artifacts.slice(0, 6).map(a =>
       '<button type="button" class="chip-btn mono" data-open-tab="artifacts">📄 ' + esc(String(a).split("/").pop()) + '</button>'
     ).join("");
-    const sub = [task && task.model_used ? task.model_used : "", relativeAge(ev.created_at)].filter(Boolean).join(" · ");
+    const sub = [task && task.model_used ? task.model_used : "", task && task.effort_used ? task.effort_used : "", relativeAge(ev.created_at)].filter(Boolean).join(" · ");
     return '<article class="chat-agent">' +
       (PEER_META[pid] ? '<span class="peer-icon ' + pid + '" aria-hidden="true"></span>' : '<div class="avatar ' + meta.cls + '">' + esc(meta.short) + '</div>') +
       '<div class="chat-agent-body">' +

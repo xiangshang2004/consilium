@@ -205,9 +205,10 @@ def resolve_codex_current(
 ) -> str:
     """Confirm Codex's current account when codex_accounts.json is older than Cockpit's SQLite index.
 
-    The JSON pointer alone may be stale, so it is only trusted with fresh corroboration: the same account
-    must be the one Cockpit binds Codex to, or be the most recently refreshed one, with a sample younger
-    than CURRENT_FRESH_SECONDS. With no pointer, a single freshly refreshed account is taken as current.
+    The JSON pointer alone may be stale, so it is only trusted with corroboration: the same account must
+    be the one Cockpit binds Codex to, or be the account Cockpit refreshed most recently. Cockpit refreshes
+    Codex roughly hourly, so the age of the sample is reported with the quota rather than used to reject it.
+    With no pointer, a single freshly refreshed account is taken as current.
     """
     if not registry.get("present"):
         return ""
@@ -217,7 +218,7 @@ def resolve_codex_current(
     latest = _latest_by_account(records, "chatgpt")
     fresh = {a: t for a, t in latest.items() if now_ts - t <= CURRENT_FRESH_SECONDS}
     pointer = str(registry.get("pointer_id") or "")
-    if pointer and pointer in fresh:
+    if pointer and pointer in latest:
         newest = max(latest, key=lambda a: latest[a])
         if pointer == newest or pointer == _read_codex_bind_id(cockpit_dir, registry):
             return pointer
@@ -227,13 +228,15 @@ def resolve_codex_current(
 
 
 def resolve_antigravity_current(
-    cockpit_dir: str, records: List[Dict[str, Any]], tolerance_sec: float = 180.0
+    cockpit_dir: str, records: List[Dict[str, Any]], tolerance_sec: float = 30.0, margin_sec: float = 10.0
 ) -> str:
     """Map Cockpit's current Antigravity account (current_account.json email) to a quota account.
 
     Cockpit keeps one quota cache file per account named sha256(email).json. Its modification time is
-    the moment that account's quota was last fetched, which matches exactly one account's newest
-    observation. Only the email pointer is read and the cache file is stat()ed, never opened.
+    the moment that account's quota was last fetched, which matches one account's newest observation
+    to within a second or two. Cockpit refreshes the other accounts a minute or so apart, so the nearest
+    account wins only when it is clearly nearer than the runner-up. Only the email pointer is read and
+    the cache file is stat()ed, never opened.
     """
     try:
         with open(os.path.join(cockpit_dir, "current_account.json"), "r", encoding="utf-8") as handle:
@@ -251,8 +254,12 @@ def resolve_antigravity_current(
     except OSError:
         return ""
     latest = _latest_by_account(records, "antigravity")
-    close = [a for a, t in latest.items() if abs(t - mtime) <= tolerance_sec]
-    return close[0] if len(close) == 1 else ""
+    diffs = sorted((abs(t - mtime), a) for a, t in latest.items())
+    if not diffs or diffs[0][0] > tolerance_sec:
+        return ""
+    if len(diffs) > 1 and diffs[1][0] - diffs[0][0] < margin_sec:
+        return ""
+    return diffs[0][1]
 
 
 def _mark_current(records: List[Dict[str, Any]], peer: str, account_id: str) -> None:

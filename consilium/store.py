@@ -274,6 +274,7 @@ class BusStore:
                 "ALTER TABLE quota_windows ADD COLUMN is_historical INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE quota_windows ADD COLUMN account_alias TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE quota_windows ADD COLUMN plan_type TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE tasks ADD COLUMN effort_used TEXT NOT NULL DEFAULT ''",
             )
             for stmt in migrations:
                 try:
@@ -1732,9 +1733,11 @@ class BusStore:
         attempt_id: Optional[str] = None,
         client_request_id: Optional[str] = None,
         model_used: Optional[str] = None,
+        effort_used: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Update claimed/running task progress while enforcing attempt_id ownership."""
         model_label = " ".join(str(model_used or "").split())[:80]
+        effort_label = " ".join(str(effort_used or "").split())[:40]
         peer = validate_peer(peer_id)
         normalized_status = validate_choice(
             status, PROGRESS_TASK_STATUSES, "progress status"
@@ -1811,6 +1814,8 @@ class BusStore:
                 )
                 if model_label:
                     conn.execute("UPDATE tasks SET model_used = ? WHERE task_id = ?", (model_label, task_id))
+                if effort_label:
+                    conn.execute("UPDATE tasks SET effort_used = ? WHERE task_id = ?", (effort_label, task_id))
                 conn.execute(
                     "UPDATE missions SET updated_at = ? WHERE mission_id = ?",
                     (now, task["mission_id"]),
@@ -1866,9 +1871,11 @@ class BusStore:
         attempt_id: Optional[str] = None,
         client_request_id: Optional[str] = None,
         model_used: Optional[str] = None,
+        effort_used: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Mark a claimed/running task terminal after verifying attempt_id, check mission completion, and notify coordinator."""
         model_label = " ".join(str(model_used or "").split())[:80]
+        effort_label = " ".join(str(effort_used or "").split())[:40]
         peer = validate_peer(peer_id)
         terminal_status = validate_choice(status, TERMINAL_TASK_STATUSES, "terminal status")
         provided_attempt = (attempt_id or "").strip()
@@ -1939,6 +1946,8 @@ class BusStore:
                 )
                 if model_label:
                     conn.execute("UPDATE tasks SET model_used = ? WHERE task_id = ?", (model_label, task_id))
+                if effort_label:
+                    conn.execute("UPDATE tasks SET effort_used = ? WHERE task_id = ?", (effort_label, task_id))
                 self._touch_peer_locked(conn, peer, status="active", now=now)
                 placeholders = ",".join("?" for _ in TERMINAL_TASK_STATUSES)
                 remaining_row = conn.execute(
@@ -2486,6 +2495,17 @@ class BusStore:
             ).fetchall():
                 out[r["assignee_peer"]] = r["model_used"]
         return out
+
+    def latest_effort_by_peer(self) -> Dict[str, str]:
+        """The reasoning effort each peer reported with its most recent model/effort report."""
+        out: Dict[str, str] = {}
+        with self._connect() as conn:
+            for r in conn.execute(
+                "SELECT assignee_peer, effort_used FROM tasks "
+                "WHERE model_used != '' OR effort_used != '' ORDER BY updated_at ASC"
+            ).fetchall():
+                out[r["assignee_peer"]] = r["effort_used"]
+        return {k: v for k, v in out.items() if v}
 
     def list_preferences(self, include_inactive: bool = False) -> List[Dict[str, Any]]:
         with self._connect() as conn:
@@ -3089,6 +3109,10 @@ class BusStore:
             active_acct_id: Optional[str] = None
             current_account_unknown = False
             account_switch_suspected = False
+            # Cockpit refreshes some accounts only about once an hour. An older record is still
+            # the best local knowledge, so it is shown with its age instead of being hidden.
+            quota_stale = False
+            active_sample_age: Optional[int] = None
 
             if current_ids:
                 active_acct_id = current_ids[0]
@@ -3115,14 +3139,14 @@ class BusStore:
                 has_cockpit_active = any(
                     str(w.get("source") or "").startswith("cockpit") for w in active_windows
                 )
-                if has_cockpit_active:
-                    ages = [
-                        w["sample_age_seconds"]
-                        for w in active_windows
-                        if w.get("sample_age_seconds") is not None
-                    ]
-                    if ages and min(ages) > 1800:
-                        account_switch_suspected = True
+                ages = [
+                    w["sample_age_seconds"]
+                    for w in active_windows
+                    if w.get("sample_age_seconds") is not None
+                ]
+                if ages:
+                    active_sample_age = int(min(ages))
+                    quota_stale = has_cockpit_active and active_sample_age > 1800
 
             if current_account_unknown or account_switch_suspected or not active_windows:
                 min_rem: Optional[float] = None
@@ -3147,7 +3171,14 @@ class BusStore:
                     if earliest_dt is not None
                     else ""
                 )
-                dispatch_recommended = (not exhausted) and (min_rem > 5.0)
+                if quota_stale:
+                    # An old "used up" reading only counts while its reset time is known and still ahead.
+                    fresh_enough = [w for w in active_windows if w["reset_at"] and not w.get("expired_reset")]
+                    exhausted = any(w["exhausted"] for w in fresh_enough)
+                    low_quota = any(w["low_quota"] for w in fresh_enough)
+                    dispatch_recommended = None
+                else:
+                    dispatch_recommended = (not exhausted) and (min_rem > 5.0)
 
             backups_with_cap = [
                 e
@@ -3158,7 +3189,7 @@ class BusStore:
                 and e["remaining_percent"] >= 20.0
                 and (
                     not str(e.get("source") or "").startswith("cockpit")
-                    or (e["sample_age_seconds"] is not None and e["sample_age_seconds"] <= 1800)
+                    or (e["sample_age_seconds"] is not None and e["sample_age_seconds"] <= 10800)
                 )
             ]
             pool_has_capacity = len(backups_with_cap) > 0
@@ -3188,6 +3219,8 @@ class BusStore:
                     ),
                     "current_account_unknown": current_account_unknown,
                     "account_switch_suspected": account_switch_suspected,
+                    "quota_stale": quota_stale,
+                    "sample_age_seconds": active_sample_age,
                     "min_remaining_percent": min_rem,
                     "exhausted": exhausted,
                     "low_quota": low_quota,

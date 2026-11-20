@@ -403,14 +403,55 @@ class R017RegressionsTests(unittest.TestCase):
         for leak in ("example.com", "uid-b", "ag-2", "cl-1"):
             self.assertNotIn(leak, serialized)
 
-        # A stale pointer without fresh samples is not trusted.
+        # Cockpit refreshes Codex about hourly: an older record of the confirmed account is
+        # still shown, marked with its age, and no longer drives dispatch.
         db = sqlite3.connect(os.path.join(cp, "codex-quota-history-v1.sqlite"))
         db.execute("UPDATE quota_samples SET observed_at = ?", (now - 7200,))
         db.commit(); db.close()
+        from consilium.store import BusStore
+        st2 = tempfile.mkdtemp(prefix="consilium-r021-st-", dir="/tmp")
+        self.addCleanup(shutil.rmtree, st2, True)
+        store2 = BusStore(st2, rendezvous_dir=self.tmp_rv)  # the bus keeps the newest record it has seen
+        sync_local_quotas(store2, user_home=home)
+        cx2 = next(q for q in store2.list_quota_windows()["peers"] if q["peer_id"] == "chatgpt")
+        self.assertFalse(cx2["current_account_unknown"])
+        self.assertEqual(cx2["min_remaining_percent"], 88.0)
+        self.assertTrue(cx2["quota_stale"])
+        self.assertGreaterEqual(cx2["sample_age_seconds"], 7200)
+        self.assertIsNone(cx2["dispatch_recommended"])
+
+        # Without corroboration (not the bound account, not the most recently refreshed one)
+        # the stale pointer is not trusted.
+        os.remove(os.path.join(cp, "codex_instances.json"))
+        db = sqlite3.connect(os.path.join(cp, "codex-quota-history-v1.sqlite"))
+        db.execute("UPDATE quota_samples SET observed_at = ? WHERE account_id != 'uid-b'", (now - 60,))
+        db.commit(); db.close()
         sync_local_quotas(self.store, user_home=home)
-        cx2 = next(q for q in self.store.list_quota_windows()["peers"] if q["peer_id"] == "chatgpt")
-        self.assertTrue(cx2["current_account_unknown"])
-        self.assertIsNone(cx2["min_remaining_percent"])
+        cx3 = next(q for q in self.store.list_quota_windows()["peers"] if q["peer_id"] == "chatgpt")
+        self.assertTrue(cx3["current_account_unknown"])
+        self.assertIsNone(cx3["min_remaining_percent"])
+
+        # Antigravity: two accounts refreshed a minute apart are still told apart by the nearest
+        # cache-file time; when they are too close to call, the current account stays unknown.
+        ag_ids = [r[0] for r in sqlite3.connect(os.path.join(cp, "platform-quota-history-v1.sqlite")).execute(
+            "SELECT DISTINCT account_id FROM quota_observations WHERE platform = 'antigravity'")]
+        self.assertGreaterEqual(len(ag_ids), 2)
+        cur_ag = next(a for a in ag_ids if a == "ag-2") if "ag-2" in ag_ids else ag_ids[0]
+        other = next(a for a in ag_ids if a != cur_ag)
+        cache_dir = os.path.join(cp, "cache", "quota_api_v1_desktop", "authorized")
+        cache_file = os.path.join(cache_dir, os.listdir(cache_dir)[0])
+
+        def set_ag(cur_age: float, other_age: float) -> dict:
+            db2 = sqlite3.connect(os.path.join(cp, "platform-quota-history-v1.sqlite"))
+            db2.execute("UPDATE quota_observations SET observed_at = ? WHERE account_id = ?", (int((now - cur_age) * 1000), cur_ag))
+            db2.execute("UPDATE quota_observations SET observed_at = ? WHERE account_id = ?", (int((now - other_age) * 1000), other))
+            db2.commit(); db2.close()
+            os.utime(cache_file, (now - cur_age, now - cur_age))
+            sync_local_quotas(self.store, user_home=home)
+            return next(q for q in self.store.list_quota_windows()["peers"] if q["peer_id"] == "antigravity")
+
+        self.assertFalse(set_ag(40, 130)["current_account_unknown"], "90 s apart is clearly the nearer account")
+        self.assertTrue(set_ag(40, 44)["current_account_unknown"], "4 s apart is too close to call")
 
 
 if __name__ == "__main__":

@@ -156,6 +156,32 @@ class R020RegressionsTests(unittest.TestCase):
         self.assertIn("scrollToLatest = true;", send)
         self.assertIn("if (scrollToLatest || switched || (grew && wasAtBottom))", html)
         self.assertIn("scroller.scrollTop = scroller.scrollHeight;", html)
+    def test_effort_is_recorded_shown_and_quota_is_not_self_reported(self) -> None:
+        self.daemon.ui_send("看个报错", ["chatgpt"])
+        task = self._tool("consilium_pickup_inbox", peer_id="chatgpt", scope="consilium")["claimed_tasks"][0]
+        self._tool("consilium_report_progress", task_id=task["task_id"], peer_id="chatgpt", attempt_id=task["attempt_id"],
+                   progress_note="在看", model_used="GPT-5.5", effort_used="  xhigh  ")
+        self.assertEqual(self.store.latest_effort_by_peer(), {"chatgpt": "xhigh"})
+        self._tool("consilium_complete_task", task_id=task["task_id"], peer_id="chatgpt", attempt_id=task["attempt_id"],
+                   result_summary="好了", model_used="GPT-5.5", effort_used="high")
+        state = build_dashboard_state(self.store, self.tmp_rv, started_at="", started_monotonic=time.monotonic(),
+                                      host="127.0.0.1", port=0, sync_quotas=False)
+        self.assertEqual(state["peer_efforts"], {"chatgpt": "high"})
+        self.assertEqual(state["missions"][0]["tasks"][0]["effort_used"], "high")
+        html = render_dashboard_html("0.1.0")
+        self.assertIn("efforts[pid]", html)
+        self.assertIn("task.effort_used", html)
+        self.assertIn(".dock-model { grid-column: 1 / -1;", html, "model and effort get their own full-width line")
+        self.assertIn('class="dock-model" data-peer-pill="', html)
+        self.assertNotIn("text-overflow: ellipsis; white-space: nowrap; }\n.dock-side", html, "the status line is no longer clipped")
+        self.assertEqual(html.count("不要自己查询或汇报余量"), 3, "standby prompts tell peers quota comes from Cockpit")
+        from consilium.mcp_server import build_auto_coordinator_prompt, _quota_line
+        line = _quota_line({"peer_id": "chatgpt", "label": "Codex", "standby": True, "remaining_percent": 88.0,
+                            "exhausted": False, "record_age_minutes": 64})
+        self.assertIn("余量 88%（Cockpit 64 分钟前的记录）", line)
+        prompt = build_auto_coordinator_prompt("x", "claude", [], [], [])
+        self.assertIn("effort_used", prompt)
+        self.assertIn("不要让各端自己查询或汇报余量", prompt)
 
 if __name__ == "__main__":
     unittest.main()

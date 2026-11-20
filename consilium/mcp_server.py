@@ -273,6 +273,7 @@ def peer_quota_digest(store: BusStore, rendezvous_dir: str) -> List[Dict[str, An
         unknown = bool(q.get("current_account_unknown") or q.get("account_switch_suspected")) or (
             q.get("min_remaining_percent") is None
         )
+        age = q.get("sample_age_seconds")
         out.append(
             {
                 "peer_id": pid,
@@ -280,6 +281,7 @@ def peer_quota_digest(store: BusStore, rendezvous_dir: str) -> List[Dict[str, An
                 "standby": int(waiters.get(pid, 0) or 0) > 0,
                 "remaining_percent": None if unknown else q.get("min_remaining_percent"),
                 "exhausted": bool(q.get("exhausted")) and not unknown,
+                "record_age_minutes": None if (unknown or age is None) else int(age // 60),
                 "switch_hint": q.get("switch_hint") or "",
             }
         )
@@ -320,6 +322,9 @@ def explain_auto_choice(digest: List[Dict[str, Any]], chosen: str) -> str:
 def _quota_line(item: Dict[str, Any]) -> str:
     rem = item["remaining_percent"]
     rem_txt = "余量未知" if rem is None else f"余量 {round(float(rem))}%"
+    age_min = item.get("record_age_minutes")
+    if rem is not None and age_min is not None and age_min >= 30:
+        rem_txt += f"（Cockpit {age_min} 分钟前的记录）"
     state = "待命中" if item["standby"] else "未待命"
     return f"- {item['label']}（{item['peer_id']}）：{state}，{rem_txt}" + ("，已耗尽" if item["exhausted"] else "")
 
@@ -342,7 +347,8 @@ def build_auto_coordinator_prompt(
         "3. 如果这次看出使用者稳定的习惯（例如某类事固定交给谁、喜欢的回答方式），用 consilium_learn_preference 记一句话；不确定就不记。\n"
         "4. 你自己的额度快用完时，用 consilium_handoff_task 把任务连同进度交给另一端。切换账号由使用者手动完成，需要时在回答里提醒。\n"
         "5. 用 consilium_set_title 给会诊起一个不超过 20 字的标题。会诊的文件夹由使用者选定（见 workspace_path），在里面工作；派子任务时写明这个文件夹。"
-        "上报进度时用 model_used 写上你实际使用的模型。\n\n"
+        "上报进度和交付时用 model_used 写上你实际使用的模型、用 effort_used 写上推理强度（如 high）。"
+        "各端的余量由 Consilium 从 Cockpit 同步（见下方），不要让各端自己查询或汇报余量。\n\n"
         f"【各端状态】\n" + "\n".join(_quota_line(i) for i in digest) + "\n\n"
         f"【使用者偏好】\n{pref_lines}\n\n"
         f"【使用者最近的点名分配】\n{route_lines}"
@@ -451,6 +457,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "progress_note": {"type": "string"},
                 "status": {"type": "string", "enum": ["claimed", "running"], "default": "running"},
                 "model_used": {"type": "string", "maxLength": 80, "description": "The model you are actually running on (e.g. 'Claude Opus 5.5'); shown in the Consilium sidebar."},
+                "effort_used": {"type": "string", "maxLength": 40, "description": "Your reasoning effort / thinking level for this work (e.g. 'high', 'xhigh', 'medium'); shown next to the model. Omit if your app has no such setting."},
                 "worktree_branch": {"type": "string"},
                 "notify_coordinator": {"type": "boolean", "default": False},
                 "client_request_id": {"type": "string"},
@@ -471,6 +478,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "artifacts": {"type": "array", "items": {"type": "string"}},
                 "status": {"type": "string", "enum": ["done", "failed", "blocked"], "default": "done"},
                 "model_used": {"type": "string", "maxLength": 80},
+                "effort_used": {"type": "string", "maxLength": 40},
                 "client_request_id": {"type": "string"},
             },
         },
@@ -958,6 +966,7 @@ class ConsiliumMCPDispatcher:
                 attempt_id=str(args["attempt_id"]) if args.get("attempt_id") is not None else None,
                 client_request_id=str(client_req_id) if client_req_id is not None else None,
                 model_used=str(args.get("model_used") or ""),
+                effort_used=str(args.get("effort_used") or ""),
             )
             rec_warnings = []
             if res.get("idempotent_replay"):
@@ -1007,6 +1016,7 @@ class ConsiliumMCPDispatcher:
                 attempt_id=str(args["attempt_id"]) if args.get("attempt_id") is not None else None,
                 client_request_id=str(client_req_id) if client_req_id is not None else None,
                 model_used=str(args.get("model_used") or ""),
+                effort_used=str(args.get("effort_used") or ""),
             )
             rec_warnings = []
             if res.get("idempotent_replay"):

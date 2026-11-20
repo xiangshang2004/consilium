@@ -611,7 +611,7 @@ class R012RegressionsTests(unittest.TestCase):
         }
         self.assertEqual(compute_state_fingerprint(s1), compute_state_fingerprint(s2))
 
-        # Stale Cockpit backup (>30m) must NOT recommend switch_hint, and missing codex_accounts.json clears is_current
+        # Stale Cockpit backup (>3h) must NOT recommend switch_hint, and missing codex_accounts.json clears is_current
         cockpit_dir = os.path.join(self.tmp_home, ".antigravity_cockpit")
         os.makedirs(cockpit_dir, mode=0o700, exist_ok=True)
         reg_path = os.path.join(cockpit_dir, "codex_accounts.json")
@@ -632,7 +632,7 @@ class R012RegressionsTests(unittest.TestCase):
                 "CREATE TABLE quota_samples (account_id TEXT, identity TEXT, observed_at INTEGER, short_remaining INTEGER, weekly_remaining INTEGER)"
             )
             conn.execute("INSERT INTO quota_samples VALUES ('uid-1','one@example.com', ?, 5, 10)", (now_unix - 60,))
-            conn.execute("INSERT INTO quota_samples VALUES ('uid-2','two@example.com', ?, 95, 95)", (now_unix - 7200,))
+            conn.execute("INSERT INTO quota_samples VALUES ('uid-2','two@example.com', ?, 95, 95)", (now_unix - 14400,))
             conn.commit()
 
         store = BusStore(self.tmp_state, rendezvous_dir=self.tmp_rv)
