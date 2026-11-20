@@ -1512,10 +1512,14 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 
 /* top bar */
 .topbar { background: transparent; border-bottom: none; padding: 12px 18px 6px; min-height: 0; }
-.topbar-left { gap: 10px; }
-.top-title { font-family: var(--font-serif); font-size: 17px; font-weight: 600; letter-spacing: 0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46vw; cursor: text; }
+.topbar-left { flex: 1 1 auto; min-width: 0; gap: 8px; }
+.top-title { font-family: var(--font-serif); font-size: 17px; font-weight: 600; letter-spacing: 0.01em; min-width: 0; flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46vw; cursor: text; }
 .top-title.plain { cursor: default; color: var(--text-muted); font-weight: 500; }
-.top-folder { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-secondary); border: 1px solid var(--border); border-radius: 999px; padding: 1px 9px; white-space: nowrap; }
+.top-rename-btn { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text-secondary); font-size: 12px; font-weight: 500; line-height: 1; white-space: nowrap; flex-shrink: 0; cursor: pointer; transition: background var(--t), color var(--t), border-color var(--t); }
+.top-rename-btn:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--border-strong); }
+.top-rename-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.top-rename-btn svg { flex-shrink: 0; }
+.top-folder { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-secondary); border: 1px solid var(--border); border-radius: 999px; padding: 1px 9px; white-space: nowrap; max-width: 180px; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; min-width: 0; }
 .title-input { font-family: var(--font-serif); font-size: 17px; font-weight: 600; flex: 0 1 420px; }
 .conn-badge.live { display: none; }
 .conv-actions { display: flex; flex-direction: column; gap: 2px; }
@@ -1577,6 +1581,14 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 .chat-column.is-new .chat-scroll { flex: 0 0 auto; overflow: visible; padding-bottom: 0; }
 .chat-column.is-new .composer-inner { max-width: 680px; }
 .chat-column:not(.is-new) .folder-menu, .chat-column:not(.is-new) .tier-menu { top: auto; bottom: calc(100% + 8px); }
+@media (max-width: 860px) {
+  .topbar { padding: 8px 10px 6px; }
+  .topbar-left { gap: 6px; }
+  .top-title { max-width: none; font-size: 15.5px; }
+  .top-rename-btn { height: 24px; padding: 0 7px; font-size: 11.5px; }
+  .top-folder { display: none !important; }
+  .title-input { flex: 1 1 auto; min-width: 0; max-width: none; font-size: 15.5px; }
+}
 </style>
 </head>
 <body>
@@ -1760,7 +1772,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     bad: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="currentColor" stroke="none" opacity=".14"/><path d="M8 4.8v3.8M8 11v.2"/></svg>',
     wait: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-dasharray="2 2.2" aria-hidden="true"><circle cx="8" cy="8" r="5.6"/></svg>',
     run: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="5.6" opacity=".22"/><path d="M8 2.4a5.6 5.6 0 0 1 5.6 5.6"/></svg>',
-    chev: '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>'
+    chev: '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>',
+    edit: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.2 2.4a1.4 1.4 0 0 1 2 2L5.6 12l-2.8.8.8-2.8 7.6-7.6z"/><path d="M9.6 4l2 2"/></svg>'
   };
   const SLASH_COMMANDS = [
     { cmd: "/mission", desc: "打开或定位左侧会诊列表面板", action: "focus_mission" },
@@ -2043,12 +2056,17 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   function renderTopBar(state) {
     const cur = getActiveMission(state);
     const titleWrap = document.getElementById("top-title-wrap");
-    if (!(cur && renamingMission === cur.mission_id && document.getElementById("title-input"))) {
+    const titleEl = document.getElementById("active-mission-title");
+    const editingTitle = cur && renamingMission === cur.mission_id;
+    const showingSameTitle = cur && titleEl &&
+      titleEl.dataset.renameMission === cur.mission_id && titleEl.textContent === cur.title;
+    if (editingTitle ? !document.getElementById("title-input") : !showingSameTitle) {
       titleWrap.innerHTML = !cur
         ? '<span id="active-mission-title" class="top-title plain"></span>'
-        : (renamingMission === cur.mission_id
-            ? '<input id="title-input" class="title-input" maxlength="40" value="' + esc(cur.title) + '">'
-            : '<span id="active-mission-title" class="top-title" data-rename-mission="' + esc(cur.mission_id) + '" title="点击改名">' + esc(cur.title) + '</span>');
+        : (editingTitle
+            ? '<input id="title-input" class="title-input" maxlength="40" aria-label="修改会诊标题（回车保存，Esc 取消）" value="' + esc(cur.title) + '">'
+            : '<span id="active-mission-title" class="top-title" data-rename-mission="' + esc(cur.mission_id) + '" title="' + esc(cur.title) + '（点击改名）">' + esc(cur.title) + '</span>' +
+              '<button id="rename-title-btn" type="button" class="top-rename-btn" data-rename-mission="' + esc(cur.mission_id) + '" title="修改当前会诊标题">' + ICONS.edit + '<span>改名</span></button>');
     }
     const folderEl = document.getElementById("top-folder");
     if (cur && cur.workspace_path) {
@@ -3025,7 +3043,13 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   });
   document.addEventListener("keydown", async ev => {
     if (!ev.target || ev.target.id !== "title-input") return;
-    if (ev.key === "Escape") { renamingMission = null; if (appState) renderTopBar(appState); return; }
+    if (ev.key === "Escape") {
+      renamingMission = null;
+      if (appState) renderTopBar(appState);
+      const rb = document.getElementById("rename-title-btn");
+      if (rb) rb.focus();
+      return;
+    }
     if (ev.key !== "Enter") return;
     ev.preventDefault();
     const mid = renamingMission;
@@ -3040,6 +3064,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       if (!res.ok) { showToast(data.error || "改名失败"); return; }
       renamingMission = null;
       await fetchState();
+      const rb = document.getElementById("rename-title-btn");
+      if (rb) rb.focus();
     } catch (err) {
       showToast("改名失败：" + err);
     }

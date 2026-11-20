@@ -294,5 +294,24 @@ class R020RegressionsTests(unittest.TestCase):
         tool = self._tool("consilium_wait", peer_id="chatgpt", timeout_sec=0.2, session_label="chatgpt-standby")
         self.assertEqual(tool["scope"], "consilium")
 
+    def test_header_has_always_visible_keyboard_accessible_rename_button(self) -> None:
+        html = render_dashboard_html("0.5.0")
+        for needle in (
+            'id="rename-title-btn"',
+            'class="top-rename-btn"',
+            "edit: '<svg",
+            "<span>改名</span>",
+            'aria-label="修改会诊标题（回车保存，Esc 取消）"',
+            'class="menu-item" data-rename-mission="',
+            'id="active-mission-title" class="top-title" data-rename-mission="',
+            ".top-rename-btn:focus-visible",
+            "flex-shrink: 0;",
+            'const rb = document.getElementById("rename-title-btn");',
+        ):
+            self.assertIn(needle, html)
+        narrow_block = html[html.index("@media (max-width: 860px)"):]
+        self.assertIn(".top-rename-btn", narrow_block)
+        self.assertIn(".top-folder { display: none !important; }", narrow_block)
+
 if __name__ == "__main__":
     unittest.main()
