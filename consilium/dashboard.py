@@ -1424,10 +1424,6 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 .dock-ring .bg { stroke: var(--border-strong); }
 .wake-btn { border: 1px solid var(--border-strong); background: transparent; border-radius: 999px; padding: 1px 9px; font-size: 11.5px; cursor: pointer; color: var(--text-secondary); }
 .wake-btn:hover { background: var(--bg-hover); }
-.dock-today { margin: 8px 4px 2px; padding-top: 8px; border-top: 1px solid var(--border); }
-.dock-today-lab { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); margin-bottom: 5px; }
-.dock-seg { display: flex; height: 6px; gap: 2px; }
-.dock-seg span { display: block; border-radius: 999px; min-width: 6px; }
 .dock-wrap .peer-popover { top: auto; bottom: calc(100% + 8px); left: 0; right: auto; transform: none; width: 320px; max-height: 60vh; overflow: auto; }
 
 /* top bar */
@@ -2110,11 +2106,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     const quotas = {};
     ((state && state.quotas) || []).forEach(q => { quotas[q.peer_id] = q; });
     const busyPeers = {};
-    const doneToday = { claude: 0, chatgpt: 0, antigravity: 0 };
-    const today = new Date().toDateString();
     ((state && state.missions) || []).forEach(m => (m.tasks || []).forEach(t => {
       if (t.status === "claimed" || t.status === "running") busyPeers[t.assignee_peer] = true;
-      if (t.status === "done" && (t.assignee_peer in doneToday) && t.updated_at && new Date(t.updated_at).toDateString() === today) doneToday[t.assignee_peer] += 1;
     }));
     const rows = PIDS.map(pid => {
       const standby = Number(waiters[pid] || 0) > 0;
@@ -2123,13 +2116,18 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       const known = !(q.current_account_unknown || q.account_switch_suspected) && q.min_remaining_percent !== null && q.min_remaining_percent !== undefined;
       const pct = known ? Math.max(0, Math.min(100, Number(q.min_remaining_percent))) : 0;
       const stTxt = busy ? "处理中" : (standby ? "待命中" : "未待命");
-      const sub = [stTxt].concat(models[pid] ? [models[pid]] : []).concat(q.account_switch_suspected ? ["账号可能已切换"] : []).join(" · ");
+      const outTxt = known && q.exhausted ? ("额度用完" + (q.earliest_reset_in_human ? "，" + q.earliest_reset_in_human + " 后恢复" : "")) : "";
+      const sub = [stTxt].concat(outTxt ? [outTxt] : (models[pid] ? [models[pid]] : [])).concat(q.account_switch_suspected ? ["账号可能已切换"] : []).join(" · ");
       const color = pid === "claude" ? "var(--peer-claude)" : (pid === "chatgpt" ? "var(--peer-chatgpt)" : "var(--peer-antigravity)");
       const ring = known
         ? '<svg class="dock-ring" viewBox="0 0 24 24" aria-hidden="true"><circle class="bg" cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="9" stroke="' + color + '" stroke-linecap="round" stroke-dasharray="' + (pct * 0.5655).toFixed(1) + ' 56.6"/></svg>' + Math.round(pct) + '%'
         : "";
       const wake = (!standby && !busy) ? '<button type="button" class="wake-btn" data-start-standby="' + pid + '" title="让它开始待命，之后发给它的消息会自动处理">叫醒</button>' : "";
-      const tip = PEER_META[pid].appName + (known ? " · " + (q.active_account_alias || "当前账号") + " 余量 " + Math.round(pct) + "%" + (q.earliest_reset_in_human ? "，" + q.earliest_reset_in_human + "后重置" : "") : " · 余量未知") + (q.switch_hint ? " · " + q.switch_hint : "");
+      const acctTxt = (q.active_account_alias || "") + (q.active_plan_type ? "（" + q.active_plan_type + "）" : "");
+      const tip = PEER_META[pid].appName + (acctTxt ? " · " + acctTxt : "") +
+        (known ? " · 余量 " + Math.round(pct) + "%" + (q.earliest_reset_in_human ? "，" + q.earliest_reset_in_human + " 后重置" : "")
+               : (q.account_switch_suspected ? " · 账号可能已切换" : (pid === "claude" ? " · Cockpit 没有 Claude 的余量记录" : " · 余量未知"))) +
+        (q.switch_hint ? " · " + q.switch_hint : "");
       return '<div class="dock-row">' +
         '<button type="button" class="dock-main" data-peer-pill="' + pid + '" title="' + esc(tip) + '">' +
           '<span class="dock-ic"><span class="peer-icon ' + pid + '" aria-hidden="true"></span><i class="' + (busy ? "busy" : (standby ? "on" : "")) + '"></i></span>' +
@@ -2138,14 +2136,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
         '<span class="dock-side">' + ring + wake + '</span>' +
       '</div>';
     }).join("");
-    const total = doneToday.claude + doneToday.chatgpt + doneToday.antigravity;
-    const todayHtml = total > 0
-      ? '<div class="dock-today" title="' + esc("今天完成的任务：Claude " + doneToday.claude + "，Codex " + doneToday.chatgpt + "，Antigravity " + doneToday.antigravity) + '">' +
-          '<div class="dock-today-lab"><span>今天完成的任务 ' + total + '</span><span class="tabular-nums">' + doneToday.claude + ' · ' + doneToday.chatgpt + ' · ' + doneToday.antigravity + '</span></div>' +
-          '<div class="dock-seg">' + PIDS.map(pid => doneToday[pid] > 0 ? '<span style="flex:' + doneToday[pid] + ';background:var(--peer-' + pid + ');"></span>' : "").join("") + '</div>' +
-        '</div>'
-      : "";
-    el.innerHTML = rows + todayHtml;
+    el.innerHTML = rows;
   }
 
   function peerLabel(pid) {
