@@ -7,3 +7,4 @@
 - [OpenSpec Bus Spec](../openspec/changes/consilium-v1/specs/bus/spec.md) — Normative bus & installer requirements
 - [OpenSpec Dashboard Spec](../openspec/changes/consilium-v1/specs/dashboard/spec.md) — Normative `/ui`, `/api/state`, `/api/stream` (SSE), and auth requirements
 - [Cross-Agent Reviews](../reviews/README.md) — Design audit packets exchanged with Claude & Codex
+- [Brand / Logo](./brand/preview.png) — Consilium 标志（2026-11-20 Claude 初稿）：缺口朝右的环读作 “C”，三段弧沿用看板里三端的颜色（Claude 橙、Codex 绿、Antigravity 蓝），中心圆点表示会诊结论；含浅色/深色标志、横版组合（标志 + Consilium 字标）、macOS App 图标和 favicon（`brand/*.svg`）
