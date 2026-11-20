@@ -65,11 +65,12 @@
 
 ## Stage 4: Level-C Live Installation (Blocked on ★ Gate 3 & User Consent)
 - [ ] 4.1 Implement `consilium doctor`.
-- [ ] 4.2 Present `--dry-run` plan → ★ User consent → `--apply` → `consilium doctor` → per-app smoke tests → `--uninstall` drill.
+- [x] 4.2 2026-11-20: `--dry-run` plan presented (real home untouched); user chose the recommended scope; `--apply --targets claude_code codex` (MCP entry + `consilium-collab` skill each, backups under `~/Library/Application Support/consilium/backups/`); `claude mcp get consilium` → Connected, `codex mcp list` → consilium enabled (Bearer); `--uninstall` drill then reinstall with the token unchanged. Fixes found on the way: Claude.app detection via `ps`, subagent templates split into `claude_agents` / `codex_agents`, byte-exact Codex uninstall and empty skill-folder cleanup.
+- [ ] 4.3 Not installed by user choice: `claude_desktop` (needs Claude.app quit), `antigravity` (no quota), `claude_agents` / `codex_agents`, `launchd` and login item (user: no auto-start for now).
 
 ## Stage 4.5: Menu Bar Native Wrapper (`Consilium.app` Built Ahead in R015; Live Deployment Gated on Stage 4)
 - [x] 4.5.1 Build native macOS menu bar app `Consilium.app` (`app/macos/Sources/*.swift`, `app/macos/Info.plist`, `scripts/build_app.sh` using Xcode CLT `swiftc` + system `iconutil`/`codesign -s -`, `docs/brand/consilium-mark-template.svg`, committed `AppIcon.iconset` & `StatusIconTemplate*.png`, bundled stdlib `consilium` package, `NSAllowsLocalNetworking` + `WKWebsiteDataStore.nonPersistent()`, direct `POST /api/login` cookie injection, reuse-or-manage daemon lifecycle, and `UNUserNotificationCenter` R003 click deep links) and verify via `scripts/smoke_test_app.sh` + dated `2026-11-20` Light/Dark/menubar screenshots.
-- [ ] 4.5.2 Optional `/Applications` copy, login item, and `launchd` wiring deferred until Stage 4 user consent.
+- [x] 4.5.2 `Consilium.app` copied to `/Applications` (2026-11-20). Login item and `launchd` intentionally not set up (user: no auto-start for now).
 
 ## Stage 5: Daily-Use Polish (Blocked on Stage 4)
 - [ ] 5.1 Mission templates, Q5 user-selectable auto-dispatch hints, workspace file tree / read-only diff & source preview (respecting R012 §6 Git read-only isolation rules: `ls-tree -z`, `cat-file blob`, disallow `.gitattributes` filters/submodule traversal/untrusted `.git/config`), Markdown export enhancements, and refined per-app skills.
