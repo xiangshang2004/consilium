@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 import sqlite3
@@ -21,6 +22,85 @@ PLATFORM_TO_PEER = {
     "chatgpt": "chatgpt",
     "openai": "chatgpt",
 }
+
+
+def _hash_account_ref(raw_id: Any) -> str:
+    """Anonymize email-like account identifiers into stable acct-<hash> tokens."""
+    clean = str(raw_id or "").strip()
+    if not clean:
+        return "default"
+    if "@" in clean:
+        digest = hashlib.sha256(clean.lower().encode("utf-8")).hexdigest()[:10]
+        return f"acct-{digest}"
+    return clean
+
+
+def _account_alias(index: int) -> str:
+    if 0 <= index < 26:
+        return f"账号 {chr(65 + index)}"
+    return f"账号 {index + 1}"
+
+
+def _load_cockpit_codex_registry(cockpit_dir: str) -> Dict[str, Any]:
+    """Read ONLY codex_accounts.json non-secret routing metadata (never encrypted vaults)."""
+    path = os.path.join(cockpit_dir, "codex_accounts.json")
+    empty = {"present": False, "current_id": "", "lookup": {}, "entries": []}
+    if not os.path.isfile(path):
+        return empty
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+    except (OSError, ValueError):
+        return empty
+    if not isinstance(raw, dict):
+        return empty
+
+    current_raw = str(raw.get("current_account_id") or "").strip()
+    items = raw.get("accounts")
+    if not isinstance(items, list):
+        return empty
+
+    lookup: Dict[str, Dict[str, Any]] = {}
+    entries: List[Dict[str, Any]] = []
+    current_canon = ""
+    for idx, entry in enumerate(items):
+        if not isinstance(entry, dict):
+            continue
+        raw_id = str(entry.get("id") or "").strip()
+        raw_email = str(entry.get("email") or "").strip()
+        plan_type = str(entry.get("plan_type") or "").strip()
+        if not raw_id and not raw_email:
+            continue
+        canon_id = _hash_account_ref(raw_email or raw_id)
+        is_current = bool(
+            current_raw
+            and (
+                (raw_id and raw_id == current_raw)
+                or (raw_email and raw_email.lower() == current_raw.lower())
+            )
+        )
+        if is_current:
+            current_canon = canon_id
+        meta = {
+            "account_id": canon_id,
+            "account_alias": _account_alias(idx),
+            "plan_type": plan_type,
+            "is_current": is_current,
+            "is_historical": False,
+        }
+        entries.append(meta)
+        if raw_id:
+            lookup[raw_id] = meta
+            lookup[raw_id.lower()] = meta
+        if raw_email:
+            lookup[raw_email.lower()] = meta
+
+    return {
+        "present": True,
+        "current_id": current_canon,
+        "lookup": lookup,
+        "entries": entries,
+    }
 
 
 def normalize_ts_to_iso(value: Any) -> str:
@@ -91,9 +171,32 @@ def _connect_sqlite_ro(db_path: str) -> sqlite3.Connection:
     return conn
 
 
-def _collect_cockpit_sqlite(cockpit_dir: str) -> List[Dict[str, Any]]:
-    """Read cached quota observations from Cockpit Tools SQLite databases."""
+def _collect_cockpit_sqlite(
+    cockpit_dir: str,
+    codex_registry: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Read ONLY whitelisted unencrypted Cockpit SQLite quota history databases."""
     records: List[Dict[str, Any]] = []
+    reg = codex_registry or {"present": False, "lookup": {}}
+    reg_present = bool(reg.get("present"))
+    reg_lookup = reg.get("lookup") or {}
+
+    def _resolve_codex_identity(*candidates: Any) -> Dict[str, Any]:
+        for cand in candidates:
+            key = str(cand or "").strip()
+            if not key:
+                continue
+            hit = reg_lookup.get(key) or reg_lookup.get(key.lower())
+            if hit is not None:
+                return dict(hit)
+        raw_first = next((str(c or "").strip() for c in candidates if str(c or "").strip()), "default")
+        return {
+            "account_id": _hash_account_ref(raw_first),
+            "account_alias": "",
+            "plan_type": "",
+            "is_current": False,
+            "is_historical": reg_present,
+        }
 
     platform_db = os.path.join(cockpit_dir, "platform-quota-history-v1.sqlite")
     if os.path.isfile(platform_db):
@@ -111,7 +214,17 @@ def _collect_cockpit_sqlite(cockpit_dir: str) -> List[Dict[str, Any]]:
                 peer = PLATFORM_TO_PEER.get(str(row["platform"] or "").strip().lower())
                 if not peer:
                     continue
-                acct = str(row["account_id"] or "default")
+                if peer == "chatgpt":
+                    meta = _resolve_codex_identity(row["account_id"])
+                else:
+                    meta = {
+                        "account_id": _hash_account_ref(row["account_id"]),
+                        "account_alias": "",
+                        "plan_type": "",
+                        "is_current": False,
+                        "is_historical": False,
+                    }
+                acct = meta["account_id"]
                 metric = str(row["metric"] or "default")
                 key = (peer, acct, metric)
                 if key in seen:
@@ -124,6 +237,10 @@ def _collect_cockpit_sqlite(cockpit_dir: str) -> List[Dict[str, Any]]:
                     {
                         "peer_id": peer,
                         "account_id": acct,
+                        "account_alias": meta["account_alias"],
+                        "plan_type": meta["plan_type"],
+                        "is_current": meta["is_current"],
+                        "is_historical": meta["is_historical"],
                         "window_key": metric,
                         "label": str(row["label"] or metric),
                         "remaining_percent": pct,
@@ -148,7 +265,8 @@ def _collect_cockpit_sqlite(cockpit_dir: str) -> List[Dict[str, Any]]:
                 ).fetchall()
             seen_codex: set = set()
             for row in rows:
-                acct = str(row["identity"] or row["account_id"] or "default")
+                meta = _resolve_codex_identity(row["account_id"], row["identity"])
+                acct = meta["account_id"]
                 if acct in seen_codex:
                     continue
                 seen_codex.add(acct)
@@ -163,6 +281,10 @@ def _collect_cockpit_sqlite(cockpit_dir: str) -> List[Dict[str, Any]]:
                             {
                                 "peer_id": "chatgpt",
                                 "account_id": acct,
+                                "account_alias": meta["account_alias"],
+                                "plan_type": meta["plan_type"],
+                                "is_current": meta["is_current"],
+                                "is_historical": meta["is_historical"],
                                 "window_key": wkey,
                                 "label": label,
                                 "remaining_percent": pct,
@@ -222,74 +344,8 @@ def _extract_window_from_mapping(
 
 
 def _collect_cockpit_json(cockpit_dir: str) -> List[Dict[str, Any]]:
-    """Inspect Cockpit Tools account JSON caches for quota & reset fields."""
-    records: List[Dict[str, Any]] = []
-    file_map = (
-        ("codex_accounts.json", "chatgpt"),
-        ("claude_accounts.json", "claude"),
-        ("google_accounts.json", "antigravity"),
-        ("accounts.json", "antigravity"),
-    )
-    for fname, peer in file_map:
-        path = os.path.join(cockpit_dir, fname)
-        if not os.path.isfile(path):
-            continue
-        try:
-            with open(path, "r", encoding="utf-8") as handle:
-                raw = json.load(handle)
-        except (OSError, ValueError):
-            continue
-
-        entries: List[Dict[str, Any]] = []
-        if isinstance(raw, list):
-            entries = [e for e in raw if isinstance(e, dict)]
-        elif isinstance(raw, dict):
-            if isinstance(raw.get("accounts"), list):
-                entries = [e for e in raw["accounts"] if isinstance(e, dict)]
-            else:
-                entries = [v for v in raw.values() if isinstance(v, dict)]
-
-        for entry in entries:
-            acct = str(
-                entry.get("email") or entry.get("account_id") or entry.get("id") or "default"
-            )
-            obs = normalize_ts_to_iso(
-                entry.get("updated_at") or entry.get("fetchedAt") or entry.get("fetched_at")
-            )
-            quota_container = entry.get("quota") or entry.get("quotas") or entry.get("quota_info")
-            if isinstance(quota_container, dict):
-                if isinstance(quota_container.get("models"), list):
-                    for model_item in quota_container["models"]:
-                        if not isinstance(model_item, dict):
-                            continue
-                        wkey = str(
-                            model_item.get("name")
-                            or model_item.get("model")
-                            or model_item.get("id")
-                            or "model"
-                        )
-                        rec = _extract_window_from_mapping(
-                            peer, acct, wkey, model_item, source="cockpit_json", observed_at=obs
-                        )
-                        if rec:
-                            records.append(rec)
-                for wkey in ("five_hour", "seven_day", "hourly", "weekly", "primary", "secondary"):
-                    sub = quota_container.get(wkey)
-                    if isinstance(sub, dict):
-                        rec = _extract_window_from_mapping(
-                            peer, acct, wkey, sub, source="cockpit_json", observed_at=obs
-                        )
-                        if rec:
-                            records.append(rec)
-            for wkey in ("five_hour", "seven_day"):
-                sub = entry.get(wkey)
-                if isinstance(sub, dict):
-                    rec = _extract_window_from_mapping(
-                        peer, acct, wkey, sub, source="cockpit_json", observed_at=obs
-                    )
-                    if rec:
-                        records.append(rec)
-    return records
+    """Deprecated full JSON collector removed per R011 whitelist; inspect ONLY codex_accounts.json."""
+    return []
 
 
 def _find_rate_limits_in_obj(obj: Any) -> Optional[Dict[str, Any]]:
@@ -426,7 +482,7 @@ def _collect_claude_local(claude_dir: str) -> List[Dict[str, Any]]:
         if not isinstance(raw, dict):
             continue
 
-        acct = str(raw.get("account_id") or raw.get("email") or "default")
+        acct = _hash_account_ref(raw.get("account_id") or raw.get("email") or "default")
         obs = normalize_ts_to_iso(raw.get("observed_at") or raw.get("fetched_at"))
 
         for key, wkey, label in (
@@ -493,10 +549,20 @@ def sync_local_quotas(
         return store.list_quota_windows()
     effective_home = user_home or os.environ.get("CONSILIUM_USER_HOME") or "~"
     home = os.path.abspath(os.path.expanduser(effective_home))
+    cockpit_dir = os.path.join(home, ".antigravity_cockpit")
+    codex_registry = _load_cockpit_codex_registry(cockpit_dir)
+    if codex_registry.get("present"):
+        store.sync_peer_accounts("chatgpt", codex_registry.get("entries") or [])
     discovered: List[Dict[str, Any]] = []
-    discovered.extend(_collect_cockpit_sqlite(os.path.join(home, ".antigravity_cockpit")))
-    discovered.extend(_collect_cockpit_json(os.path.join(home, ".antigravity_cockpit")))
-    discovered.extend(_collect_codex_rollouts(os.path.join(home, ".codex")))
+    cockpit_records = _collect_cockpit_sqlite(cockpit_dir, codex_registry=codex_registry)
+    discovered.extend(cockpit_records)
+    rollout_records = _collect_codex_rollouts(os.path.join(home, ".codex"))
+    if codex_registry.get("present") and any(
+        r["peer_id"] == "chatgpt" and not r.get("is_historical") for r in cockpit_records
+    ):
+        for r in rollout_records:
+            r["is_historical"] = True
+    discovered.extend(rollout_records)
     discovered.extend(_collect_claude_local(os.path.join(home, ".claude")))
 
     if discovered:

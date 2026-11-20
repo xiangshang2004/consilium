@@ -105,7 +105,21 @@ CREATE TABLE IF NOT EXISTS quota_windows (
     reset_at TEXT NOT NULL DEFAULT '',
     source TEXT NOT NULL DEFAULT 'manual',
     observed_at TEXT NOT NULL,
+    is_current INTEGER NOT NULL DEFAULT 0,
+    is_historical INTEGER NOT NULL DEFAULT 0,
+    account_alias TEXT NOT NULL DEFAULT '',
+    plan_type TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (peer_id, account_id, window_key)
+);
+
+CREATE TABLE IF NOT EXISTS quota_accounts (
+    peer_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    account_alias TEXT NOT NULL DEFAULT '',
+    plan_type TEXT NOT NULL DEFAULT '',
+    is_current INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (peer_id, account_id)
 );
 
 CREATE TABLE IF NOT EXISTS idempotency_keys (
@@ -218,6 +232,10 @@ class BusStore:
                 "ALTER TABLE tasks ADD COLUMN attempt_history_json TEXT NOT NULL DEFAULT '[]'",
                 "ALTER TABLE idempotency_keys ADD COLUMN caller_scope TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE idempotency_keys ADD COLUMN request_hash TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE quota_windows ADD COLUMN is_current INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE quota_windows ADD COLUMN is_historical INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE quota_windows ADD COLUMN account_alias TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE quota_windows ADD COLUMN plan_type TEXT NOT NULL DEFAULT ''",
             )
             for stmt in migrations:
                 try:
@@ -2127,6 +2145,77 @@ class BusStore:
                 missions_out.append(item)
         return missions_out, latest_event_id
 
+    def sync_peer_accounts(
+        self,
+        peer_id: str,
+        accounts: List[Dict[str, Any]],
+    ) -> None:
+        """Replace authoritative known-account registry for a peer inside one transaction."""
+        peer = validate_peer(peer_id)
+        now = utc_now_iso()
+        with self._connect() as conn:
+            with self._tx(conn):
+                conn.execute("DELETE FROM quota_accounts WHERE peer_id = ?", (peer,))
+                for item in accounts:
+                    acct_id = str(item.get("account_id") or "").strip()
+                    if not acct_id:
+                        continue
+                    conn.execute(
+                        """
+                        INSERT INTO quota_accounts (
+                            peer_id, account_id, account_alias, plan_type, is_current, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            peer,
+                            acct_id,
+                            str(item.get("account_alias") or "").strip(),
+                            str(item.get("plan_type") or "").strip(),
+                            1 if item.get("is_current") else 0,
+                            now,
+                        ),
+                    )
+                known_ids = [
+                    str(item.get("account_id") or "").strip()
+                    for item in accounts
+                    if str(item.get("account_id") or "").strip()
+                ]
+                conn.execute(
+                    "UPDATE quota_windows SET is_current = 0 WHERE peer_id = ?",
+                    (peer,),
+                )
+                for item in accounts:
+                    acct_id = str(item.get("account_id") or "").strip()
+                    if not acct_id:
+                        continue
+                    alias = str(item.get("account_alias") or "").strip()
+                    plan = str(item.get("plan_type") or "").strip()
+                    conn.execute(
+                        """
+                        UPDATE quota_windows
+                        SET is_current = ?,
+                            is_historical = 0,
+                            account_alias = CASE WHEN ? != '' THEN ? ELSE account_alias END,
+                            plan_type = CASE WHEN ? != '' THEN ? ELSE plan_type END
+                        WHERE peer_id = ? AND account_id = ?
+                        """,
+                        (
+                            1 if item.get("is_current") else 0,
+                            alias,
+                            alias,
+                            plan,
+                            plan,
+                            peer,
+                            acct_id,
+                        ),
+                    )
+                if known_ids:
+                    placeholders = ",".join("?" for _ in known_ids)
+                    conn.execute(
+                        f"UPDATE quota_windows SET is_historical = 1 WHERE peer_id = ? AND account_id NOT IN ({placeholders})",
+                        (peer, *known_ids),
+                    )
+
     def _decode_quota_row(
         self, row: sqlite3.Row, now_dt: Optional[datetime] = None
     ) -> Dict[str, Any]:
@@ -2140,9 +2229,16 @@ class BusStore:
             reset_sec = int((reset_dt - now).total_seconds())
         data["reset_in_seconds"] = reset_sec
         data["reset_in_human"] = _format_countdown(reset_sec)
+        obs_dt = _parse_iso(data.get("observed_at", ""))
+        obs_age: Optional[int] = None
+        if obs_dt is not None:
+            obs_age = max(0, int((now - obs_dt).total_seconds()))
+        data["sample_age_seconds"] = obs_age
         data["expired_reset"] = reset_sec is not None and reset_sec <= 0
         data["exhausted"] = (remaining <= 0.0) and not data["expired_reset"]
         data["low_quota"] = (remaining <= 15.0) and not data["expired_reset"]
+        data["is_current"] = bool(data.get("is_current"))
+        data["is_historical"] = bool(data.get("is_historical"))
         return data
 
     def upsert_quota_windows(
@@ -2153,11 +2249,24 @@ class BusStore:
             return []
         now = utc_now_iso()
         keys: List[tuple] = []
+        peers_with_current = {
+            validate_peer(str(item["peer_id"]))
+            for item in windows
+            if item.get("is_current")
+        }
         with self._connect() as conn:
             with self._tx(conn):
+                for cp in peers_with_current:
+                    conn.execute(
+                        "UPDATE quota_windows SET is_current = 0 WHERE peer_id = ?",
+                        (cp,),
+                    )
                 for item in windows:
                     peer = validate_peer(str(item["peer_id"]))
                     account_id = str(item.get("account_id") or "default").strip() or "default"
+                    if "@" in account_id:
+                        digest = hashlib.sha256(account_id.lower().encode("utf-8")).hexdigest()[:10]
+                        account_id = f"acct-{digest}"
                     window_key = str(item["window_key"]).strip()
                     if not window_key:
                         raise ValueError("window_key must not be empty")
@@ -2166,23 +2275,58 @@ class BusStore:
                     reset_at = str(item.get("reset_at") or "").strip()
                     source = str(item.get("source") or "manual").strip()
                     observed_at = str(item.get("observed_at") or now).strip()
+                    is_current = 1 if item.get("is_current") else 0
+                    is_historical = 1 if item.get("is_historical") else 0
+                    account_alias = str(item.get("account_alias") or "").strip()
+                    plan_type = str(item.get("plan_type") or "").strip()
                     conn.execute(
                         """
                         INSERT INTO quota_windows (
                             peer_id, account_id, window_key, label,
-                            remaining_percent, reset_at, source, observed_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            remaining_percent, reset_at, source, observed_at,
+                            is_current, is_historical, account_alias, plan_type
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(peer_id, account_id, window_key) DO UPDATE SET
-                            label = excluded.label,
-                            remaining_percent = excluded.remaining_percent,
+                            label = CASE
+                                WHEN excluded.observed_at >= quota_windows.observed_at
+                                  OR excluded.source = 'manual_report'
+                                THEN excluded.label
+                                ELSE quota_windows.label
+                            END,
+                            remaining_percent = CASE
+                                WHEN excluded.observed_at >= quota_windows.observed_at
+                                  OR excluded.source = 'manual_report'
+                                THEN excluded.remaining_percent
+                                ELSE quota_windows.remaining_percent
+                            END,
                             reset_at = CASE
-                                WHEN excluded.reset_at != '' THEN excluded.reset_at
+                                WHEN (excluded.observed_at >= quota_windows.observed_at OR excluded.source = 'manual_report')
+                                 AND excluded.reset_at != ''
+                                THEN excluded.reset_at
                                 ELSE quota_windows.reset_at
                             END,
-                            source = excluded.source,
-                            observed_at = excluded.observed_at
-                        WHERE excluded.observed_at >= quota_windows.observed_at
-                           OR excluded.source = 'manual_report'
+                            source = CASE
+                                WHEN excluded.observed_at >= quota_windows.observed_at
+                                  OR excluded.source = 'manual_report'
+                                THEN excluded.source
+                                ELSE quota_windows.source
+                            END,
+                            observed_at = CASE
+                                WHEN excluded.observed_at >= quota_windows.observed_at
+                                  OR excluded.source = 'manual_report'
+                                THEN excluded.observed_at
+                                ELSE quota_windows.observed_at
+                            END,
+                            is_current = excluded.is_current,
+                            is_historical = excluded.is_historical,
+                            account_alias = CASE
+                                WHEN excluded.account_alias != '' THEN excluded.account_alias
+                                ELSE quota_windows.account_alias
+                            END,
+                            plan_type = CASE
+                                WHEN excluded.plan_type != '' THEN excluded.plan_type
+                                ELSE quota_windows.plan_type
+                            END
                         """,
                         (
                             peer,
@@ -2193,6 +2337,10 @@ class BusStore:
                             reset_at,
                             source,
                             observed_at,
+                            is_current,
+                            is_historical,
+                            account_alias,
+                            plan_type,
                         ),
                     )
                     keys.append((peer, account_id, window_key))
@@ -2212,7 +2360,7 @@ class BusStore:
         return result
 
     def list_quota_windows(self, peer_id: Optional[str] = None) -> Dict[str, Any]:
-        """Return per-peer quota posture and individual reset windows."""
+        """Return active-account primary quota posture plus multi-account backup pool (R011 Q4)."""
         target_peers = [validate_peer(peer_id)] if peer_id else list(VALID_PEERS)
         now_dt = datetime.now(timezone.utc)
         with self._connect() as conn:
@@ -2225,9 +2373,20 @@ class BusStore:
                     """,
                     (target_peers[0],),
                 ).fetchall()
+                acct_rows = conn.execute(
+                    """
+                    SELECT * FROM quota_accounts
+                    WHERE peer_id = ?
+                    ORDER BY account_alias ASC, account_id ASC
+                    """,
+                    (target_peers[0],),
+                ).fetchall()
             else:
                 rows = conn.execute(
                     "SELECT * FROM quota_windows ORDER BY peer_id ASC, account_id ASC, window_key ASC"
+                ).fetchall()
+                acct_rows = conn.execute(
+                    "SELECT * FROM quota_accounts ORDER BY peer_id ASC, account_alias ASC, account_id ASC"
                 ).fetchall()
 
         grouped: Dict[str, List[Dict[str, Any]]] = {p: [] for p in target_peers}
@@ -2236,20 +2395,150 @@ class BusStore:
             if decoded["peer_id"] in grouped:
                 grouped[decoded["peer_id"]].append(decoded)
 
+        reg_accounts: Dict[str, Dict[str, Dict[str, Any]]] = {p: {} for p in target_peers}
+        for arow in acct_rows:
+            p = arow["peer_id"]
+            if p in reg_accounts:
+                reg_accounts[p][arow["account_id"]] = _row_to_dict(arow)
+
         peers_out: List[Dict[str, Any]] = []
         for p in target_peers:
-            windows = [
-                w
-                for w in grouped[p]
-                if not (w.get("expired_reset") and w["remaining_percent"] <= 0.0)
-            ]
-            if windows:
-                min_rem: Optional[float] = min(w["remaining_percent"] for w in windows)
-                exhausted = any(w["exhausted"] for w in windows)
-                low_quota = any(w["low_quota"] for w in windows)
+            all_rows = grouped[p]
+            reg_map = reg_accounts[p]
+
+            historical_ids = {
+                w["account_id"] for w in all_rows if w.get("is_historical")
+            }
+            by_acct_all: Dict[str, List[Dict[str, Any]]] = {}
+            for w in all_rows:
+                if w.get("is_historical"):
+                    continue
+                by_acct_all.setdefault(w["account_id"], []).append(w)
+
+            pool_ids: List[str] = list(reg_map.keys())
+            for aid in sorted(by_acct_all.keys()):
+                if aid not in reg_map:
+                    pool_ids.append(aid)
+
+            def _acct_non_expired(aid: str) -> List[Dict[str, Any]]:
+                return [
+                    w
+                    for w in by_acct_all.get(aid, [])
+                    if not (w.get("expired_reset") and w["remaining_percent"] <= 0.0)
+                ]
+
+            def _is_acct_current(aid: str) -> bool:
+                if aid in reg_map:
+                    return bool(reg_map[aid].get("is_current"))
+                return any(w.get("is_current") for w in by_acct_all.get(aid, []))
+
+            def _acct_alias(aid: str, idx: int) -> str:
+                if aid in reg_map and reg_map[aid].get("account_alias"):
+                    return str(reg_map[aid]["account_alias"])
+                for w in by_acct_all.get(aid, []):
+                    if w.get("account_alias"):
+                        return str(w["account_alias"])
+                if aid == "default":
+                    return "默认账号"
+                letter = chr(65 + idx) if idx < 26 else str(idx + 1)
+                return f"账号 {letter}"
+
+            pool_entries: List[Dict[str, Any]] = []
+            current_ids: List[str] = []
+            for idx, aid in enumerate(pool_ids):
+                nw = _acct_non_expired(aid)
+                is_cur = _is_acct_current(aid)
+                if is_cur:
+                    current_ids.append(aid)
+                rem_pct = min((w["remaining_percent"] for w in nw), default=None)
+                acct_ex = any(w["exhausted"] for w in nw) if nw else False
+                acct_low = any(w["low_quota"] for w in nw) if nw else False
+                resets = [w["reset_at"] for w in nw if w["reset_at"] and not w.get("expired_reset")]
+                earliest_r = min(resets) if resets else ""
+                earliest_r_dt = _parse_iso(earliest_r)
+                earliest_r_h = (
+                    _format_countdown(int((earliest_r_dt - now_dt).total_seconds()))
+                    if earliest_r_dt is not None
+                    else ""
+                )
+                ages = [
+                    w["sample_age_seconds"]
+                    for w in by_acct_all.get(aid, [])
+                    if w.get("sample_age_seconds") is not None
+                ]
+                sample_age = min(ages) if ages else None
+                src = (by_acct_all.get(aid) or [{}])[0].get("source", "")
+                plan = (
+                    (reg_map.get(aid) or {}).get("plan_type")
+                    or (by_acct_all.get(aid) or [{}])[0].get("plan_type", "")
+                )
+                pool_entries.append(
+                    {
+                        "account_id": aid,
+                        "alias": _acct_alias(aid, idx),
+                        "is_current": is_cur,
+                        "remaining_percent": rem_pct,
+                        "reset_at": earliest_r,
+                        "reset_in_human": earliest_r_h,
+                        "sample_age_seconds": sample_age,
+                        "exhausted": acct_ex,
+                        "low_quota": acct_low,
+                        "source": src,
+                        "plan_type": plan,
+                    }
+                )
+
+            active_acct_id: Optional[str] = None
+            current_account_unknown = False
+            account_switch_suspected = False
+
+            if current_ids:
+                active_acct_id = current_ids[0]
+            elif len(pool_ids) == 1:
+                active_acct_id = pool_ids[0]
+                if pool_entries:
+                    pool_entries[0]["is_current"] = True
+            elif len(pool_ids) > 1:
+                current_account_unknown = True
+
+            active_windows: List[Dict[str, Any]] = []
+            active_alias = ""
+            if active_acct_id is not None:
+                active_windows = _acct_non_expired(active_acct_id)
+                match_pool = [e for e in pool_entries if e["account_id"] == active_acct_id]
+                if match_pool:
+                    active_alias = match_pool[0]["alias"]
+                cockpit_multi = (
+                    len(pool_entries) > 1
+                    and active_windows
+                    and any(
+                        str(w.get("source") or "").startswith("cockpit")
+                        for w in active_windows
+                    )
+                )
+                if cockpit_multi:
+                    ages = [
+                        w["sample_age_seconds"]
+                        for w in active_windows
+                        if w.get("sample_age_seconds") is not None
+                    ]
+                    if ages and min(ages) > 1800:
+                        account_switch_suspected = True
+
+            if current_account_unknown or account_switch_suspected or not active_windows:
+                min_rem: Optional[float] = None
+                exhausted = False
+                low_quota = False
+                earliest_reset = ""
+                earliest_human = ""
+                dispatch_recommended: Optional[bool] = None
+            else:
+                min_rem = min(w["remaining_percent"] for w in active_windows)
+                exhausted = any(w["exhausted"] for w in active_windows)
+                low_quota = any(w["low_quota"] for w in active_windows)
                 reset_candidates = [
                     w["reset_at"]
-                    for w in windows
+                    for w in active_windows
                     if w["reset_at"] and not w.get("expired_reset")
                 ]
                 earliest_reset = min(reset_candidates) if reset_candidates else ""
@@ -2259,25 +2548,51 @@ class BusStore:
                     if earliest_dt is not None
                     else ""
                 )
-                dispatch_recommended: Optional[bool] = (not exhausted) and (min_rem > 5.0)
-            else:
-                min_rem = None
-                exhausted = False
-                low_quota = False
-                earliest_reset = ""
-                earliest_human = ""
-                dispatch_recommended = None
+                dispatch_recommended = (not exhausted) and (min_rem > 5.0)
+
+            backups_with_cap = [
+                e
+                for e in pool_entries
+                if (not e["is_current"])
+                and e["remaining_percent"] is not None
+                and e["remaining_percent"] >= 20.0
+            ]
+            pool_has_capacity = len(backups_with_cap) > 0
+            best_backup = (
+                max(backups_with_cap, key=lambda item: float(item["remaining_percent"] or 0.0))
+                if backups_with_cap
+                else None
+            )
+            switch_hint = ""
+            if best_backup is not None and (
+                exhausted
+                or low_quota
+                or (min_rem is not None and min_rem < 20.0)
+                or account_switch_suspected
+            ):
+                switch_hint = (
+                    f"可在 Cockpit 切到 {best_backup['alias']}（{best_backup['remaining_percent']:.0f}%）"
+                )
 
             peers_out.append(
                 {
                     "peer_id": p,
+                    "active_account_id": active_acct_id or "",
+                    "active_account_alias": active_alias,
+                    "current_account_unknown": current_account_unknown,
+                    "account_switch_suspected": account_switch_suspected,
                     "min_remaining_percent": min_rem,
                     "exhausted": exhausted,
                     "low_quota": low_quota,
                     "dispatch_recommended": dispatch_recommended,
                     "earliest_reset_at": earliest_reset,
                     "earliest_reset_in_human": earliest_human,
-                    "windows": windows,
+                    "windows": active_windows,
+                    "pool": pool_entries,
+                    "pool_has_capacity": pool_has_capacity,
+                    "best_backup": best_backup,
+                    "switch_hint": switch_hint,
+                    "historical_accounts_count": len(historical_ids),
                 }
             )
         return {"peers": peers_out, "updated_at": utc_now_iso()}

@@ -1109,7 +1109,11 @@ def _is_valid_host(host_header: str) -> bool:
 def _is_valid_origin(origin_header: str) -> bool:
     if not origin_header:
         return True
-    parsed = urllib.parse.urlparse(origin_header)
+    try:
+        parsed = urllib.parse.urlparse(origin_header)
+        _ = parsed.port
+    except ValueError:
+        return False
     if parsed.scheme not in ("http", "https"):
         return False
     return (parsed.hostname or "").lower() in LOCAL_HOSTS
@@ -1124,7 +1128,11 @@ def _is_exact_daemon_origin(
     """Require non-empty Origin matching daemon scheme, host, and port with no path/query/userinfo."""
     if not origin_header:
         return False
-    parsed = urllib.parse.urlparse(origin_header)
+    try:
+        parsed = urllib.parse.urlparse(origin_header)
+        raw_port = parsed.port
+    except ValueError:
+        return False
     if parsed.scheme != "http":
         return False
     if parsed.path not in ("", None) or parsed.params or parsed.query or parsed.fragment:
@@ -1137,7 +1145,7 @@ def _is_exact_daemon_origin(
         return False
     if expected_host and origin_host != expected_host:
         return False
-    origin_port = parsed.port if parsed.port is not None else 80
+    origin_port = raw_port if raw_port is not None else 80
     if origin_port != int(daemon_port):
         return False
     host_name, host_port = _extract_host_and_port(host_header)
@@ -1374,6 +1382,9 @@ class ConsiliumDaemon:
                 body: Any,
                 extra_headers: Optional[Dict[str, str]] = None,
             ) -> None:
+                if status >= 400:
+                    # Close keep-alive connections on error so unread request bodies cannot desync framing (P3-2).
+                    self.close_connection = True
                 encoded = json.dumps(body, ensure_ascii=False).encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json; charset=utf-8")

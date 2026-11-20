@@ -39,7 +39,9 @@ def resolve_socket_path(rendezvous_dir: str) -> str:
     candidate = os.path.join(resolved_rv, "wake.sock")
     if len(candidate.encode("utf-8")) <= MAX_UNIX_PATH_BYTES:
         return candidate
-    sock_dir = _ensure_private_dir(f"/tmp/consilium-{os.getuid()}/sock", "socket")
+    fallback_override = (os.environ.get("CONSILIUM_SOCKET_FALLBACK_DIR") or "").strip()
+    sock_base = fallback_override or f"/tmp/consilium-{os.getuid()}/sock"
+    sock_dir = _ensure_private_dir(sock_base, "socket")
     digest = hashlib.sha256(resolved_rv.encode("utf-8")).hexdigest()[:10]
     return os.path.join(sock_dir, f"{digest}.sock")
 
