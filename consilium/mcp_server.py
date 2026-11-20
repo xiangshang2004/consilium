@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 import re
 import queue
+import shutil
 import socket
 import sys
 import threading
 import time
 import urllib.parse
+import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from consilium import __version__
+from consilium.attachments import ImageAttachments
 from consilium.dashboard import (
     SSE_MAX_SUBSCRIBERS,
     SESSION_COOKIE_NAME,
@@ -1512,9 +1516,12 @@ class ConsiliumDaemon:
         self.claim_timeout_sec = claim_timeout_sec
         self.running_timeout_sec = running_timeout_sec
         self.started_at = utc_now_iso()
+        self.state_instance_id = uuid.uuid4().hex
         self.started_monotonic = time.monotonic()
         self.event_hub = EventHub(max_subscribers=SSE_MAX_SUBSCRIBERS)
         self.session_store = SessionStore()
+        self.images = ImageAttachments(self.home_dir)
+        self._ui_send_lock = threading.Lock()
         self.ticket_store = LoginTicketStore()
         self._state_cache_lock = threading.Lock()
         self._cached_state: Optional[Tuple[float, Dict[str, Any]]] = None
@@ -1534,7 +1541,7 @@ class ConsiliumDaemon:
 
     def get_dashboard_state(self, *, sync_quotas: bool = True) -> Dict[str, Any]:
         """Return full dashboard snapshot JSON."""
-        return build_dashboard_state(
+        state = build_dashboard_state(
             self.dispatcher.store,
             self.rendezvous_dir,
             started_at=self.started_at,
@@ -1544,6 +1551,8 @@ class ConsiliumDaemon:
             sse_clients=self.event_hub.subscriber_count(),
             sync_quotas=sync_quotas,
         )
+        state["state_instance_id"] = self.state_instance_id
+        return state
 
     def get_cached_dashboard_state(self, max_age_sec: float = 0.35) -> Dict[str, Any]:
         """Share a brief snapshot cache across idle SSE pollers to avoid duplicate DB rebuilds."""
@@ -1619,10 +1628,28 @@ class ConsiliumDaemon:
         workspace_hint: str = "",
         new_session: bool = False,
         tier: Optional[str] = None,
+        attachments: Any = None,
+        client_request_id: str = "",
     ) -> Dict[str, Any]:
-        """Send a message typed in the dashboard: @-mentioned peers get it directly; no mention = auto."""
+        """Commit a user message once even when the client retries after disconnection."""
+        request_id = str(client_request_id or "").strip()
+        request = json.dumps([text, targets, mission_id, workspace_hint, new_session, tier, attachments],
+                             ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        request_hash = hashlib.sha256(request.encode("utf-8")).hexdigest() if request_id else ""
+        with self._ui_send_lock:
+            cached = self.dispatcher.store.find_ui_message(request_id, request_hash)
+            if cached is not None:
+                return cached
+            return self._ui_send(text, targets, mission_id, workspace_hint, new_session, tier,
+                                 attachments, request_id, request_hash)
+
+    def _ui_send(
+        self, text: str, targets: Any, mission_id: Optional[str], workspace_hint: str,
+        new_session: bool, tier: Optional[str], attachments: Any, request_id: str, request_hash: str,
+    ) -> Dict[str, Any]:
         body = str(text or "").strip()
-        if not body:
+        images = self.images.describe(attachments)
+        if not body and not images:
             raise ValueError("message must not be empty")
         if len(body) > 20000:
             raise ValueError("message too long (max 20000 characters)")
@@ -1643,7 +1670,7 @@ class ConsiliumDaemon:
         except Exception:
             pass
         digest = peer_quota_digest(store, self.rendezvous_dir)
-        title = body.splitlines()[0][:40]
+        title = body.splitlines()[0][:40] if body else "图片消息"
         mode = "direct" if chosen else "auto"
         # The folder is chosen by the user (recent list or the native folder picker), never guessed from text.
         workspace = ""
@@ -1657,8 +1684,17 @@ class ConsiliumDaemon:
             str(tier or "").strip().lower(), ""
         )
 
+        image_paths = self.images.native_paths(images)
+
         def _wrap(prompt: str) -> str:
-            return prompt
+            if not image_paths:
+                return prompt
+            return prompt + "\n\n【使用者附图】请读取以下本机图片后回复：\n" + "\n".join(image_paths)
+
+        def message(recipients: List[str], reason: str) -> Dict[str, Any]:
+            return {"text": body, "targets": recipients, "mode": mode, "reason": reason, "attachments": images,
+                    "ui_request_id": request_id, "ui_request_hash": request_hash}
+
         events: List[Dict[str, Any]] = []
 
         if mission_id is None:
@@ -1680,18 +1716,13 @@ class ConsiliumDaemon:
                 ]
             res = store.create_mission(
                 title=title,
-                goal=body,
+                goal=body or title,
                 coordinator_peer=coordinator,
                 workspace_path=workspace,
                 isolation_policy="shared",
                 tasks=task_specs,
                 allow_user_coordinator=True,
-                user_message={
-                    "text": body,
-                    "targets": chosen or [coordinator],
-                    "mode": mode,
-                    "reason": "" if chosen else explain_auto_choice(digest, coordinator),
-                },
+                user_message=message(chosen or [coordinator], "" if chosen else explain_auto_choice(digest, coordinator)),
             )
             mid = res["mission"]["mission_id"]
             store.set_mission_tier(mid, tier_key)
@@ -1715,30 +1746,28 @@ class ConsiliumDaemon:
             if chosen:
                 plan = [(pid, body) for pid in chosen]
             elif coord != USER_PEER:
-                reason = f"交给这个会诊的协调者 {PEER_LABELS.get(coord, coord)}"
-                plan = [(coord, f"【使用者追问】\n{body}\n\n（你是这次会诊的协调者，按需继续分配，最后交付给使用者。）")]
+                coordinator_quota = next((item for item in digest if item["peer_id"] == coord), {})
+                if coordinator_quota.get("exhausted") and any(not item["exhausted"] for item in digest):
+                    pick = choose_auto_coordinator(digest)
+                    reason = f"{PEER_LABELS.get(coord, coord)} 额度已用完，改交 {PEER_LABELS[pick]}"
+                    plan = [(pick, build_auto_coordinator_prompt(
+                        body, pick, digest, store.list_preferences(), store.recent_user_routing(), tier=tier_key
+                    ))]
+                else:
+                    reason = f"交给这个会诊的协调者 {PEER_LABELS.get(coord, coord)}"
+                    plan = [(coord, f"【使用者追问】\n{body}\n\n（你是这次会诊的协调者，按需继续分配，最后交付给使用者。）")]
             else:
                 pick = choose_auto_coordinator(digest)
                 reason = explain_auto_choice(digest, pick)
                 plan = [(pick, build_auto_coordinator_prompt(
                     body, pick, digest, store.list_preferences(), store.recent_user_routing(), tier=tier_key
                 ))]
-            warnings = []
-            for idx, (pid, prompt) in enumerate(plan):
-                r = store.dispatch_task(
-                    mission_id=mid,
-                    assignee_peer=pid,
-                    prompt=_wrap(prompt),
-                    origin="user",
-                    new_session=pid not in bindings,
-                    model_tier=tier_key or "auto",
-                    user_message=(
-                        {"text": body, "targets": chosen or [plan[0][0]], "mode": mode, "reason": reason}
-                        if idx == 0 else None
-                    ),
-                )
-                events.append(r["event"])
-                warnings.extend(r.get("post_commit_warnings") or [])
+            dispatched = store.dispatch_ui_message(
+                mid, [(pid, _wrap(prompt), pid not in bindings) for pid, prompt in plan],
+                tier_key or "auto", message(chosen or [plan[0][0]], reason),
+            )
+            events = dispatched["events"]
+            warnings = dispatched["post_commit_warnings"]
 
         deliveries: List[Dict[str, Any]] = []
         for evt in events:
@@ -1844,7 +1873,7 @@ class ConsiliumDaemon:
                 return True, mode, session_rec, token_ver
 
             def _check_cookie_write_csrf(
-                self, auth_mode: str, session_rec: Optional[SessionRecord]
+                self, auth_mode: str, session_rec: Optional[SessionRecord], *, expected_type: str = "application/json"
             ) -> bool:
                 if auth_mode == "bearer":
                     return True
@@ -1855,9 +1884,9 @@ class ConsiliumDaemon:
                     return False
                 raw_ct = self.headers.get("Content-Type", "")
                 media_type = raw_ct.split(";", 1)[0].strip().lower()
-                if media_type != "application/json":
+                if media_type != expected_type:
                     self._send_json(
-                        415, {"error": "Unsupported Media Type; expected application/json"}
+                        415, {"error": "Unsupported Media Type; expected " + expected_type}
                     )
                     return False
                 if session_rec is not None:
@@ -1954,7 +1983,7 @@ class ConsiliumDaemon:
                     "Content-Security-Policy",
                     (
                         "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
-                        "connect-src 'self'; img-src 'self' data:; frame-ancestors 'none';"
+                        "connect-src 'self'; img-src 'self' data: blob:; frame-ancestors 'none';"
                     ),
                 )
                 if self.close_connection:
@@ -2178,6 +2207,31 @@ class ConsiliumDaemon:
                     self._send_html(200, render_dashboard_html(__version__))
                     return
 
+                if route.startswith("/api/attachments/"):
+                    ok_sec, _, _, _ = self._check_security(allow_cookie=True)
+                    if not ok_sec:
+                        return
+                    try:
+                        image = daemon.images.find(route.removeprefix("/api/attachments/"))
+                        if image is None:
+                            self._send_json(404, {"error": "图片不存在"})
+                            return
+                        path, media_type = image
+                        with path.open("rb") as source:
+                            self.send_response(200)
+                            self.send_header("Content-Type", media_type)
+                            self.send_header("Content-Length", str(os.fstat(source.fileno()).st_size))
+                            self.send_header("Cache-Control", "private, no-store")
+                            self.send_header("X-Content-Type-Options", "nosniff")
+                            self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+                            self.end_headers()
+                            shutil.copyfileobj(source, self.wfile)
+                    except ValueError as exc:
+                        self._send_json(400, {"error": str(exc)})
+                    except FileNotFoundError:
+                        self._send_json(404, {"error": "图片不存在"})
+                    return
+
                 if route == "/api/state":
                     ok_sec, _, session_rec, _ = self._check_security(allow_cookie=True)
                     if not ok_sec:
@@ -2300,6 +2354,47 @@ class ConsiliumDaemon:
                     )
                     return
 
+                if route.startswith("/api/attachments/") and route.endswith("/discard"):
+                    ok_sec, auth_mode, session_rec, _ = self._check_security(allow_cookie=True)
+                    if not ok_sec or auth_mode is None or not self._check_cookie_write_csrf(auth_mode, session_rec):
+                        return
+                    if not self._consume_optional_body():
+                        return
+                    attachment_id = route[len("/api/attachments/"):-len("/discard")]
+                    try:
+                        with daemon._ui_send_lock:
+                            if daemon.dispatcher.store.image_is_attached(attachment_id):
+                                self._send_json(409, {"error": "已发送的图片保留在消息中"})
+                                return
+                            daemon.images.discard(attachment_id)
+                    except ValueError as exc:
+                        self._send_json(400, {"error": str(exc)})
+                    except OSError as exc:
+                        self._send_json(507, {"error": f"草稿文件未移除：{exc}"})
+                    else:
+                        self._send_json(200, {"ok": True})
+                    return
+
+                if route.startswith("/api/attachments/"):
+                    ok_sec, auth_mode, session_rec, _ = self._check_security(allow_cookie=True)
+                    if not ok_sec or auth_mode is None:
+                        return
+                    if not self._check_cookie_write_csrf(auth_mode, session_rec, expected_type="application/octet-stream"):
+                        return
+                    ok_len, length, status, error = self._parse_strict_content_length()
+                    if not ok_len or length is None:
+                        self._send_json(status if not ok_len else 400, {"error": error or "缺少图片大小"})
+                        return
+                    try:
+                        uploaded = daemon.images.upload(route.removeprefix("/api/attachments/"), self.rfile, length)
+                        self._body_consumed = True
+                        self._send_json(200, {"ok": True, "attachment": uploaded})
+                    except ValueError as exc:
+                        self._send_json(400, {"error": str(exc)})
+                    except OSError as exc:
+                        self._send_json(507, {"error": f"图片无法保存：{exc}"})
+                    return
+
                 if route == "/api/conversations" or (
                     route.startswith("/api/missions/") and route.endswith("/message")
                 ):
@@ -2324,8 +2419,12 @@ class ConsiliumDaemon:
                             target_mid,
                             workspace_hint=str(payload.get("workspace") or ""),
                             tier=(str(payload.get("tier") or "") if "tier" in payload else None),
+                            attachments=payload.get("attachments"),
+                            client_request_id=str(payload.get("client_request_id") or ""),
                         )
                         self._send_json(200, {"committed": True, "result": res})
+                    except ConflictError as exc:
+                        self._send_json(409, {"error": str(exc)})
                     except KeyError as exc:
                         self._send_json(404, {"error": str(exc)})
                     except ValueError as exc:
@@ -2509,6 +2608,68 @@ class ConsiliumDaemon:
                         self._send_json(409, {"error": str(exc)})
                     except ValueError as exc:
                         self._send_json(400, {"error": str(exc)})
+                    return
+
+                if route.startswith("/api/tasks/") and route.endswith("/notify"):
+                    ok_sec, auth_mode, session_rec, _ver = self._check_security(allow_cookie=True)
+                    if not ok_sec or auth_mode is None or not self._check_cookie_write_csrf(auth_mode, session_rec):
+                        return
+                    if not self._consume_optional_body():
+                        return
+                    task_id = urllib.parse.unquote(route[len("/api/tasks/"):-len("/notify")])
+                    store = daemon.dispatcher.store
+                    try:
+                        target = store.queued_notification(task_id)
+                    except KeyError as exc:
+                        self._send_json(404, {"error": str(exc)})
+                        return
+                    except ConflictError as exc:
+                        self._send_json(409, {"error": str(exc)})
+                        return
+                    peer = target["assignee_peer"]
+                    event_ids = [target["event_id"]]
+                    sent_ms = time.time() * 1000.0
+                    delivery = _safe_ring_peer(
+                        store=store, home_dir=daemon.rendezvous_dir, peer_id=peer,
+                        title="Consilium 任务提醒", body=target["title"], workspace_path=target["workspace_path"],
+                        pickup_prompt=f"Use consilium_pickup_inbox(peer_id={peer!r}) to claim the queued task.",
+                        event_ids=event_ids,
+                    )
+                    warning = _safe_record_event_delivery(store, event_ids, delivery, ring_sent_at_ms=sent_ms)
+                    try:
+                        daemon.publish_state_update("ui_task_notify")
+                    except Exception:
+                        pass
+                    self._send_json(200, {"delivery": delivery, "warnings": [warning] if warning else []})
+                    return
+
+                if route.startswith("/api/tasks/") and route.endswith("/supersede"):
+                    ok_sec, auth_mode, session_rec, _ver = self._check_security(allow_cookie=True)
+                    if not ok_sec or auth_mode is None or not self._check_cookie_write_csrf(auth_mode, session_rec):
+                        return
+                    ok, payload = self._read_json_body()
+                    if not ok:
+                        return
+                    if not isinstance(payload, dict):
+                        self._send_json(400, {"error": "Expected JSON object"})
+                        return
+                    task_id = urllib.parse.unquote(route[len("/api/tasks/"):-len("/supersede")])
+                    try:
+                        result = daemon.dispatcher.store.settle_duplicate_task(
+                            task_id, str(payload.get("attempt_id") or ""), str(payload.get("delivered_task_id") or "")
+                        )
+                    except KeyError as exc:
+                        self._send_json(404, {"error": str(exc)})
+                    except ConflictError as exc:
+                        self._send_json(409, {"error": str(exc)})
+                    except ValueError as exc:
+                        self._send_json(400, {"error": str(exc)})
+                    else:
+                        try:
+                            daemon.publish_state_update("task_superseded")
+                        except Exception:
+                            pass
+                        self._send_json(200, {"committed": True, "result": result})
                     return
 
                 if route.startswith("/api/tasks/") and route.endswith("/requeue"):

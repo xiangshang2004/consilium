@@ -85,6 +85,8 @@ def _attempt_models(path: Path, modified_ns: int, size: int) -> Dict[Attempt, Tu
 
 def _display_models(models: Iterable[str]) -> str:
     ids = tuple(dict.fromkeys(models))
+    if ids == (_WORKER,):
+        return "Gemini 4 Hydrogen（执行）"
     planners = [model for model in ids if model in _PLANNERS]
     if len(planners) == 1 and _WORKER in ids:
         # Google documents Hydrogen as the implementation model for these variants.

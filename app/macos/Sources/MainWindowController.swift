@@ -1,5 +1,6 @@
 import Cocoa
 import Foundation
+import UniformTypeIdentifiers
 import WebKit
 
 struct WebViewProbeResult {
@@ -17,7 +18,7 @@ private final class WeakScriptHandler: NSObject, WKScriptMessageHandler {
     }
 }
 
-final class MainWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKScriptMessageHandler {
+final class MainWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     private let config: AppConfig
     private let dataStore: WKWebsiteDataStore
     private let webView: WKWebView
@@ -54,6 +55,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
         super.init(window: window)
         window.delegate = self
         self.webView.navigationDelegate = self
+        self.webView.uiDelegate = self
     }
 
     @available(*, unavailable)
@@ -332,6 +334,32 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
         }
     }
 
+    func webView(
+        _ webView: WKWebView,
+        runOpenPanelWith parameters: WKOpenPanelParameters,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping ([URL]?) -> Void
+    ) {
+        guard frame.isMainFrame, let url = frame.request.url,
+              url.scheme == "http", url.host == "127.0.0.1", url.port == config.port else {
+            completionHandler(nil)
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.allowedContentTypes = [.png, .jpeg, .webP, .gif]
+        panel.prompt = "添加图片"
+        if let window = window {
+            panel.beginSheetModal(for: window) { response in
+                completionHandler(response == .OK ? panel.urls : nil)
+            }
+        } else {
+            completionHandler(panel.runModal() == .OK ? panel.urls : nil)
+        }
+    }
+
     // MARK: - Native bridge (folder picker, reveal in Finder)
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -344,6 +372,26 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
             presentFolderPicker()
         } else if action == "revealPath" {
             revealInFinder(body["path"] as? String ?? "")
+        } else if action == "reauthenticate", message.frameInfo.isMainFrame,
+                  webView.url?.port == config.port {
+            refreshSession()
+        }
+    }
+
+    private func refreshSession() {
+        let configuration = config
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let cookie = try? AuthAndStreamClient(config: configuration).loginWithStateToken().cookie
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                if let cookie = cookie {
+                    self.setSessionCookie(cookie) {
+                        self.webView.evaluateJavaScript("window.__consiliumReauthenticated?.(true)", completionHandler: nil)
+                    }
+                } else {
+                    self.webView.evaluateJavaScript("window.__consiliumReauthenticated?.(false)", completionHandler: nil)
+                }
+            }
         }
     }
 

@@ -1551,7 +1551,12 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 .chat-note::before { content: ""; width: 14px; height: 1px; background: var(--border-strong); flex-shrink: 0; }
 .chat-pending { margin: 10px 0 0; gap: 12px; font-size: 13px; color: var(--text-secondary); }
 .chat-pending > .peer-icon { width: 26px; height: 26px; border-radius: 7px; }
-.chat-pending.quota-exhausted { color: var(--text-primary); font-weight: 600; }
+.task-receipt { align-items:flex-start; padding:9px 11px; border:1px solid var(--border); border-radius:8px; background:var(--bg-subtle); }
+.task-receipt > div { min-width:0; }
+.task-receipt > .peer-icon { flex-shrink:0; }
+.task-receipt strong { color:var(--text-primary); }
+.receipt-detail { margin-top:3px; font-size:12px; color:var(--text-secondary); overflow-wrap:anywhere; }
+.chat-pending.quota-exhausted { border-inline-start:3px solid var(--status-stale); }
 .pend-dots { display: inline-flex; gap: 3px; }
 .pend-dots i { width: 4px; height: 4px; border-radius: 999px; background: var(--text-muted); animation: pulseDot 1.2s ease-in-out infinite; }
 .pend-dots i:nth-child(2) { animation-delay: 0.2s; }
@@ -1585,6 +1590,26 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 .standby-banner .btn-link { font-size: 11.5px; text-decoration: underline; text-underline-offset: 2px; padding: 0 2px; }
 .quota-warning { margin-bottom: 8px; padding: 7px 10px; border-inline-start: 3px solid var(--status-stale); border-radius: 7px; background: var(--status-stale-soft); color: var(--text-primary); font-size: 12px; white-space: pre-line; overflow-wrap: anywhere; }
 .pt-quota-warning { margin-top: 3px; color: var(--text-primary); font-size: 11.5px; font-weight: 600; }
+.composer-media { display:flex; gap:4px; flex-wrap:wrap; }
+.composer-media button { border:1px solid var(--border); border-radius:7px; background:transparent; color:var(--text-secondary); padding:4px 8px; white-space:nowrap; }
+.composer-media button:hover, .composer-media button[aria-expanded=true] { background:var(--bg-hover); color:var(--text-primary); }
+.composer-box.dragging-image { outline:2px dashed var(--accent); }
+.attachment-list, .sent-images { display:flex; gap:6px; flex-wrap:wrap; padding:4px 0; }
+.attachment-list:empty { display:none; }
+.attachment-chip { display:flex; gap:6px; align-items:center; max-width:100%; min-width:0; padding:3px 6px; border:1px solid var(--border); border-radius:7px; font-size:12px; }
+.attachment-chip img { width:28px; height:28px; object-fit:cover; border-radius:4px; }
+.attachment-chip span { overflow-wrap:anywhere; }
+.attachment-chip .remove-image { flex-shrink:0; }
+.sent-images { justify-content:flex-end; }
+.sent-image { padding:0; background:transparent; border:1px solid var(--border); border-radius:7px; overflow:hidden; }
+.sent-image img { width:112px; height:84px; object-fit:cover; display:block; }
+#image-preview { max-width:94vw; max-height:92vh; border:1px solid var(--border); border-radius:12px; padding:12px; background:var(--bg-surface); color:var(--text-primary); }
+#image-preview img { display:block; max-width:85vw; max-height:74vh; object-fit:contain; margin-top:8px; }
+#image-preview::backdrop { background:rgba(0,0,0,.55); }
+.slash-item[aria-selected=true] { background:var(--bg-hover); }
+.account-notice { margin-bottom:8px; padding:7px 10px; border:1px solid var(--border); border-radius:7px; color:var(--text-primary); font-size:12px; overflow-wrap:anywhere; }
+.account-notice button { margin-inline-start:6px; }
+
 
 /* new conversation: greeting and composer centred */
 .chat-column.is-new { justify-content: center; padding-bottom: 20vh; }
@@ -1669,11 +1694,20 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
         <!-- Bottom Pure-Frontend Bar -->
         <footer class="composer-wrap">
           <div class="composer-inner">
-            <div id="slash-palette" class="slash-palette hidden" role="menu"></div>
+            <div id="slash-palette" class="slash-palette hidden" role="listbox" aria-label="斜杠指令"></div>
+            <div id="sync-warning" class="account-notice hidden" role="status"></div>
             <div id="quota-warning" class="quota-warning hidden" role="status"></div>
-            <div class="composer-box">
-              <textarea id="composer-input" class="composer-input" rows="1" placeholder="说说要做的事…"></textarea>
+            <div id="account-notice" class="account-notice hidden" role="status"><span></span><button type="button" class="btn-link" id="dismiss-account-notice">知道了</button></div>
+            <div class="composer-box" id="composer-box">
+              <textarea id="composer-input" class="composer-input" rows="1" placeholder="说说要做的事…" aria-label="消息"></textarea>
+              <div id="composer-attachments" class="attachment-list" aria-label="图片草稿"></div>
+              <div id="attachment-error" class="hidden" role="status"></div>
               <div class="composer-foot">
+                <div class="composer-media">
+                  <input id="composer-image" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+                  <button type="button" id="btn-attach-image">＋ 图片</button>
+                  <button type="button" id="btn-slash-toggle" aria-controls="slash-palette" aria-expanded="false">/ 指令</button>
+                </div>
                 <div id="compose-opts" class="compose-opts"></div>
                 <div id="handoff-targets" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"></div>
                 <button id="btn-send" type="button" class="send-btn" title="发送（Enter）" aria-label="发送" disabled>↑</button>
@@ -1683,6 +1717,11 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
           </div>
         </footer>
       </section>
+
+      <dialog id="image-preview" aria-label="图片预览">
+        <form method="dialog"><button type="submit" class="btn-link">关闭预览</button></form>
+        <img alt="">
+      </dialog>
 
       <!-- Collapsible Right Tabbed Inspector (Closed by Default) -->
       <aside id="right-drawer" class="right-drawer closed" aria-label="这个会诊的任务、文件和分支">
@@ -1800,6 +1839,13 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   let appState = null;
   let csrfToken = "";
   let lastStateVersion = 0;
+  let lastStateInstance = "";
+  const retiredStateInstances = new Set();
+  let lastSnapshotAt = "";
+  let currentConnectionLabel = "";
+  let fetchSequence = 0;
+  let nativeReauthPending = false;
+  let nativeReauthAttempted = false;
   let selectedMissionId = null;
   let rightTab = null; // Closed by default per minimalist chat spec
   let settingsTab = null;
@@ -1872,6 +1918,15 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   const CODEX_STANDBY_PROMPT = "请作为 Consilium 的 Codex 待命端（peer_id=chatgpt）：反复调用 consilium_wait(peer_id=\"chatgpt\", timeout_sec=300, session_label=\"chatgpt-standby\", scope=\"consilium\")；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"chatgpt\", session_label=\"chatgpt-standby\", scope=\"consilium\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used、effort_used、tier_used 和 tier_reason；任务的 model_tier 是 auto 时由你按难度自己定档位并真的按它做，不要让使用者选；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步）；超时没消息就继续等。每轮少说话，不要停下来问我。";
   const STANDBY_PROMPT = "请作为 Consilium 的 Claude 常驻待命端：先读 ~/.claude/skills/consilium-collab/SKILL.md 第 2、3 节；用 run_in_background 运行 `PYTHONPATH=/Applications/Consilium.app/Contents/Resources/python /usr/bin/python3 -B -m consilium.cli wait --peer claude --session-label claude-standby --scope consilium --timeout 86400`，被唤醒后用 consilium_pickup_inbox(peer_id=\"claude\", session_label=\"claude-standby\", scope=\"consilium\") 取任务（只取 Consilium 窗口里发起的，取到空就直接重新挂上）、处理、用 consilium_complete_task 回复（带上 model_used、effort_used、tier_used 和 tier_reason；任务的 model_tier 是 auto 时由你按难度自己定档位并真的按它做，不要让使用者选；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步），然后重新挂上等待。不要轮询，每轮少说话。";
   let sendTargets = [];
+  let currentDraftKey = null;
+  const messageDrafts = new Map();
+  let slashIndex = 0;
+  let slashDismissed = null;
+  const observedAccounts = (() => {
+    try { return JSON.parse(storedPref("consilium.observedAccounts", "{}")) || {}; } catch (_) { return {}; }
+  })();
+  const accountNotices = new Map();
+  const dismissedAccountNotices = new Map();
   let sending = false;
   let slashOpen = false;
   let sidebarDesktopOpen = true;
@@ -1976,9 +2031,23 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   }
 
   function setConn(kind, text) {
+    currentConnectionLabel = text;
     const pill = document.getElementById("conn-pill");
     pill.className = "conn-badge hide-narrow" + (kind ? " " + kind : "") + (text === "SSE 实时" ? " live" : "");
     document.getElementById("conn-text").textContent = text;
+    renderSyncNotice();
+  }
+
+  function renderSyncNotice() {
+    const box = document.getElementById("sync-warning");
+    let text = "";
+    if (lastSnapshotAt && currentConnectionLabel !== "SSE 实时") {
+      const label = currentConnectionLabel.startsWith("轮询") ? "轮询更新" :
+        (["待登录", "已退出"].includes(currentConnectionLabel) ? currentConnectionLabel : "正在重连，显示上次状态");
+      text = label + " · 上次同步 " + formatClock(lastSnapshotAt);
+    }
+    box.classList.toggle("hidden", !text);
+    if (box.textContent !== text) box.textContent = text;
   }
 
   function applyTheme(theme) {
@@ -2340,8 +2409,14 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   function renderUserMsg(u) {
     const targets = (u.targets || []).map(peerLabel).join("、");
     const meta = u.mode === "auto" ? "自动 · " + (u.reason || ("交给 " + targets)) : "交给 " + targets;
+    const images = (u.attachments || []).map(image => {
+      const url = "/api/attachments/" + encodeURIComponent(image.id);
+      return '<button type="button" class="sent-image" data-open-image="' + esc(url) + '" data-image-label="' + esc(image.name) +
+        '" aria-label="' + esc("查看 " + image.name) + '"><img src="' + esc(url) + '" alt="' + esc(image.name) + '"></button>';
+    }).join("");
     return '<div class="chat-user">' +
-      '<div class="chat-user-bubble">' + renderMarkdownBlock(u.text || "") + '</div>' +
+      (u.text ? '<div class="chat-user-bubble">' + renderMarkdownBlock(u.text) + '</div>' : "") +
+      (images ? '<div class="sent-images">' + images + '</div>' : "") +
       '<div class="chat-user-meta" title="' + esc(formatClock(u.created_at)) + '">' + esc(meta) + '</div>' +
     '</div>';
   }
@@ -2371,7 +2446,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       (PEER_META[pid] ? '<span class="peer-icon ' + pid + '" aria-hidden="true"></span>' : '<div class="avatar ' + meta.cls + '">' + esc(meta.short) + '</div>') +
       '<div class="chat-agent-body">' +
         '<div class="chat-agent-head"><span class="msg-author">' + esc(meta.label) + '</span>' + tag +
-          '<span class="msg-sub" title="' + esc(formatClock(ev.created_at) + (tn.tip ? " · " + tn.tip : "")) + '">' + esc(sub) + '</span></div>' +
+          '<span class="msg-sub" title="' + esc(formatClock(ev.created_at) + (tn.tip ? " · " + tn.tip : "") +
+           (task && task.runtime_model_used && task.model_used ? " · 原始回报 " + task.model_used : "")) + '">' + esc(sub) + '</span></div>' +
         '<div class="chat-agent-text">' + renderMarkdownBlock(p.result_summary || "") + '</div>' +
         (chips ? '<div style="display:flex;flex-wrap:wrap;gap:6px;padding-top:6px;">' + chips + '</div>' : "") +
       '</div>' +
@@ -2389,39 +2465,99 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     return peerLabel(peer) + " 当前账号额度已用完";
   }
 
-  function renderPending(t, state) {
-    const waiters = (state && state.active_waiters) || {};
+  function deliveryFacts(mission, task) {
+    const events = (mission.events || []).filter(event =>
+      event.task_id === task.task_id &&
+      event.to_peer === task.assignee_peer &&
+      ["task_assigned", "task_requeued", "task_handoff"].includes(event.kind)
+    );
+    return events.reduce((latest, event) => (!latest || event.event_id > latest.event_id) ? event : latest, null);
+  }
+
+  function taskPresentation(task, mission) {
+    const event = deliveryFacts(mission, task);
+    const payload = (event && event.payload) || {};
+    const receiving = task.assignee_peer;
+    let label = TASK_STATUS_TEXT[task.status] || task.status;
+    let detail = task.progress_note || "";
+    let since = "";
+    if (task.status === "queued") {
+      label = "待认领";
+      since = (event && event.created_at) || task.created_at;
+      if (event && event.acked_at) detail = "已确认收到通知，等领取任务";
+      else if (payload.delivery_mode === "hot_wakeup") detail = "已唤醒监听，等领取任务";
+      else if (payload.delivery_mode === "cold_notification" && payload.notified) detail = "系统通知已发，等领取任务";
+      else if (payload.delivery_mode === "error" || payload.command_ok === false) detail = "投递失败，可到 " + peerLabel(receiving) + " 取件";
+      else detail = "任务已排队";
+    } else if (task.status === "claimed") {
+      label = "已认领 · 等开始";
+      since = task.claimed_at;
+    } else if (task.status === "running") {
+      label = task.stale_at ? "进度过期" : "已上报进度";
+      since = task.last_progress_at || (payload.last_progress_at || "") || (task.stale_at ? "" : task.updated_at);
+      if (!detail) detail = "等下一次进度或完成回执";
+    }
+    return {label, detail, since, event};
+  }
+
+  function deliveryTimeline(task, mission) {
+    const presentation = taskPresentation(task, mission);
+    const event = presentation.event;
+    const payload = (event && event.payload) || {};
+    const facts = [];
+    const add = (time, label) => { if (time) facts.push({time,label}); };
+    if (event) {
+      add(event.created_at, "任务已排队");
+      const attempts = payload.delivery_attempts || payload.delivery_history || [];
+      for (const attempt of attempts) {
+        const mode = attempt.mode || attempt.delivery;
+        const at = attempt.at || attempt.sent_at || attempt.created_at ||
+          (attempt.ring_sent_at_ms ? new Date(attempt.ring_sent_at_ms).toISOString() : "");
+        add(at, mode === "hot_wakeup" ? "唤醒监听" :
+          mode === "cold_notification" ? (attempt.notified ? "系统通知已发" : "补发系统通知") : "尝试投递");
+      }
+      if (!attempts.length && payload.delivery_mode) {
+        const at = payload.ring_sent_at_ms ? new Date(payload.ring_sent_at_ms).toISOString() : event.created_at;
+        add(at, payload.delivery_mode === "hot_wakeup" ? "唤醒监听" :
+          payload.notified ? "系统通知已发" : "尝试投递");
+      }
+      add(event.acked_at, "确认收到通知");
+    }
+    add(task.claimed_at, "已认领");
+    if (task.status === "running" && presentation.since) add(presentation.since, "最后上报进度");
+    if (task.stale_at) add(task.stale_at, "租约进度过期");
+    if (["done", "blocked", "failed", "cancelled"].includes(task.status)) {
+      add(task.updated_at, TASK_STATUS_TEXT[task.status] || task.status);
+    }
+    facts.sort((a,b) => String(a.time).localeCompare(String(b.time)));
+    return facts.map(fact => '<div>' + esc(formatClock(fact.time)) + ' · ' + esc(fact.label) + '</div>').join("");
+  }
+
+  function renderPending(t, state, mission) {
     const pid = t.assignee_peer;
     const label = peerLabel(pid);
-    if (exhaustedQuota(state, pid)) {
-      return '<div class="chat-pending quota-exhausted">' +
-        '<span class="peer-icon ' + esc(pid) + '" aria-hidden="true"></span>' +
-        '<span>' + esc(exhaustedLabel(pid)) + '</span></div>';
-    }
-    const standby = Number(waiters[pid] || 0) > 0;
-    let txt;
-    if (t.status === "queued") {
-      txt = standby ? label + " 已收到，马上开始" : "等 " + label + " 接收，它现在没在待命";
-    } else {
-      txt = label + " 正在处理" + (t.progress_note ? "：" + t.progress_note : "");
-    }
-    if (pid === "antigravity" && t.status === "running" && (t.runtime_model_used || t.model_used)) {
-      txt += " · " + reportedTaskModel(pid, t);
-    }
+    const facts = taskPresentation(t, mission);
+    const exhausted = exhaustedQuota(state, pid);
+    const detail = [facts.since ? formatClock(facts.since) : "", facts.detail,
+                    t.status === "running" && (t.runtime_model_used || t.model_used) ? reportedTaskModel(pid, t) : ""]
+      .filter(Boolean).join(" · ");
+    const standby = Number(((state && state.active_waiters) || {})[pid] || 0) > 0;
     const openBtn = (t.status === "queued" && !standby)
-      ? '<button type="button" class="btn-link" data-open-native="' + esc(pid) + '">在 ' + esc(label) + ' 里打开</button>'
+      ? '<button type="button" class="btn-link" data-open-native="' + esc(pid) + '">在 ' + esc(label) + ' 里取件</button>'
       : "";
-    return '<div class="chat-pending" title="' + esc(t.updated_at ? "最后上报于 " + relativeAge(t.updated_at) : "") + '">' +
+    return '<div class="chat-pending task-receipt' + (exhausted ? ' quota-exhausted' : '') + '" data-task-receipt="' + esc(t.task_id) + '">' +
       '<span class="peer-icon ' + esc(pid) + '" aria-hidden="true"></span>' +
-      '<span>' + esc(txt) + '</span>' +
-      (t.status === "queued" && !standby ? "" : '<span class="pend-dots"><i></i><i></i><i></i></span>') + openBtn + '</div>';
+      '<div><strong>' + esc(label + " · " + facts.label) + '</strong>' +
+      (detail ? '<div class="receipt-detail">' + esc(detail) + '</div>' : '') +
+      (exhausted ? '<div class="receipt-detail">' + esc(exhaustedLabel(pid)) + '</div>' : '') +
+      openBtn + '</div></div>';
   }
 
   // Keep the newest message in view: always after you send or open a conversation,
   // and for incoming replies as long as you have not scrolled up to read earlier ones.
   let scrollToLatest = false;
   let lastShownMission = null;
-  let lastShownCount = -1;
+  let lastThreadHTML = "";
   function renderConversation(state) {
     const container = document.getElementById("chat-container");
     const scroller = document.getElementById("chat-scroll");
@@ -2429,7 +2565,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     document.querySelector(".chat-column").classList.toggle("is-new", !m);
     if (!m) {
       lastShownMission = null;
-      lastShownCount = -1;
+      lastThreadHTML = "";
       const markEl = document.querySelector(".brand-mark");
       container.innerHTML = '<div class="chat-hero">' + (markEl ? markEl.innerHTML : "") + '<h2>今天会诊什么？</h2></div>';
       return;
@@ -2438,8 +2574,16 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     const taskById = {};
     tasks.forEach(t => { taskById[t.task_id] = t; });
     const items = [];
+    const closed = ["completed","cancelled","failed"].includes(m.status);
+    const pending = closed ? [] : tasks.filter(t => ["queued","claimed","running"].includes(t.status));
     const userMsgs = m.user_messages || [];
-    userMsgs.forEach(u => items.push({ ts: u.created_at || "", order: 0, id: Number(u.message_id), html: renderUserMsg(u) }));
+    const attached = new Set();
+    userMsgs.forEach(u => {
+      const linked = pending.filter(task => task.user_message_id === u.message_id);
+      linked.forEach(task => attached.add(task.task_id));
+      items.push({ts:u.created_at || "", order:0, id:Number(u.message_id),
+        html:renderUserMsg(u) + linked.map(task => renderPending(task,state,m)).join("")});
+    });
     if (!userMsgs.length) {
       items.push({ ts: m.created_at || "", order: -1, id: 0, html: renderNote(peerLabel(m.coordinator_peer) + " 发起了会诊：" + (m.goal || m.title)) });
     }
@@ -2452,6 +2596,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       else if (ev.kind === "task_handoff") html = renderNote(peerLabel(ev.from_peer) + " 把任务交给了 " + peerLabel(ev.to_peer) + (p.note ? "：" + p.note : ""));
       else if (ev.kind === "task_stale") html = renderNote(peerLabel(p.assignee_peer || ev.from_peer) + " 很久没有新进展了");
       else if (ev.kind === "task_requeued") html = renderNote("任务已重新排队" + (p.reason ? "（" + p.reason + "）" : ""));
+      else if (ev.kind === "task_superseded") html = renderNote("重复任务已收尾", p.reason || "");
       else if (ev.kind === "review_request") html = renderNote(peerLabel(ev.from_peer) + " 请 " + peerLabel(ev.to_peer) + " 复核", p.question || p.summary || p.reason || "");
       else if (ev.kind === "loop_guard_reached") html = renderNote("复核到了轮次上限，交回协调者处理");
       if (html) items.push({ ts: ev.created_at || "", order: 1, id: Number(ev.event_id), html: html });
@@ -2462,22 +2607,20 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       ).replace('<span class="msg-sub"', '<span class="chat-tag">汇总</span><button type="button" class="btn-link" data-export-md="1">复制</button><span class="msg-sub"') });
     }
     items.sort((a, b) => (a.ts < b.ts ? -1 : (a.ts > b.ts ? 1 : ((a.order - b.order) || (a.id - b.id)))));
-    const closed = m.status === "completed" || m.status === "cancelled" || m.status === "failed";
-    const pending = closed ? [] : tasks.filter(t => t.status === "queued" || t.status === "claimed" || t.status === "running");
-    const head = "";
     const wasAtBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
     const switched = lastShownMission !== m.mission_id;
-    const count = items.length + pending.length;
-    const grew = count !== lastShownCount;
-    container.innerHTML = head + items.map(i => i.html).join("") + pending.map(t => renderPending(t, state)).join("");
-    if (scrollToLatest || switched || (grew && wasAtBottom)) {
-      scroller.scrollTop = scroller.scrollHeight;
-      // Once more after layout settles (the composer and banners can still change height).
-      requestAnimationFrame(() => { scroller.scrollTop = scroller.scrollHeight; });
-      scrollToLatest = false;
+    const markup = items.map(item => item.html).join("") +
+      pending.filter(task => !attached.has(task.task_id)).map(task => renderPending(task,state,m)).join("");
+    if (switched || lastThreadHTML !== markup) {
+      container.innerHTML = markup;
+      lastThreadHTML = markup;
+      if (scrollToLatest || switched || wasAtBottom) {
+        scroller.scrollTop = scroller.scrollHeight;
+        requestAnimationFrame(() => { scroller.scrollTop = scroller.scrollHeight; });
+        scrollToLatest = false;
+      }
     }
     lastShownMission = m.mission_id;
-    lastShownCount = count;
   }
 
   function durText(seconds) {
@@ -2582,15 +2725,21 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       else if (kind === "done" && !Number.isNaN(startMs) && !Number.isNaN(endMs)) timeTxt = "用时 " + durText((endMs - startMs) / 1000);
       else if (kind === "bad") timeTxt = TASK_STATUS_TEXT[t.status] || t.status;
       const exhausted = !closed && (kind === "wait" || kind === "run") && exhaustedQuota(state, pid);
-      const waitTxt = kind === "wait" && !exhausted ? (standby ? "已送到，马上开始" : "等它接收 · 它现在没在待命，已发通知") : "";
+      const presentation = taskPresentation(t, m);
+      const phase = (kind === "wait" || kind === "run") ? presentation.label : "";
+      const lastFact = presentation.since ? formatClock(presentation.since) : "";
       const tn = tierNote(t);
-      const meta = [tn.label, kind === "wait" ? "" : reportedTaskModel(pid, t), t.effort_used || "", timeTxt, waitTxt, t.stale_at ? "很久没有新进展" : ""].filter(Boolean).join(" · ");
-      const isOpen = Object.prototype.hasOwnProperty.call(taskRowOpen, t.task_id) ? taskRowOpen[t.task_id] : kind === "run";
+      const meta = [phase, lastFact, tn.label, kind === "wait" ? "" : reportedTaskModel(pid, t), t.effort_used || "", timeTxt].filter(Boolean).join(" · ");
+      const timeline = isNaN(startMs) && !presentation.event ? "" : deliveryTimeline(t, m);
+      const isOpen = Object.prototype.hasOwnProperty.call(taskRowOpen, t.task_id) ? taskRowOpen[t.task_id] : (kind === "run" || !!exhausted);
       const note = kind === "done" || kind === "bad" ? (t.result_summary || t.progress_note || "") : (t.progress_note || "");
       const canRequeue = !closed && (t.status === "claimed" || t.status === "running" || t.status === "failed" || t.status === "blocked");
       const canOpen = !closed && kind === "wait" && !standby;
-      const acts = (canOpen ? '<button type="button" class="pt-btn" data-open-native="' + esc(pid) + '">在 ' + esc(label) + ' 里打开</button>' : "") +
-        (canRequeue ? '<button type="button" class="pt-btn" data-requeue-task="' + esc(t.task_id) + '" title="收回这次处理，让它重新排队">重新入队</button>' : "");
+      const canSettle = !closed && kind === "run" && t.attempt_id && content.tasks.some(task => task.status === "done");
+      const acts = (canOpen ? '<button type="button" class="pt-btn" data-open-native="' + esc(pid) + '">在 ' + esc(label) + ' 里取件</button>' : "") +
+        (!closed && kind === "wait" ? '<button type="button" class="pt-btn" data-notify-task="' + esc(t.task_id) + '">重新通知</button>' : "") +
+        (canRequeue ? '<button type="button" class="pt-btn" data-requeue-task="' + esc(t.task_id) + '" title="收回这次处理，让它重新排队">重新入队</button>' : "") +
+        (canSettle ? '<button type="button" class="pt-btn" data-settle-task="' + esc(t.task_id) + '">收尾重复任务</button>' : "");
       return '<div class="pt-row' + (isOpen ? " open" : "") + '">' +
         '<span class="pt-st ' + kind + '">' + ICONS[kind] + '</span>' +
         '<div>' +
@@ -2599,7 +2748,9 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
           '</button>' +
           (exhausted ? '<div class="pt-quota-warning">' + esc(exhaustedLabel(pid)) + '</div>' : "") +
           (meta ? '<div class="pt-meta"' + (tn.tip ? ' title="' + esc(tn.tip) + '"' : "") + '>' + esc(meta) + '</div>' : "") +
-          (isOpen ? (note ? '<div class="pt-note">' + renderMarkdownBlock(note) + '</div>' : "") + (acts ? '<div class="pt-act">' + acts + '</div>' : "") : "") +
+          (isOpen ? (note ? '<div class="pt-note">' + renderMarkdownBlock(note) + '</div>' : "") +
+            (timeline ? '<div class="pt-meta">' + timeline + '</div>' : "") +
+            (acts ? '<div class="pt-act">' + acts + '</div>' : "") : "") +
         '</div>' +
       '</div>';
     }).join("");
@@ -2712,9 +2863,91 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     }
   }
 
+  function activeDraft() {
+    if (!messageDrafts.has(currentDraftKey)) messageDrafts.set(currentDraftKey, {text:"", images:[], receipt:null});
+    return messageDrafts.get(currentDraftKey);
+  }
+
+  function selectComposerDraft(mission) {
+    const next = mission ? mission.mission_id : "new";
+    if (currentDraftKey === next) return;
+    const input = document.getElementById("composer-input");
+    if (currentDraftKey !== null) activeDraft().text = input.value;
+    currentDraftKey = next;
+    input.value = activeDraft().text;
+    slashOpen = false;
+    slashDismissed = null;
+  }
+
+  function newClientID() {
+    return Array.from(crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2,"0")).join("");
+  }
+
+  function renderDraftAttachments() {
+    const items = activeDraft().images;
+    const el = document.getElementById("composer-attachments");
+    const markup = items.map(image => '<div class="attachment-chip"><img src="' + esc(image.preview) + '" alt="">' +
+      '<span>' + esc(image.file.name || "剪贴板图片") + esc(image.error ? " · " + image.error : "") + '</span>' +
+      '<button type="button" class="btn-link remove-image" data-remove-image="' + image.id + '"' +
+      (sending ? ' disabled' : '') + ' aria-label="' +
+      esc("移除 " + (image.file.name || "图片")) + '">×</button></div>').join("");
+    if (el.dataset.rendered !== markup) {
+      el.dataset.rendered = markup;
+      el.innerHTML = markup;
+    }
+  }
+
+  function addComposerImages(files) {
+    const supported = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+    const incoming = Array.from(files || []);
+    const valid = incoming.filter(file => supported.includes(file.type));
+    for (const file of valid) {
+      activeDraft().images.push({id:newClientID(),file,preview:URL.createObjectURL(file),uploaded:false,error:""});
+    }
+    const notice = document.getElementById("attachment-error");
+    notice.textContent = incoming.length === valid.length ? "" : "部分文件无法上传。请选择 PNG、JPEG、WebP 或 GIF。";
+    notice.classList.toggle("hidden", !notice.textContent);
+    renderComposerBar(appState);
+  }
+
+  function renderAccountNotices(state) {
+    let changed = false;
+    for (const quota of (state && state.quotas) || []) {
+      const peer = quota.peer_id;
+      const previous = observedAccounts[peer];
+      const nextKnown = quota.active_account_id && !quota.current_account_unknown && quota.min_remaining_percent != null;
+      if (quota.account_switch_suspected || (previous && quota.active_account_id &&
+          previous !== quota.active_account_id && !nextKnown)) {
+        accountNotices.set(peer, peerLabel(peer) + " 正在等新账号额度同步。");
+        continue;
+      }
+      if (!nextKnown) continue;
+      if (previous && previous !== quota.active_account_id) {
+        accountNotices.set(peer, peerLabel(peer) + " 已换号 · 额度 " + Math.round(quota.min_remaining_percent) + "%。");
+      }
+      if (previous !== quota.active_account_id) {
+        observedAccounts[peer] = quota.active_account_id;
+        changed = true;
+      } else if ((accountNotices.get(peer) || "").includes("正在等新账号")) {
+        accountNotices.delete(peer);
+      }
+    }
+    if (changed) storePref("consilium.observedAccounts", JSON.stringify(observedAccounts));
+    const box = document.getElementById("account-notice");
+    const message = Array.from(accountNotices.entries())
+      .filter(([peer, text]) => dismissedAccountNotices.get(peer) !== text)
+      .map(([, text]) => text).join(" ");
+    box.classList.toggle("hidden", !message);
+    const label = box.querySelector("span");
+    if (label.textContent !== message) label.textContent = message;
+  }
+
   function renderComposerBar(state) {
     const waiters = (state && state.active_waiters) || {};
     const curMission = getActiveMission(state);
+    selectComposerDraft(curMission);
+    renderDraftAttachments();
+    renderAccountNotices(state);
     const compact = !curMission;
     const chips = ['<button type="button" class="target-chip' + (sendTargets.length === 0 ? " active" : "") + '" data-send-target="auto" title="不点名：交给待命中、额度充足的一端，由它决定怎么分">自动</button>'];
     ["claude", "chatgpt", "antigravity"].forEach(pid => {
@@ -2793,24 +3026,30 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     } else {
       banner.classList.add("hidden");
     }
-    document.getElementById("btn-send").disabled = sending || !(document.getElementById("composer-input").value || "").trim();
-
     const val = document.getElementById("composer-input").value || "";
+    document.getElementById("btn-send").disabled = sending || (!val.trim() && !activeDraft().images.length);
+
     const pal = document.getElementById("slash-palette");
-    const q = val.startsWith("/") && val.indexOf(" ") === -1 ? val.toLowerCase() : null;
-    const showPal = slashOpen || q !== null;
+    const q = /^\/[a-z]*$/i.test(val) ? val.toLowerCase() : null;
+    const showPal = slashOpen || (q !== null && val !== slashDismissed);
     const matches = showPal ? SLASH_COMMANDS.filter(c => !q || q === "/" || c.cmd.startsWith(q)) : [];
-    if (!showPal || !matches.length) {
-      pal.classList.add("hidden");
-    } else {
-      pal.innerHTML = matches.map(c =>
-        '<button type="button" class="slash-item" data-slash-act="' + c.action + '">' +
-          '<span class="slash-cmd">' + esc(c.cmd) + '</span>' +
-          '<span style="color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(c.desc) + '</span>' +
-        '</button>'
-      ).join("");
-      pal.classList.remove("hidden");
+    slashIndex = Math.min(slashIndex, Math.max(0, matches.length - 1));
+    const commands = matches.map((c, index) =>
+      '<button type="button" class="slash-item" id="slash-command-' + index + '" data-slash-act="' + c.action +
+      '" aria-selected="' + String(index === slashIndex) + '" role="option">' +
+        '<span class="slash-cmd">' + esc(c.cmd) + '</span>' +
+        '<span class="muted">' + esc(c.desc) + '</span>' +
+      '</button>'
+    ).join("");
+    if (pal.dataset.rendered !== commands) {
+      pal.dataset.rendered = commands;
+      pal.innerHTML = commands;
     }
+    pal.classList.toggle("hidden", !matches.length);
+    const message = document.getElementById("composer-input");
+    if (matches.length) message.setAttribute("aria-activedescendant", "slash-command-" + slashIndex);
+    else message.removeAttribute("aria-activedescendant");
+    document.getElementById("btn-slash-toggle").setAttribute("aria-expanded", String(!!matches.length));
   }
 
   function renderAll(state) {
@@ -2830,13 +3069,25 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   }
 
   function applyStateData(data) {
-    if (!data || typeof data !== "object") return;
+    if (!data || typeof data !== "object") return false;
+    const service = data.daemon || {};
+    const instance = data.state_instance_id || data.instance_id || service.instance_id || service.started_at || "";
+    if (instance && retiredStateInstances.has(instance)) return false;
+    if (instance && instance !== lastStateInstance) {
+      if (lastStateInstance) retiredStateInstances.add(lastStateInstance);
+      lastStateInstance = instance;
+      lastStateVersion = 0;
+    }
     if (typeof data.csrf_token === "string" && data.csrf_token) csrfToken = data.csrf_token;
     const ver = Number(data.state_version || 0);
-    if (ver > 0 && lastStateVersion > 0 && ver < lastStateVersion) return;
-    if (ver > lastStateVersion) lastStateVersion = ver;
+    if (ver < lastStateVersion) return false;
+    lastStateVersion = ver;
+    lastSnapshotAt = data.server_time || new Date().toISOString();
+    nativeReauthAttempted = false;
     showLogin(false);
     renderAll(data);
+    renderSyncNotice();
+    return true;
   }
 
   function showLogin(show) {
@@ -2865,20 +3116,35 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   }
 
   async function fetchState() {
+    const request = ++fetchSequence;
     const res = await fetch("/api/state", { credentials: "same-origin", cache: "no-store" });
+    if (request !== fetchSequence) return true;
     if (res.status === 401) {
       stopStreams();
       csrfToken = "";
-      lastStateVersion = 0;
-      setConn("", "待登录");
-      showLogin(true);
+      if (canPickNativeFolder() && !nativeReauthAttempted && !nativeReauthPending) {
+        nativeReauthAttempted = true;
+        nativeReauthPending = true;
+        setConn("", "连接中断");
+        window.webkit.messageHandlers.consilium.postMessage({action:"reauthenticate"});
+      } else if (!nativeReauthPending) {
+        setConn("", "待登录");
+        showLogin(true);
+      }
       return false;
     }
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
+    if (request !== fetchSequence) return true;
     applyStateData(data);
     return true;
   }
+
+  window.__consiliumReauthenticated = function (ok) {
+    nativeReauthPending = false;
+    if (!ok) { showLogin(true); return; }
+    fetchState().then(ready => { if (ready) connectSSE(); }).catch(() => showLogin(true));
+  };
 
   function startPollingFallback() {
     if (pollTimer) return;
@@ -2913,17 +3179,20 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     eventSource = es;
 
     es.onopen = () => {
+      if (eventSource !== es) return;
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
       if (sseReconnectTimer) { clearInterval(sseReconnectTimer); sseReconnectTimer = null; }
-      setConn("live", "SSE 实时");
+      setConn("", "连接中");
     };
     es.addEventListener("state", ev => {
-      try { applyStateData(JSON.parse(ev.data)); } catch (_) {}
+      if (eventSource !== es) return;
+      try { if (applyStateData(JSON.parse(ev.data))) setConn("live", "SSE 实时"); } catch (_) {}
     });
     es.addEventListener("update", ev => {
+      if (eventSource !== es) return;
       try {
         const payload = JSON.parse(ev.data);
-        if (payload.state) applyStateData(payload.state);
+        if (payload.state && applyStateData(payload.state)) setConn("live", "SSE 实时");
       } catch (_) {}
     });
     es.onerror = () => {
@@ -2932,7 +3201,9 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
         eventSource = null;
       } else {
         try { es.close(); } catch (_) {}
+        return;
       }
+      setConn("", "连接中断");
       fetchState().then(ok => {
         if (ok) {
           startPollingFallback();
@@ -3004,7 +3275,12 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   })();
   window.__consiliumRevealResult = function (ok) { if (!ok) showToast("找不到这个文件，可能已被移动或还没生成"); };
 
-  document.getElementById("composer-input").addEventListener("input", () => renderComposerBar(appState));
+  document.getElementById("composer-input").addEventListener("input", () => {
+    activeDraft().text = document.getElementById("composer-input").value;
+    slashDismissed = null;
+    slashIndex = 0;
+    renderComposerBar(appState);
+  });
   document.addEventListener("keydown", ev => {
     if ((ev.key === "Enter" || ev.key === " ") && ev.target && ev.target.classList && ev.target.classList.contains("mission-item")) {
       ev.preventDefault();
@@ -3015,8 +3291,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     if (ev.key === "Escape") {
       if (slashOpen || !document.getElementById("slash-palette").classList.contains("hidden")) {
         slashOpen = false;
-        const inp = document.getElementById("composer-input");
-        if (inp.value.startsWith("/") && inp.value.indexOf(" ") === -1) inp.value = "";
+        slashDismissed = document.getElementById("composer-input").value;
         renderComposerBar(appState);
       }
       if (openPopoverPeer) {
@@ -3026,10 +3301,33 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     }
   });
 
+  async function uploadDraftImage(image) {
+    if (image.uploaded) return;
+    image.error = "";
+    const headers = writeHeaders();
+    headers["Content-Type"] = "application/octet-stream";
+    try {
+      const response = await fetch("/api/attachments/" + image.id, {
+        method:"POST", credentials:"same-origin", headers, body:image.file
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || ("HTTP " + response.status));
+      }
+      image.uploaded = true;
+    } catch (error) {
+      image.error = "上传失败";
+      throw error;
+    }
+  }
+
   async function sendMessage() {
     const inp = document.getElementById("composer-input");
     const text = (inp.value || "").trim();
-    if (!text || sending || text.startsWith("/")) return;
+    const draft = activeDraft();
+    const draftKey = currentDraftKey;
+    const photos = draft.images.slice();
+    if ((!text && !photos.length) || sending) return;
     const cur = getActiveMission(appState);
     if (!cur && !composeWorkspace) {
       folderMenuOpen = true;
@@ -3039,39 +3337,61 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     }
     const open = cur && !(cur.status === "completed" || cur.status === "cancelled" || cur.status === "failed");
     const path = open ? "/api/missions/" + encodeURIComponent(cur.mission_id) + "/message" : "/api/conversations";
+    const recipients = sendTargets.slice();
+    const folder = cur ? (cur.workspace_path || "") : composeWorkspace;
+    const payload = {
+      text, targets: recipients, tier: composeTier,
+      attachments:photos.map(image => ({id:image.id, name:image.file.name || "剪贴板图片"}))
+    };
+    if (!open) payload.workspace = folder || composeWorkspace;
+    const wire = JSON.stringify([path,payload]);
+    if (!draft.receipt || draft.receipt.wire !== wire) draft.receipt = {wire, id:newClientID()};
+    payload.client_request_id = draft.receipt.id;
+
     sending = true;
     let accepted = false;
+    draft.text = "";
     inp.value = "";
     inp.style.height = "";
-    const restoreDraft = () => { if (!inp.value) { inp.value = text; inp.dispatchEvent(new Event("input")); } };
+    slashOpen = false;
+    const restoreDraft = () => {
+      const current = currentDraftKey === draftKey ? inp.value : draft.text;
+      if (!current) {
+        draft.text = text;
+        if (currentDraftKey === draftKey) {
+          inp.value = text;
+          inp.dispatchEvent(new Event("input"));
+        }
+      }
+    };
     renderComposerBar(appState);
     try {
+      for (const image of photos) await uploadDraftImage(image);
       const res = await fetch(path, {
-        method: "POST",
-        credentials: "same-origin",
-        headers: writeHeaders(),
-        body: JSON.stringify(cur ? { text: text, targets: sendTargets.slice(), tier: composeTier }
-                                 : { text: text, targets: sendTargets.slice(), workspace: composeWorkspace, tier: composeTier })
+        method: "POST", credentials:"same-origin", headers:writeHeaders(), body:JSON.stringify(payload)
       });
       if (res.status === 401) { restoreDraft(); showLogin(true); return; }
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { restoreDraft(); showToast(data.error || ("发送失败（HTTP " + res.status + "）")); return; }
       accepted = true;
-      scrollToLatest = true;
-      composingNew = false;
-      selectedMissionId = data.result.mission_id;
-      if (!cur) rememberFolder(composeWorkspace);
+      draft.receipt = null;
+      const sentIDs = new Set(photos.map(image => image.id));
+      draft.images = draft.images.filter(image => !sentIDs.has(image.id));
+      photos.forEach(image => URL.revokeObjectURL(image.preview));
+      if (currentDraftKey === draftKey) {
+        scrollToLatest = true;
+        composingNew = false;
+        selectedMissionId = data.result.mission_id;
+      }
+      if (!cur) rememberFolder(folder);
       const codexWaiting = Number(((appState && appState.active_waiters) || {}).chatgpt || 0) > 0;
       const codexBound = cur && cur.native_sessions && cur.native_sessions.chatgpt;
-      if (sendTargets.indexOf("chatgpt") >= 0 && !codexWaiting && !codexBound) {
-        const folder = cur ? (cur.workspace_path || "") : composeWorkspace;
+      if (recipients.includes("chatgpt") && !codexWaiting && !codexBound) {
         const codexUrl = buildHandoffDeeplink("chatgpt", "调用 consilium_pickup_inbox(peer_id=\"chatgpt\") 认领 Consilium 里的新消息，按 consilium-collab 技能处理，并用 consilium_bind_session 记下这个会话。", folder);
         if (codexUrl) window.location.href = codexUrl;
       }
       await fetchState();
     } catch (err) {
-      // A failure after the server accepted the message must not put the text back,
-      // or pressing Enter again would send it twice.
       if (!accepted) restoreDraft();
       showToast(accepted ? "已发送，但刷新界面时出错：" + err : "发送失败：" + err);
     } finally {
@@ -3081,6 +3401,53 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   }
 
   document.getElementById("btn-send").addEventListener("click", sendMessage);
+  document.getElementById("dismiss-account-notice").addEventListener("click", () => {
+    for (const [peer, text] of accountNotices) dismissedAccountNotices.set(peer, text);
+    renderAccountNotices(appState);
+  });
+  const imageInput = document.getElementById("composer-image");
+  const messageInput = document.getElementById("composer-input");
+  const composerBox = document.getElementById("composer-box");
+  document.getElementById("btn-attach-image").addEventListener("click", () => imageInput.click());
+  imageInput.addEventListener("change", () => {
+    if (imageInput.files.length) addComposerImages(imageInput.files);
+    imageInput.value = "";
+    messageInput.focus();
+  });
+  messageInput.addEventListener("paste", ev => {
+    if (ev.clipboardData && ev.clipboardData.files.length) {
+      ev.preventDefault();
+      addComposerImages(ev.clipboardData.files);
+    }
+  });
+  composerBox.addEventListener("dragover", ev => {
+    if (ev.dataTransfer && ev.dataTransfer.types.includes("Files")) {
+      ev.preventDefault();
+      composerBox.classList.add("dragging-image");
+    }
+  });
+  composerBox.addEventListener("dragleave", ev => {
+    if (!composerBox.contains(ev.relatedTarget)) composerBox.classList.remove("dragging-image");
+  });
+  composerBox.addEventListener("drop", ev => {
+    composerBox.classList.remove("dragging-image");
+    if (ev.dataTransfer && ev.dataTransfer.files.length) {
+      ev.preventDefault();
+      addComposerImages(ev.dataTransfer.files);
+      messageInput.focus();
+    }
+  });
+  document.getElementById("btn-slash-toggle").addEventListener("click", () => {
+    if (!document.getElementById("slash-palette").classList.contains("hidden")) {
+      slashOpen = false;
+      slashDismissed = messageInput.value;
+    } else {
+      slashOpen = true;
+      slashIndex = 0;
+    }
+    renderComposerBar(appState);
+    messageInput.focus();
+  });
   // Input methods (pinyin etc.) use Enter to confirm a candidate. WebKit reports that
   // Enter with isComposing=false right after compositionend, so also check keyCode 229
   // and the time since the composition ended; otherwise confirming a word sends the message.
@@ -3092,11 +3459,20 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   document.getElementById("composer-input").addEventListener("compositionstart", () => { imeComposing = true; });
   document.getElementById("composer-input").addEventListener("compositionend", () => { imeComposing = false; imeEndedAt = Date.now(); });
   document.getElementById("composer-input").addEventListener("keydown", ev => {
-    if (ev.key === "Enter" && !ev.shiftKey && !isImeEnter(ev)) {
-      const pal = document.getElementById("slash-palette");
-      if (!pal.classList.contains("hidden")) return;
+    if (isImeEnter(ev)) return;
+    const pal = document.getElementById("slash-palette");
+    if (!pal.classList.contains("hidden") && (ev.key === "ArrowDown" || ev.key === "ArrowUp")) {
       ev.preventDefault();
-      sendMessage();
+      const count = pal.childElementCount;
+      slashIndex = (slashIndex + count + (ev.key === "ArrowDown" ? 1 : -1)) % count;
+      renderComposerBar(appState);
+      pal.children[slashIndex].scrollIntoView({block:"nearest"});
+      return;
+    }
+    if (ev.key === "Enter" && !ev.shiftKey) {
+      ev.preventDefault();
+      if (!pal.classList.contains("hidden")) pal.children[slashIndex].click();
+      else sendMessage();
     }
   });
   document.getElementById("composer-input").addEventListener("input", ev => {
@@ -3225,12 +3601,40 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       return;
     }
 
+    const removeImage = ev.target.closest("[data-remove-image]");
+    if (removeImage) {
+      const draft = activeDraft();
+      const id = removeImage.getAttribute("data-remove-image");
+      const image = draft.images.find(item => item.id === id);
+      if (image) {
+        URL.revokeObjectURL(image.preview);
+        draft.images = draft.images.filter(item => item.id !== id);
+        if (image.uploaded) {
+          fetch("/api/attachments/" + encodeURIComponent(id) + "/discard", {
+            method:"POST", credentials:"same-origin", headers:writeHeaders(), body:"{}"
+          }).catch(() => {});
+        }
+        renderComposerBar(appState);
+        messageInput.focus();
+      }
+      return;
+    }
+    const openImage = ev.target.closest("[data-open-image]");
+    if (openImage) {
+      const dialog = document.getElementById("image-preview");
+      const image = dialog.querySelector("img");
+      image.src = openImage.getAttribute("data-open-image");
+      image.alt = openImage.getAttribute("data-image-label");
+      dialog.showModal();
+      return;
+    }
     const slashActBtn = ev.target.closest("[data-slash-act]");
     if (slashActBtn) {
       const act = slashActBtn.getAttribute("data-slash-act");
       slashOpen = false;
       const inp = document.getElementById("composer-input");
-      if (inp.value.startsWith("/")) inp.value = "";
+      if (/^\/[a-z]*$/i.test(inp.value)) inp.value = "";
+      slashDismissed = inp.value;
       if (act === "focus_mission") {
         if (isNarrowViewport()) sidebarMobileOpen = true;
         else sidebarDesktopOpen = true;
@@ -3247,6 +3651,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
         if (appState) renderAll(appState);
       }
       renderComposerBar(appState);
+      if (act === "new_chat" || act === "focus_mission" || act === "export") inp.focus();
       return;
     }
 
@@ -3438,6 +3843,47 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
           await fetchState();
         }
       );
+      return;
+    }
+
+    const notifyButton = ev.target.closest("[data-notify-task]");
+    if (notifyButton) {
+      notifyButton.disabled = true;
+      const id = notifyButton.getAttribute("data-notify-task");
+      fetch("/api/tasks/" + encodeURIComponent(id) + "/notify", {
+        method:"POST", credentials:"same-origin", headers:writeHeaders(), body:"{}"
+      }).then(async response => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "通知失败");
+        const delivery = data.delivery || {};
+        const message = delivery.delivery === "hot_wakeup" ? "已唤醒监听，等领取任务" :
+          delivery.notified ? "系统通知已发，等领取任务" : (delivery.error || "通知未送达，可到目标应用取件");
+        showToast(message);
+        await fetchState();
+      }).catch(error => showToast(error.message)).finally(() => { notifyButton.disabled = false; });
+      return;
+    }
+
+    const settleButton = ev.target.closest("[data-settle-task]");
+    if (settleButton) {
+      const mission = getActiveMission(appState);
+      const task = (mission.tasks || []).find(t => t.task_id === settleButton.getAttribute("data-settle-task"));
+      const completed = (mission.tasks || []).filter(t => t.status === "done");
+      const options = completed.map(t => '<option value="' + esc(t.task_id) + '">' +
+        esc(peerLabel(t.assignee_peer) + " · " + taskTitle(t) + "（" + t.task_id + "）") + '</option>').join("");
+      openConfirm("收尾重复任务", "选择已经完成同一事项的交付。当前任务的原记录会保留。",
+        '<label for="settle-result">关联交付</label><select id="settle-result"><option value="">请选择</option>' + options + '</select>',
+        async () => {
+          const chosen = document.getElementById("settle-result").value;
+          if (!chosen) throw new Error("请选择已完成的交付");
+          const response = await fetch("/api/tasks/" + encodeURIComponent(task.task_id) + "/supersede", {
+            method:"POST", credentials:"same-origin", headers:writeHeaders(),
+            body:JSON.stringify({attempt_id:task.attempt_id, delivered_task_id:chosen})
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(result.error || "收尾失败");
+          await fetchState();
+        });
       return;
     }
 

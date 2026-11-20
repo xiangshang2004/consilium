@@ -21,4 +21,4 @@ Antigravity 换号后，Cockpit 已看到新账号余量 42%。旧任务仍显�
 
 ## Impact
 
-改动涉及 SQLite 任务及事件及图片附件记录、Cockpit 当前账号投影、MCP 任务状态、SSE 状态消费端与对话窗口。保留现有 `attempt_id` 隔离和显式任务分配。当前交付物是设计，实施顺序和验收条件见 [设计](design.md) 与 [任务拆解](tasks.md)。
+改动涉及 SQLite 任务及事件及图片附件记录、Cockpit 当前账号投影、MCP 任务状态、SSE 状态消费端与对话窗口。保留现有 `attempt_id` 隔离和显式任务分配。实施顺序、状态契约与验收条件见 [设计](design.md) 与 [任务拆解](tasks.md)。

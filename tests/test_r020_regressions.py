@@ -147,7 +147,8 @@ class R020RegressionsTests(unittest.TestCase):
         # Enter that confirms an input-method candidate must not send (WebKit reports isComposing=false).
         self.assertIn("ev.keyCode === 229", html)
         self.assertIn('addEventListener("compositionend"', html)
-        self.assertIn('ev.key === "Enter" && !ev.shiftKey && !isImeEnter(ev)', html)
+        keydown = html[html.index('if (isImeEnter(ev)) return;'):]
+        self.assertLess(keydown.index('if (isImeEnter(ev)) return;'), keydown.index('if (ev.key === "Enter" && !ev.shiftKey)'))
         # The box is emptied when the message leaves, and only restored when it was not accepted.
         send = html[html.index("async function sendMessage()"):html.index('getElementById("btn-send").addEventListener')]
         self.assertLess(send.index('inp.value = "";'), send.index("await fetch(path"))
@@ -155,7 +156,7 @@ class R020RegressionsTests(unittest.TestCase):
         self.assertEqual(send.count('inp.value = "";'), 1)
         # The conversation scrolls to the newest message after sending and for replies while at the bottom.
         self.assertIn("scrollToLatest = true;", send)
-        self.assertIn("if (scrollToLatest || switched || (grew && wasAtBottom))", html)
+        self.assertIn("if (scrollToLatest || switched || wasAtBottom)", html)
         self.assertIn("scroller.scrollTop = scroller.scrollHeight;", html)
     def test_effort_is_recorded_shown_and_quota_is_not_self_reported(self) -> None:
         self.daemon.ui_send("看个报错", ["chatgpt"])
@@ -243,7 +244,8 @@ class R020RegressionsTests(unittest.TestCase):
         html = render_dashboard_html("0.3.0")
         self.assertIn('["auto", "自动", "按难度自己定，不用你选"]', html)
         self.assertIn('let composeTier = "auto";', html)
-        self.assertEqual(html.count("tier: composeTier"), 2, "new and existing conversations both send the tier")
+        self.assertEqual(html.count("tier: composeTier"), 1, "new and existing conversations use one send payload")
+        self.assertIn('body:JSON.stringify(payload)', html)
         self.assertIn("optsEl.innerHTML = closedMission ? \"\" : tierBtnHtml + tierMenuHtml;", html,
                       "the tier button is also there in an existing conversation")
         self.assertIn("const tn = tierNote(task);", html)

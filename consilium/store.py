@@ -286,6 +286,11 @@ class BusStore:
                 "ALTER TABLE tasks ADD COLUMN origin TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE tasks ADD COLUMN model_used TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE user_messages ADD COLUMN reason TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE user_messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'",
+                "ALTER TABLE user_messages ADD COLUMN ui_request_id TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE user_messages ADD COLUMN ui_request_hash TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE tasks ADD COLUMN user_message_id INTEGER",
+                "ALTER TABLE tasks ADD COLUMN last_progress_at TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE tasks ADD COLUMN new_session INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE missions ADD COLUMN native_sessions_json TEXT NOT NULL DEFAULT '{}'",
                 "ALTER TABLE missions ADD COLUMN title_locked INTEGER NOT NULL DEFAULT 0",
@@ -305,6 +310,12 @@ class BusStore:
                     conn.execute(stmt)
                 except sqlite3.OperationalError:
                     pass
+            conn.execute(
+                "UPDATE tasks SET last_progress_at = updated_at WHERE status = 'running' "
+                "AND stale_at = '' AND last_progress_at = '' AND progress_note != ''"
+            )
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_messages_ui_request "
+                         "ON user_messages(ui_request_id) WHERE ui_request_id != ''")
             # R020: where a conversation was started. 'ui' = typed by the user in the
             # Consilium window; 'peer' = created by a desktop session through MCP.
             try:
@@ -892,6 +903,7 @@ class BusStore:
                     ),
                 )
 
+                message_id = self._insert_user_message_locked(conn, mission_id, user_message, now) if user_message else None
                 for item in tasks or []:
                     task_obj, event_obj = self._insert_task_locked(
                         conn,
@@ -907,13 +919,12 @@ class BusStore:
                         now_ms=now_ms,
                         origin=str(item.get("origin", "")),
                         new_session=bool(item.get("new_session")),
+                        user_message_id=message_id,
                     )
                     created_tasks.append(task_obj)
                     created_events.append(event_obj)
                     touched_peers.append(task_obj["assignee_peer"])
 
-                if user_message:
-                    self._insert_user_message_locked(conn, mission_id, user_message, now)
                 mission_row = conn.execute(
                     "SELECT * FROM missions WHERE mission_id = ?", (mission_id,)
                 ).fetchone()
@@ -952,6 +963,7 @@ class BusStore:
         now_ms: Optional[float] = None,
         origin: str = "",
         new_session: bool = False,
+        user_message_id: Optional[int] = None,
     ) -> tuple:
         assignee = validate_peer(assignee_peer)
         tier = validate_choice(model_tier, VALID_MODEL_TIERS, "model_tier")
@@ -964,8 +976,8 @@ class BusStore:
             INSERT INTO tasks (
                 task_id, mission_id, assignee_peer, model_tier, model_hint,
                 parallel_fanout, worktree_branch, prompt, status,
-                dispatched_at_ms, created_at, updated_at, origin, new_session
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
+                dispatched_at_ms, created_at, updated_at, origin, new_session, user_message_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -981,6 +993,7 @@ class BusStore:
                 now,
                 origin,
                 1 if new_session else 0,
+                user_message_id,
             ),
         )
         task_row = conn.execute(
@@ -1154,6 +1167,16 @@ class BusStore:
                         payload = {}
                     mode = str(delivery.get("delivery", ""))
                     payload["delivery_mode"] = mode
+                    attempts = payload.get("delivery_attempts")
+                    if not isinstance(attempts, list):
+                        attempts = []
+                        payload["delivery_attempts"] = attempts
+                    fact = {"mode": mode, "at": utc_now_iso()}
+                    for key in ("notified", "command_ok", "opened", "error"):
+                        if key in delivery:
+                            fact[key] = delivery[key]
+                    if mode and (not attempts or attempts[-1] != fact):
+                        attempts.append(fact)
                     if "attempted" in delivery:
                         payload["delivery_attempted"] = bool(delivery["attempted"])
                     elif mode in ("hot_wakeup", "cold_notification", "error"):
@@ -1351,7 +1374,8 @@ class BusStore:
                                 claimed_at_ms = ?,
                                 claim_latency_ms = ?,
                                 stale_at = '',
-                                updated_at = ?
+                                updated_at = ?,
+                                last_progress_at = ''
                             WHERE task_id = ? AND status = 'queued'
                             """,
                             (
@@ -1386,6 +1410,13 @@ class BusStore:
                                 except ValueError:
                                     bindings = {}
                                 claimed["native_session"] = (bindings.get(peer) or {}).get("ref", "")
+                            if claimed.get("user_message_id"):
+                                message = conn.execute(
+                                    "SELECT attachments_json FROM user_messages WHERE message_id = ?",
+                                    (claimed["user_message_id"],),
+                                ).fetchone()
+                                if message is not None:
+                                    claimed["attachments"] = json.loads(message["attachments_json"] or "[]")
                             claimed["conversation"] = self._conversation_context_locked(conn, claimed["mission_id"], claimed["task_id"])
                             claimed_tasks.append(claimed)
                         # Annotate the triggering assignment/requeue event with claim_latency_ms + attempt_id.
@@ -1645,6 +1676,78 @@ class BusStore:
                     item["post_commit_warnings"] = list(sync_warnings)
         return released
 
+    def queued_notification(self, task_id: str) -> Dict[str, Any]:
+        """Locate the current delivery event without creating another task."""
+        with self._connect() as conn:
+            task = conn.execute(
+                "SELECT t.status, t.assignee_peer, m.source, m.status AS mission_status, m.workspace_path, m.title "
+                "FROM tasks t JOIN missions m ON m.mission_id = t.mission_id WHERE t.task_id = ?",
+                (task_id,),
+            ).fetchone()
+            if task is None:
+                raise KeyError("任务不存在")
+            if (task["status"] != "queued" or task["source"] != MISSION_SOURCE_UI or
+                    task["mission_status"] in VALID_MISSION_CLOSE_STATUSES):
+                raise ConflictError("任务已被领取或关闭，请刷新")
+            event = conn.execute(
+                "SELECT event_id FROM events WHERE task_id = ? AND to_peer = ? "
+                "AND kind IN ('task_assigned','task_requeued','task_handoff') ORDER BY event_id DESC LIMIT 1",
+                (task_id, task["assignee_peer"]),
+            ).fetchone()
+            if event is None:
+                raise KeyError("原投递记录不存在")
+            return {**dict(task), "event_id": event["event_id"]}
+
+    def settle_duplicate_task(self, task_id: str, attempt_id: str, delivered_task_id: str) -> Dict[str, Any]:
+        """Settle a live UI task against an explicit completed result in its conversation."""
+        now = utc_now_iso()
+        with self._connect() as conn:
+            with self._tx(conn):
+                task = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+                delivered = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (delivered_task_id,)).fetchone()
+                if task is None or delivered is None:
+                    raise KeyError("任务或关联交付不存在")
+                mission_id = task["mission_id"]
+                mission = conn.execute("SELECT * FROM missions WHERE mission_id = ?", (mission_id,)).fetchone()
+                if mission["source"] != MISSION_SOURCE_UI or mission["status"] in VALID_MISSION_CLOSE_STATUSES:
+                    raise ValueError("只可以在打开的会诊里收尾重复任务")
+                if (not attempt_id or task["attempt_id"] != attempt_id or
+                        task["status"] not in ("claimed", "running")):
+                    raise ConflictError("任务状态已变化，请刷新后再操作")
+                if delivered["mission_id"] != mission_id or delivered["status"] != "done":
+                    raise ValueError("请选择同一会诊里已完成的交付")
+
+                archived = self._decode_task(task)
+                history = archived["attempt_history"]
+                history.append({
+                    "attempt_id": attempt_id, "attempt_seq": task["attempt_seq"], "status": task["status"],
+                    "assignee_peer": task["assignee_peer"], "claimed_at": task["claimed_at"],
+                    "claimed_by_session": task["claimed_by_session"], "worktree_branch": task["worktree_branch"],
+                    "progress_note": task["progress_note"], "model_used": task["model_used"],
+                    "effort_used": task["effort_used"], "artifacts": archived["artifacts"],
+                    "archived_at": now, "reason": "已由其他任务交付", "delivered_task_id": delivered_task_id,
+                })
+                summary = f"已由其他任务交付（{delivered_task_id}）"
+                conn.execute(
+                    "UPDATE tasks SET status = 'cancelled', result_summary = ?, stale_at = '', "
+                    "attempt_history_json = ?, updated_at = ? WHERE task_id = ? AND attempt_id = ?",
+                    (summary, json.dumps(history, ensure_ascii=False), now, task_id, attempt_id),
+                )
+                event = self._insert_event(
+                    conn, mission_id=mission_id, task_id=task_id, from_peer=USER_PEER,
+                    to_peer=task["assignee_peer"], kind="task_superseded", created_at=now,
+                    payload={"task_id":task_id, "attempt_id":attempt_id,
+                             "delivered_task_id":delivered_task_id, "reason":summary},
+                )
+                outstanding = conn.execute(
+                    "SELECT 1 FROM tasks WHERE mission_id = ? AND status IN ('queued','claimed','running') LIMIT 1",
+                    (mission_id,),
+                ).fetchone()
+                conn.execute("UPDATE missions SET status = ?, updated_at = ? WHERE mission_id = ?",
+                             (mission["status"] if outstanding else "ready_to_report", now, mission_id))
+        self._safe_sync_peers_seq([task["assignee_peer"], mission["coordinator_peer"]])
+        return {"task_id": task_id, "status": "cancelled", "delivered_task_id": delivered_task_id, "event": event}
+
     def requeue_task(
         self,
         task_id: str,
@@ -1894,10 +1997,11 @@ class BusStore:
                 conn.execute(
                     """
                     UPDATE tasks
-                    SET status = ?, progress_note = ?, worktree_branch = ?, stale_at = '', updated_at = ?
+                    SET status = ?, progress_note = ?, worktree_branch = ?, stale_at = '', updated_at = ?,
+                        last_progress_at = CASE WHEN ? = 'running' THEN ? ELSE last_progress_at END
                     WHERE task_id = ? AND attempt_id = ?
                     """,
-                    (normalized_status, progress_note, branch_value, now, task_id, provided_attempt),
+                    (normalized_status, progress_note, branch_value, now, normalized_status, now, task_id, provided_attempt),
                 )
                 if model_label:
                     conn.execute("UPDATE tasks SET model_used = ? WHERE task_id = ?", (model_label, task_id))
@@ -2421,16 +2525,77 @@ class BusStore:
 
     def _insert_user_message_locked(
         self, conn: sqlite3.Connection, mission_id: str, message: Dict[str, Any], now: str
-    ) -> None:
+    ) -> Optional[int]:
         text = str(message.get("text") or "").strip()
-        if not text:
-            return
+        attachments = message.get("attachments") or []
+        if not text and not attachments:
+            return None
         targets = [str(t) for t in (message.get("targets") or [])]
-        conn.execute(
-            "INSERT INTO user_messages (mission_id, text, targets_json, mode, reason, created_at, created_ms) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        row = conn.execute(
+            """INSERT INTO user_messages
+                (mission_id, text, targets_json, mode, reason, created_at, created_ms, attachments_json, ui_request_id, ui_request_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (mission_id, text[:20000], json.dumps(targets, ensure_ascii=False), str(message.get("mode") or "direct"),
-             str(message.get("reason") or "")[:300], now, round(time.time() * 1000.0, 2)),
+             str(message.get("reason") or "")[:300], now, round(time.time() * 1000.0, 2),
+             json.dumps(attachments, ensure_ascii=False), message.get("ui_request_id") or "", message.get("ui_request_hash") or ""),
         )
+        return row.lastrowid
+
+    def image_is_attached(self, attachment_id: str) -> bool:
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT 1 FROM user_messages, json_each(user_messages.attachments_json) "
+                "WHERE json_extract(json_each.value, '$.id') = ? LIMIT 1", (attachment_id,),
+            ).fetchone() is not None
+
+    def find_ui_message(self, request_id: str, request_hash: str) -> Optional[Dict[str, Any]]:
+        if not request_id:
+            return None
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM user_messages WHERE ui_request_id = ?", (request_id,)).fetchone()
+        if row is None:
+            return None
+        if row["ui_request_hash"] != request_hash:
+            raise ConflictError("同一发送请求 ID 已用于不同消息")
+        return {
+            "mission_id": row["mission_id"],
+            "mode": row["mode"],
+            "targets": json.loads(row["targets_json"]),
+            "deliveries": [],
+            "warnings": [],
+        }
+
+    def dispatch_ui_message(
+        self, mission_id: str, plans: List[tuple], model_tier: str, message: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Commit a follow-up and all its recipients in one transaction."""
+        now = utc_now_iso()
+        now_ms = round(time.time() * 1000.0, 2)
+        with self._connect() as conn:
+            with self._tx(conn):
+                mission = conn.execute("SELECT * FROM missions WHERE mission_id = ?", (mission_id,)).fetchone()
+                if mission is None:
+                    raise KeyError(f"Unknown mission_id: {mission_id}")
+                if mission["status"] in VALID_MISSION_CLOSE_STATUSES:
+                    raise ValueError("这个会诊已经关闭，请新开一个")
+                message_id = self._insert_user_message_locked(conn, mission_id, message, now)
+                coordinator = mission["coordinator_peer"]
+                self._touch_peer_locked(conn, coordinator, status="active", now=now)
+                events = [
+                    self._insert_task_locked(
+                        conn, mission_id=mission_id, from_peer=coordinator, assignee_peer=peer,
+                        prompt=prompt, model_tier=model_tier, model_hint="", parallel_fanout=1,
+                        worktree_branch="", now=now, now_ms=now_ms, origin="user",
+                        new_session=new_session, user_message_id=message_id,
+                    )[1]
+                    for peer, prompt, new_session in plans
+                ]
+                conn.execute(
+                    "UPDATE missions SET status = 'active', updated_at = ? WHERE mission_id = ?",
+                    (now, mission_id),
+                )
+        warnings = self._safe_sync_peers_seq([coordinator] + [peer for peer, _, _ in plans])
+        return {"events": events, "post_commit_warnings": warnings}
 
     def set_mission_title(self, mission_id: str, title: str, actor: str) -> Dict[str, Any]:
         """Give a conversation a short name (shown in the sidebar and used to name native sessions)."""
@@ -2474,11 +2639,12 @@ class BusStore:
         """
         items: List[Dict[str, Any]] = []
         for r in conn.execute(
-            "SELECT text, created_at, created_ms, message_id FROM user_messages WHERE mission_id = ? ORDER BY message_id ASC",
+            "SELECT text, created_at, created_ms, message_id, attachments_json FROM user_messages WHERE mission_id = ? ORDER BY message_id ASC",
             (mission_id,),
         ).fetchall():
             items.append({"at": r["created_at"], "_ms": float(r["created_ms"] or 0), "_seq": int(r["message_id"]),
-                          "from": USER_PEER, "text": r["text"][:1500]})
+                          "from": USER_PEER, "text": r["text"][:1500],
+                          "attachments": json.loads(r["attachments_json"] or "[]")})
         for r in conn.execute(
             "SELECT event_id, from_peer, task_id, payload_json, created_at FROM events "
             "WHERE mission_id = ? AND kind = 'task_done' AND task_id != ? ORDER BY event_id ASC",
@@ -2825,6 +2991,7 @@ class BusStore:
                         "targets": json.loads(r["targets_json"] or "[]"),
                         "mode": r["mode"],
                         "reason": r["reason"] if "reason" in r.keys() else "",
+                        "attachments": json.loads(r["attachments_json"] or "[]"),
                         "created_at": r["created_at"],
                     }
                     for r in conn.execute(
