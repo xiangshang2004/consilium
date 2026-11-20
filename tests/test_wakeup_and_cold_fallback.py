@@ -35,11 +35,19 @@ class WakeupAndColdFallbackTests(unittest.TestCase):
 
     def test_long_home_path_shortens_unix_socket_inside_private_subdir(self) -> None:
         long_rv = "/tmp/" + ("nested_directory_segment_" * 5) + "consilium"
+        fallback_dir = os.path.join(self.tmp_rv, "sk")
+        prev_fb = os.environ.get("CONSILIUM_SOCKET_FALLBACK_DIR")
+        os.environ["CONSILIUM_SOCKET_FALLBACK_DIR"] = fallback_dir
         try:
             sock_path = resolve_socket_path(long_rv)
             self.assertLessEqual(len(sock_path.encode("utf-8")), 96)
-            self.assertTrue(sock_path.startswith(f"/tmp/consilium-{os.getuid()}/sock/"))
+            self.assertTrue(sock_path.startswith(os.path.abspath(fallback_dir) + os.sep))
+            self.assertEqual(os.stat(os.path.dirname(sock_path)).st_mode & 0o777, 0o700)
         finally:
+            if prev_fb is None:
+                os.environ.pop("CONSILIUM_SOCKET_FALLBACK_DIR", None)
+            else:
+                os.environ["CONSILIUM_SOCKET_FALLBACK_DIR"] = prev_fb
             shutil.rmtree("/tmp/nested_directory_segment_nested_directory_segment_nested_directory_segment_nested_directory_segment_nested_directory_segment_consilium", ignore_errors=True)
 
     def test_db_free_kqueue_hot_wakeup_and_lease_cleanup(self) -> None:
