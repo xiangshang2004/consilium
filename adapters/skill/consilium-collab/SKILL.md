@@ -54,3 +54,15 @@ Whenever the user gives an instruction here that asks to coordinate across model
    - For long-running tasks, send `consilium_report_progress(..., attempt_id=<attempt_id>, status="running")` at intervals of **at most half the `running_timeout_sec`** (e.g., at least every **<= 1 hour** under the default 2-hour running timeout). Expired `running` tasks are marked `stale` (`task_stale` sent to both coordinator and assignee); if reassigned/requeued, old `attempt_id` writes are rejected.
 4. Never enter an unguarded ping-pong loop: cross-peer checks MUST go through `consilium_request_review(...)`, and if `allowed == false`, stop and hand control back to the coordinator.
 5. Finish by calling `consilium_complete_task(task_id, peer_id=<self>, attempt_id=<attempt_id>, result_summary=..., artifacts=[...])`, then re-arm your standby waiter silently if continuing standby duty.
+
+## 3. Messages From the Consilium App (Added 2026-11-20)
+
+The user can now type directly in the Consilium window. Each message arrives as an ordinary task (`origin = "user"`) and is picked up exactly like any other task.
+
+- **Addressed to you (`@` you)**: the task prompt is the user's words verbatim. Do the work and answer with `consilium_complete_task`; write `result_summary` as a reply to the user, in their language. The mission's coordinator is `user`, so your reply is shown in the window instead of going to another peer.
+- **Auto-routed (no `@`)**: the prompt starts with the user's words, then says you are the coordinator. Before deciding:
+  1. Call `consilium_preferences` to read the user's learned preferences, their recent explicit routing, and each peer's standby state and current-account quota.
+  2. Do it yourself, or split it with `consilium_dispatch_task`. Prefer peers that are on standby and have quota; unknown quota is fine; never dispatch to an exhausted peer.
+  3. Finish with `consilium_complete_task` on your own task. Its `result_summary` is the final answer the user reads.
+- **Learning the user's intent**: when a choice the user made is clearly a stable habit (for example "code review always goes to Codex", or "answer briefly in Chinese"), record it in one short sentence with `consilium_learn_preference`. Don't record guesses or one-off details. The user can see and delete every preference in the window.
+- **Handing off on low quota**: if your own quota is nearly used up, call `consilium_handoff_task(task_id, peer_id, attempt_id, to_peer, note)`. The note must say what is already done and why you are handing off. Your old `attempt_id` stops working at once. Account switching is always manual: if every peer is low, tell the user which account to switch to in Cockpit.
