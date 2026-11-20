@@ -57,16 +57,15 @@ Whenever the user gives an instruction here that asks to coordinate across model
 
 ## 3. Messages From the Consilium App (2026-11-20)
 
-The Consilium window works like the Claude Code desktop app: **the user picks a folder when starting a conversation, and each conversation has its own native session per app.** The user never types paths; never guess a folder from message text.
+The Consilium window works like the Claude Code desktop app: **the user picks a folder when starting a conversation; each conversation keeps its own history, and the user can bind a dedicated native session to it.** The user never types paths; never guess a folder from message text.
 
-**What a picked-up task carries**: `mission_title`, `workspace_path` (the folder the user chose), `mission_tier` (`fast` / `balanced` / `pro_reasoning`), `native_session` (the session already bound to this conversation for you, or empty), and `new_session` (1 for the first message to you in this conversation).
+**What a picked-up task carries**: `mission_title`, `workspace_path` (the folder the user chose), `mission_tier` (`fast` / `balanced` / `pro_reasoning`), `native_session` (the dedicated session the user bound to this conversation for you, or empty), `conversation` (earlier turns of this conversation, oldest first) and `new_session` (1 for the first message to you in this conversation).
 
 **Routing (standby sessions)**:
-1. `native_session` is set: forward the task to that session (Claude Code: `SendMessage` to that session id with `task_id`, `attempt_id`, `peer_id` and the prompt) and keep standing by. If the session no longer exists, handle it as in step 2.
-2. No session yet: start one for this conversation.
-   - Claude Code: `start_session` with `cwd` = `workspace_path`, title = `mission_title`, and model / effort chosen from `mission_tier` (fast → low effort, balanced → default, pro_reasoning → high effort). Its brief must contain `task_id`, `attempt_id`, `peer_id`, the prompt, and these rules. Then call `consilium_bind_session(mission_id, peer_id, <new session id>)`.
-   - Codex and Antigravity cannot start sessions for you: the Consilium window opens a new Codex thread in the folder for the user when Codex is not on standby. If you are the one that picked it up, handle it in your own thread, and call `consilium_bind_session` with your thread's reference if you have one.
-3. The session doing the work reports progress with `model_used`, answers with `consilium_complete_task` (the `result_summary` is what the user reads, in their language), and stays in the conversation's folder.
+1. `native_session` is set: the user opened a dedicated session for this conversation. Forward the task to it (Claude Code: `SendMessage` to that session id with `task_id`, `attempt_id`, `peer_id` and the prompt) and keep standing by. If that session no longer exists, handle the task yourself as in step 2.
+2. Otherwise handle it yourself. The task's `conversation` field holds this conversation's earlier turns (the user's messages and each peer's replies, oldest first): read it so follow-ups stay in context. Work inside `workspace_path`. Do **not** start new sessions from a standby turn: Claude Desktop does not allow an automatically woken turn to start sessions. The user starts a dedicated session from the Consilium window ("在 Claude 里开专属会话") when they want one.
+3. Whoever does the work reports progress with `model_used` and answers with `consilium_complete_task` (the `result_summary` is what the user reads, in their language).
+4. A dedicated session opened from the Consilium window binds itself first: get its own session id (`get_session("self")`), call `consilium_bind_session(mission_id, peer_id, <id>)`, read the conversation with `consilium_status(mission_id)`, then handle forwarded tasks as in step 3.
 
 **Coordinating auto-routed messages** (the prompt says you are the coordinator): call `consilium_preferences` first; do it yourself or split it with `consilium_dispatch_task` (prefer peers on standby with quota; never an exhausted one); give the conversation a short title with `consilium_set_title` (at most 20 Chinese characters; ignored if the user renamed it); deliver the final answer with `consilium_complete_task`.
 
