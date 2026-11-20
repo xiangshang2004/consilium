@@ -165,34 +165,6 @@ class R017RegressionsTests(unittest.TestCase):
         self.assertEqual(post(f"/api/preferences/{pref['pref_id']}/delete", {})[0], 200)
         self.assertEqual(post(f"/api/preferences/{pref['pref_id']}/delete", {})[0], 404)
 
-    def test_workspace_is_detected_set_and_validated(self) -> None:
-        from consilium.mcp_server import detect_workspace
-
-        folder = tempfile.mkdtemp(prefix="consilium-r017-ws-", dir="/tmp")
-        self.addCleanup(shutil.rmtree, folder, True)
-        f = os.path.join(folder, "a.py")
-        with open(f, "w", encoding="utf-8") as h:
-            h.write("x = 1\n")
-        self.assertEqual(detect_workspace(f"看下 {f} 的问题"), os.path.realpath(folder))
-        self.assertEqual(detect_workspace("没有路径"), "")
-        self.assertEqual(detect_workspace("x", explicit=folder), os.path.realpath(folder))
-
-        res = self.daemon.ui_send(f"修一下 {f}", ["chatgpt"])
-        self.assertEqual(self._mission(res["mission_id"])["workspace_path"], os.path.realpath(folder))
-        res2 = self.daemon.ui_send("随便聊聊", ["chatgpt"])
-        mid = res2["mission_id"]
-        self.assertEqual(self._mission(mid)["workspace_path"], "")
-        with self.assertRaises(ValueError):
-            self.store.set_mission_workspace(mid, "relative/path", actor="chatgpt")
-        with self.assertRaises(ValueError):
-            self.store.set_mission_workspace(mid, "/definitely/not/here", actor="chatgpt")
-        with self.assertRaises(ValueError):
-            self.store.set_mission_workspace(mid, folder, actor="antigravity")  # not part of this mission
-        out = self.daemon.dispatcher._dispatch_tool(
-            "consilium_set_workspace", {"mission_id": mid, "peer_id": "chatgpt", "path": folder}
-        )
-        self.assertEqual(out["result"]["workspace_path"], os.path.realpath(folder))
-
     def test_model_used_is_recorded_from_progress_and_completion(self) -> None:
         res = self.daemon.ui_send("hi", ["claude"])
         task = self.store.pickup_inbox("claude")["claimed_tasks"][0]
@@ -204,13 +176,6 @@ class R017RegressionsTests(unittest.TestCase):
         self.assertEqual(self._mission(res["mission_id"])["tasks"][0]["model_used"], "Claude Opus 5.5")
         self.store.complete_task(task["task_id"], "claude", "你好", attempt_id=task["attempt_id"], model_used="Claude Fable 5.2")
         self.assertEqual(self._mission(res["mission_id"])["tasks"][0]["model_used"], "Claude Fable 5.2")
-
-    def test_ui_has_standby_button_and_sidebar_details(self) -> None:
-        from consilium.dashboard import render_dashboard_html
-
-        html = render_dashboard_html("0.1.0")
-        for needle in ("data-start-standby", "让它们待命", "renderMissionDetails", "参与与模型", "模型未上报", "data-edit-workspace", "/workspace"):
-            self.assertIn(needle, html)
 
     def test_auto_routing_explains_its_choice_and_sidebar_shows_peers_and_board(self) -> None:
         from consilium.dashboard import render_dashboard_html
@@ -246,39 +211,102 @@ class R017RegressionsTests(unittest.TestCase):
                        "自动分配 · "):
             self.assertIn(needle, html)
 
-    def test_title_sync_new_session_flag_and_pending_workspace(self) -> None:
+    def test_folder_is_chosen_never_guessed_from_text(self) -> None:
+        folder = tempfile.mkdtemp(prefix="consilium-r018-ws-", dir="/tmp")
+        self.addCleanup(shutil.rmtree, folder, True)
+        res = self.daemon.ui_send(f"看下 {folder}/a.py", ["chatgpt"])
+        self.assertEqual(self._mission(res["mission_id"])["workspace_path"], "", "paths inside the message are not used")
+        res = self.daemon.ui_send("看下这个项目", ["chatgpt"], workspace_hint=folder)
+        self.assertEqual(self._mission(res["mission_id"])["workspace_path"], os.path.realpath(folder))
+        with self.assertRaises(ValueError):
+            self.daemon.ui_send("x", ["chatgpt"], workspace_hint=os.path.join(folder, "不存在"))
+        with self.assertRaises(ValueError):
+            self.daemon.ui_send("x", ["chatgpt"], workspace_hint="relative/path")
+
+    def test_one_conversation_one_native_session_title_lock_and_tier(self) -> None:
+        folder = tempfile.mkdtemp(prefix="consilium-r018-ns-", dir="/tmp")
+        self.addCleanup(shutil.rmtree, folder, True)
+        res = self.daemon.ui_send("整理一下日志", ["claude"], workspace_hint=folder, tier="deep")
+        mid = res["mission_id"]
+        t1 = self.store.pickup_inbox("claude")["claimed_tasks"][0]
+        self.assertEqual(t1["prompt"], "整理一下日志", "the user's words arrive verbatim")
+        self.assertEqual(t1["new_session"], 1)
+        self.assertEqual(t1["native_session"], "")
+        self.assertEqual(t1["workspace_path"], os.path.realpath(folder))
+        self.assertEqual(t1["mission_tier"], "pro_reasoning")
+        self.assertEqual(t1["model_tier"], "pro_reasoning")
+        out = self.daemon.dispatcher._dispatch_tool(
+            "consilium_bind_session", {"mission_id": mid, "peer_id": "claude", "session_ref": "local_abc"}
+        )
+        self.assertEqual(out["result"]["session_ref"], "local_abc")
+        self.store.complete_task(t1["task_id"], "claude", "好", attempt_id=t1["attempt_id"])
+
+        self.daemon.ui_send("再看看昨天的", ["claude"], mid)
+        t2 = self.store.pickup_inbox("claude")["claimed_tasks"][0]
+        self.assertEqual(t2["new_session"], 0)
+        self.assertEqual(t2["native_session"], "local_abc")
+        self.assertEqual(t2["model_tier"], "pro_reasoning")
+
+        self.daemon.dispatcher._dispatch_tool("consilium_set_title", {"mission_id": mid, "peer_id": "claude", "title": "日志整理"})
+        self.assertEqual(self._mission(mid)["title"], "日志整理")
+        self.store.set_mission_title(mid, "我的日志", actor=USER_PEER)
+        locked = self.store.set_mission_title(mid, "被覆盖", actor="claude")
+        self.assertTrue(locked.get("locked"))
+        self.assertEqual(self._mission(mid)["title"], "我的日志")
+        with self.assertRaises(ValueError):
+            self.store.set_mission_title(mid, "x" * 41, actor=USER_PEER)
+
+        self.store.set_mission_archived(mid, True)
+        self.assertTrue(self._mission(mid)["archived"])
+        self.store.set_mission_archived(mid, False)
+        self.assertFalse(self._mission(mid)["archived"])
+
+    def test_http_rename_and_archive_routes_require_csrf(self) -> None:
+        host, port = self.daemon.start()
+        token = read_auth_token(self.tmp_state)
+        conn = http.client.HTTPConnection(host, port, timeout=5)
+        conn.request("POST", "/api/login", body=json.dumps({"token": token}), headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        login = json.loads(resp.read())
+        cookie = resp.getheader("Set-Cookie").split(";", 1)[0]
+        conn.close()
+        mid = self.daemon.ui_send("hi", ["chatgpt"])["mission_id"]
+
+        def post(path: str, body: dict, csrf: bool = True) -> int:
+            c = http.client.HTTPConnection(host, port, timeout=5)
+            headers = {"Content-Type": "application/json", "Cookie": cookie, "Origin": f"http://{host}:{port}"}
+            if csrf:
+                headers["X-Consilium-CSRF"] = login["csrf_token"]
+            c.request("POST", path, body=json.dumps(body), headers=headers)
+            r = c.getresponse()
+            r.read()
+            c.close()
+            return r.status
+
+        self.assertEqual(post(f"/api/missions/{mid}/title", {"title": "新名字"}, csrf=False), 403)
+        self.assertEqual(post(f"/api/missions/{mid}/title", {"title": "新名字"}), 200)
+        self.assertEqual(self._mission(mid)["title"], "新名字")
+        self.assertEqual(post(f"/api/missions/{mid}/archive", {}), 200)
+        self.assertTrue(self._mission(mid)["archived"])
+        self.assertEqual(post(f"/api/missions/{mid}/unarchive", {}), 200)
+        self.assertEqual(post("/api/missions/M-NOPE/archive", {}), 404)
+
+    def test_ui_picks_folders_and_never_asks_for_typed_paths(self) -> None:
         from consilium.dashboard import render_dashboard_html
 
-        folder = tempfile.mkdtemp(prefix="consilium-r017-ns-", dir="/tmp")
-        self.addCleanup(shutil.rmtree, folder, True)
-        res = self.daemon.ui_send("整理一下日志", ["claude"], workspace_hint=folder, new_session=True)
-        task = self.store.pickup_inbox("claude")["claimed_tasks"][0]
-        self.assertEqual(task["new_session"], 1)
-        self.assertEqual(task["workspace_path"], os.path.realpath(folder))
-        self.assertEqual(task["mission_title"], "整理一下日志")
-        self.assertIn("新开一个会话", task["prompt"])
-
-        out = self.daemon.dispatcher._dispatch_tool(
-            "consilium_set_title", {"mission_id": res["mission_id"], "peer_id": "claude", "title": "日志整理"}
-        )
-        self.assertEqual(out["result"]["title"], "日志整理")
-        self.assertEqual(self._mission(res["mission_id"])["title"], "日志整理")
-        with self.assertRaises(ValueError):
-            self.store.set_mission_title(res["mission_id"], "x" * 41, actor="claude")
-        with self.assertRaises(ValueError):
-            self.store.set_mission_title(res["mission_id"], "别人的", actor="antigravity")
-
-        missing = os.path.join(folder, "新项目")
-        res2 = self.daemon.ui_send("新建一个项目", ["chatgpt"], workspace_hint=missing)
-        self.assertEqual(self._mission(res2["mission_id"])["workspace_path"], "")
-        t2 = self.store.pickup_inbox("chatgpt")["claimed_tasks"][0]
-        self.assertIn("还不存在", t2["prompt"])
-        self.assertIn(missing, t2["prompt"])
-        self.assertEqual(t2["new_session"], 0)
-
         html = render_dashboard_html("0.1.0")
-        for needle in ("compose-opts", "新开会话处理", "data-compose-ws", "new_session: composeNewSession", "AG_STANDBY_PROMPT"):
+        for needle in ("data-folder-menu", "data-open-folder-picker", "选择文件夹…", "pickFolder", "__consiliumFolderPicked",
+                       "data-tier", "data-rename-mission", "data-archive-mission", "folder-group", "已归档",
+                       "data-start-standby", "让它们待命", "renderMissionDetails", "参与与模型", "模型未上报"):
             self.assertIn(needle, html)
+        for gone in ("compose-ws-input", "data-edit-workspace", "新开会话处理", "工作区绝对路径", "/Users/…/项目文件夹"):
+            self.assertNotIn(gone, html)
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "app", "macos", "Sources", "MainWindowController.swift"), "r", encoding="utf-8") as h:
+            swift = h.read()
+        self.assertIn("NSOpenPanel", swift)
+        self.assertIn("canCreateDirectories = true", swift)
+        self.assertIn('host == "127.0.0.1"', swift)
 
 
 if __name__ == "__main__":
