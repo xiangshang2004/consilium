@@ -111,8 +111,8 @@ class MCPTransportsTests(unittest.TestCase):
         self.assertEqual(lines[0]["result"]["protocolVersion"], "2025-03-26")
 
         tool_names = [t["name"] for t in lines[1]["result"]["tools"]]
-        self.assertEqual(len(tool_names), 14)
-        for added in ("consilium_preferences", "consilium_learn_preference", "consilium_handoff_task"):
+        self.assertEqual(len(tool_names), 16)
+        for added in ("consilium_preferences", "consilium_learn_preference", "consilium_handoff_task", "consilium_set_workspace", "consilium_set_title"):
             self.assertIn(added, tool_names)
         self.assertIn("consilium_create_mission", tool_names)
         self.assertIn("consilium_wait", tool_names)

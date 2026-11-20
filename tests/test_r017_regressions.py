@@ -165,6 +165,121 @@ class R017RegressionsTests(unittest.TestCase):
         self.assertEqual(post(f"/api/preferences/{pref['pref_id']}/delete", {})[0], 200)
         self.assertEqual(post(f"/api/preferences/{pref['pref_id']}/delete", {})[0], 404)
 
+    def test_workspace_is_detected_set_and_validated(self) -> None:
+        from consilium.mcp_server import detect_workspace
+
+        folder = tempfile.mkdtemp(prefix="consilium-r017-ws-", dir="/tmp")
+        self.addCleanup(shutil.rmtree, folder, True)
+        f = os.path.join(folder, "a.py")
+        with open(f, "w", encoding="utf-8") as h:
+            h.write("x = 1\n")
+        self.assertEqual(detect_workspace(f"看下 {f} 的问题"), os.path.realpath(folder))
+        self.assertEqual(detect_workspace("没有路径"), "")
+        self.assertEqual(detect_workspace("x", explicit=folder), os.path.realpath(folder))
+
+        res = self.daemon.ui_send(f"修一下 {f}", ["chatgpt"])
+        self.assertEqual(self._mission(res["mission_id"])["workspace_path"], os.path.realpath(folder))
+        res2 = self.daemon.ui_send("随便聊聊", ["chatgpt"])
+        mid = res2["mission_id"]
+        self.assertEqual(self._mission(mid)["workspace_path"], "")
+        with self.assertRaises(ValueError):
+            self.store.set_mission_workspace(mid, "relative/path", actor="chatgpt")
+        with self.assertRaises(ValueError):
+            self.store.set_mission_workspace(mid, "/definitely/not/here", actor="chatgpt")
+        with self.assertRaises(ValueError):
+            self.store.set_mission_workspace(mid, folder, actor="antigravity")  # not part of this mission
+        out = self.daemon.dispatcher._dispatch_tool(
+            "consilium_set_workspace", {"mission_id": mid, "peer_id": "chatgpt", "path": folder}
+        )
+        self.assertEqual(out["result"]["workspace_path"], os.path.realpath(folder))
+
+    def test_model_used_is_recorded_from_progress_and_completion(self) -> None:
+        res = self.daemon.ui_send("hi", ["claude"])
+        task = self.store.pickup_inbox("claude")["claimed_tasks"][0]
+        self.daemon.dispatcher._dispatch_tool(
+            "consilium_report_progress",
+            {"task_id": task["task_id"], "peer_id": "claude", "attempt_id": task["attempt_id"],
+             "progress_note": "处理中", "model_used": "Claude Opus 5.5"},
+        )
+        self.assertEqual(self._mission(res["mission_id"])["tasks"][0]["model_used"], "Claude Opus 5.5")
+        self.store.complete_task(task["task_id"], "claude", "你好", attempt_id=task["attempt_id"], model_used="Claude Fable 5.2")
+        self.assertEqual(self._mission(res["mission_id"])["tasks"][0]["model_used"], "Claude Fable 5.2")
+
+    def test_ui_has_standby_button_and_sidebar_details(self) -> None:
+        from consilium.dashboard import render_dashboard_html
+
+        html = render_dashboard_html("0.1.0")
+        for needle in ("data-start-standby", "让它们待命", "renderMissionDetails", "参与与模型", "模型未上报", "data-edit-workspace", "/workspace"):
+            self.assertIn(needle, html)
+
+    def test_auto_routing_explains_its_choice_and_sidebar_shows_peers_and_board(self) -> None:
+        from consilium.dashboard import render_dashboard_html
+        from consilium.mcp_server import explain_auto_choice
+
+        digest = [
+            {"peer_id": "claude", "standby": True, "remaining_percent": 78, "exhausted": False},
+            {"peer_id": "chatgpt", "standby": False, "remaining_percent": None, "exhausted": False},
+            {"peer_id": "antigravity", "standby": False, "remaining_percent": 0, "exhausted": True},
+        ]
+        why = explain_auto_choice(digest, "claude")
+        self.assertIn("交给 Claude：它正在待命，余量 78%", why)
+        self.assertIn("Antigravity 余量已耗尽，跳过", why)
+        nobody = [dict(d, standby=False, exhausted=False) for d in digest]
+        self.assertIn("三端都没在待命", explain_auto_choice(nobody, "claude"))
+
+        res = self.daemon.ui_send("你好", [])
+        msg = self._mission(res["mission_id"])["user_messages"][0]
+        self.assertEqual(msg["mode"], "auto")
+        self.assertTrue(msg["reason"])
+        direct = self.daemon.ui_send("你好", ["chatgpt"])
+        self.assertEqual(self._mission(direct["mission_id"])["user_messages"][0]["reason"], "")
+
+        task = self.store.pickup_inbox("chatgpt")["claimed_tasks"][0]
+        self.store.complete_task(task["task_id"], "chatgpt", "ok", attempt_id=task["attempt_id"], model_used="GPT-5.5 Codex")
+        self.assertEqual(self.store.latest_model_by_peer().get("chatgpt"), "GPT-5.5 Codex")
+        state = self.daemon.get_dashboard_state(sync_quotas=False)
+        self.assertEqual(state["peer_models"].get("chatgpt"), "GPT-5.5 Codex")
+
+        html = render_dashboard_html("0.1.0")
+        for needle in ("renderPeerOverview", "peer-overview", "让它待命", "账号未知", "模型未上报",
+                       "renderSideBoard", "当前账号余量", "完成的任务", "平均认领用时", "CODEX_STANDBY_PROMPT",
+                       "自动分配 · "):
+            self.assertIn(needle, html)
+
+    def test_title_sync_new_session_flag_and_pending_workspace(self) -> None:
+        from consilium.dashboard import render_dashboard_html
+
+        folder = tempfile.mkdtemp(prefix="consilium-r017-ns-", dir="/tmp")
+        self.addCleanup(shutil.rmtree, folder, True)
+        res = self.daemon.ui_send("整理一下日志", ["claude"], workspace_hint=folder, new_session=True)
+        task = self.store.pickup_inbox("claude")["claimed_tasks"][0]
+        self.assertEqual(task["new_session"], 1)
+        self.assertEqual(task["workspace_path"], os.path.realpath(folder))
+        self.assertEqual(task["mission_title"], "整理一下日志")
+        self.assertIn("新开一个会话", task["prompt"])
+
+        out = self.daemon.dispatcher._dispatch_tool(
+            "consilium_set_title", {"mission_id": res["mission_id"], "peer_id": "claude", "title": "日志整理"}
+        )
+        self.assertEqual(out["result"]["title"], "日志整理")
+        self.assertEqual(self._mission(res["mission_id"])["title"], "日志整理")
+        with self.assertRaises(ValueError):
+            self.store.set_mission_title(res["mission_id"], "x" * 41, actor="claude")
+        with self.assertRaises(ValueError):
+            self.store.set_mission_title(res["mission_id"], "别人的", actor="antigravity")
+
+        missing = os.path.join(folder, "新项目")
+        res2 = self.daemon.ui_send("新建一个项目", ["chatgpt"], workspace_hint=missing)
+        self.assertEqual(self._mission(res2["mission_id"])["workspace_path"], "")
+        t2 = self.store.pickup_inbox("chatgpt")["claimed_tasks"][0]
+        self.assertIn("还不存在", t2["prompt"])
+        self.assertIn(missing, t2["prompt"])
+        self.assertEqual(t2["new_session"], 0)
+
+        html = render_dashboard_html("0.1.0")
+        for needle in ("compose-opts", "新开会话处理", "data-compose-ws", "new_session: composeNewSession", "AG_STANDBY_PROMPT"):
+            self.assertIn(needle, html)
+
 
 if __name__ == "__main__":
     unittest.main()
