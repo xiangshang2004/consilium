@@ -338,6 +338,7 @@ def build_dashboard_state(
         "active_waiters": active_waiters,
         "quotas": [quotas_by_peer[p["peer_id"]] for p in peers if p["peer_id"] in quotas_by_peer],
         "missions": missions,
+        "preferences": store.list_preferences(),
         "latest_event_id": latest_event_id,
         "server_time": utc_now_iso(),
     }
@@ -676,7 +677,41 @@ code.inline {
 }
 
 /* Dedicated Compact Peer Sub-Bar (Always Unclipped Across 1440px & 390px) */
-.peer-subbar {
+/* Claude-like simplicity: peer status lives in the composer chips; the capsule strip is hidden. */
+.peer-subbar { display: none !important; }
+.chat-head { display: flex; align-items: center; gap: 10px; padding: 4px 0 14px; }
+.chat-head-title { font-size: 15px; font-weight: 650; min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-head-state { font-size: 12px; color: var(--text-muted); }
+.btn-link, .btn-link-danger { border: none; background: transparent; padding: 2px 4px; font-size: 12.5px; cursor: pointer; color: var(--text-muted); }
+.btn-link:hover { color: var(--text-primary); text-decoration: underline; }
+.btn-link-danger:hover { color: #dc2626; }
+.chat-user { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; margin: 10px 0 18px; }
+.chat-user-bubble { max-width: min(78%, 640px); background: var(--bg-subtle); border-radius: 16px; padding: 10px 14px; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.chat-user-meta { font-size: 11.5px; color: var(--text-muted); }
+.chat-agent { display: flex; gap: 12px; margin: 6px 0 20px; }
+.chat-agent .avatar { flex-shrink: 0; }
+.chat-agent-body { min-width: 0; flex: 1; }
+.chat-agent-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.chat-agent-text { font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.chat-tag { font-size: 11.5px; padding: 1px 7px; border-radius: 999px; background: var(--bg-subtle); color: var(--text-muted); }
+.chat-tag.bad { background: rgba(220, 38, 38, 0.1); color: #dc2626; }
+.chat-note { font-size: 12.5px; color: var(--text-muted); margin: 4px 0 14px 44px; }
+.chat-pending { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-muted); margin: 4px 0 12px 44px; }
+.chat-pending .dot { animation: pulseDot 1.4s ease-in-out infinite; }
+@keyframes pulseDot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.chat-empty { text-align: center; padding: 18vh 16px 24px; color: var(--text-muted); }
+.chat-empty-mark { display: inline-flex; margin-bottom: 14px; }
+.chat-empty-mark svg { width: 40px; height: 40px; }
+.chat-empty-title { font-size: 22px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
+.chat-empty-sub { font-size: 13.5px; }
+.target-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: transparent; border-radius: 999px; padding: 3px 10px; font-size: 12.5px; cursor: pointer; color: var(--text-secondary); }
+.target-chip.active { background: var(--text-primary); color: var(--bg-surface); border-color: var(--text-primary); }
+.send-btn { width: 32px; height: 32px; border-radius: 999px; border: none; background: var(--text-primary); color: var(--bg-surface); font-size: 16px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.send-btn:disabled { opacity: 0.35; cursor: default; }
+.new-chat-btn { border: 1px solid var(--border); background: var(--bg-surface); border-radius: 8px; padding: 4px 10px; font-size: 12.5px; cursor: pointer; }
+.new-chat-btn:hover { background: var(--bg-subtle); }
+.pref-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.peer-subbar-legacy {
   position: relative;
   z-index: 24;
   padding: 6px 14px;
@@ -769,12 +804,25 @@ code.inline {
   gap: 6px;
   flex-shrink: 0;
 }
+.topbar-right { position: relative; }
 .topbar-more {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 70;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-md);
+  min-width: 220px;
 }
-.show-narrow { display: none !important; }
+.topbar-more.open { display: flex; }
+.topbar-more .tab-group { flex-wrap: wrap; max-width: 280px; }
 .conn-badge {
   display: inline-flex;
   align-items: center;
@@ -1277,24 +1325,6 @@ code.inline {
   .topbar { flex-wrap: nowrap; padding: 6px 10px; position: relative; }
   .topbar-left { min-width: 0; flex: 1; }
   .topbar-right { flex-wrap: nowrap; gap: 6px; }
-  .show-narrow { display: inline-flex !important; }
-  .topbar-more {
-    display: none;
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 8px;
-    z-index: 70;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-    padding: 10px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    box-shadow: var(--shadow-md);
-  }
-  .topbar-more.open { display: flex; }
-  .topbar-more .tab-group { flex-wrap: wrap; max-width: 260px; }
   .tab-chip { padding: 3px 6px; }
   .peer-subbar { padding: 6px 10px; justify-content: flex-start; }
   .peer-pills-bar { justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
@@ -1317,7 +1347,8 @@ code.inline {
         <span class="brand-mark"><svg viewBox="0 0 128 128" width="24" height="24" aria-hidden="true"><path d="M95.09 89.17A40 40 0 0 1 47.94 100.64" stroke="var(--peer-antigravity)" stroke-width="15.2" stroke-linecap="round" fill="none"/><path d="M32.20 88.26A40 40 0 0 1 32.20 39.74" stroke="var(--peer-chatgpt)" stroke-width="15.2" stroke-linecap="round" fill="none"/><path d="M47.94 27.36A40 40 0 0 1 95.09 38.83" stroke="var(--peer-claude)" stroke-width="15.2" stroke-linecap="round" fill="none"/><circle cx="67.2" cy="64" r="9.4" fill="var(--text-primary)"/></svg></span>
         <span class="brand-name">Consilium</span>
       </div>
-      <span id="mission-count-pill" class="chip tabular-nums">0</span>
+      <button id="new-chat-btn" type="button" class="new-chat-btn" title="新会诊">＋ 新会诊</button>
+      <span id="mission-count-pill" class="chip tabular-nums" style="display:none;">0</span>
     </div>
     <div class="sidebar-scroll">
       <div class="side-label"><span>会诊列表</span><span>按最近更新</span></div>
@@ -1335,7 +1366,7 @@ code.inline {
     <header class="topbar">
       <div class="topbar-left">
         <button id="sidebar-toggle-btn" type="button" class="icon-btn" title="展开/收起会诊列表" aria-label="展开或收起侧栏">☰</button>
-        <span id="active-mission-title" class="session-title-pill">暂无会诊</span>
+        <span id="active-mission-title" class="session-title-pill">新会诊</span>
         <span id="active-mission-badge" class="chip">空闲</span>
       </div>
 
@@ -1345,7 +1376,7 @@ code.inline {
           <span class="conn-dot"></span>
           <span id="conn-text">连接中</span>
         </div>
-        <button id="more-btn" type="button" class="icon-btn show-narrow" title="更多" aria-label="更多" aria-haspopup="true" aria-expanded="false">⋯</button>
+        <button id="more-btn" type="button" class="icon-btn" title="更多" aria-label="更多" aria-haspopup="true" aria-expanded="false">⋯</button>
         <div id="topbar-more" class="topbar-more">
           <div class="seg" role="group" aria-label="主题切换">
             <button type="button" class="seg-btn" data-set-theme="light">浅色</button>
@@ -1376,21 +1407,10 @@ code.inline {
           <div class="composer-inner">
             <div id="slash-palette" class="slash-palette hidden" role="menu"></div>
             <div class="composer-box">
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-                <div id="handoff-targets" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"></div>
-                <span class="hide-narrow" style="font-size:12px;color:var(--text-muted);">只读对话流 · 仅拼装交接提示词（阶段 3 后开放直接派活）</span>
-              </div>
-              <textarea id="composer-input" class="composer-input" rows="1" placeholder="键入 / 呼出快捷命令，或输入交接提示词后复制 / 新开原生会话接手…"></textarea>
+              <textarea id="composer-input" class="composer-input" rows="1" placeholder="给 Claude、Codex、Antigravity 发消息…（Enter 发送，Shift+Enter 换行）"></textarea>
               <div class="composer-foot">
-                <div class="hide-narrow" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                  <button id="btn-slash-toggle" type="button" class="btn btn-sm">/ 功能</button>
-                  <button type="button" class="btn btn-sm" data-open-tab="accounts">模型与账号</button>
-                  <button type="button" class="btn btn-sm" data-open-tab="worktrees">工作树</button>
-                </div>
-                <div style="display:flex;align-items:center;gap:6px;">
-                  <button id="btn-copy-handoff" type="button" class="btn btn-sm">复制交接提示词</button>
-                  <button id="btn-open-native" type="button" class="btn btn-primary btn-sm">新开原生会话 ↗</button>
-                </div>
+                <div id="handoff-targets" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"></div>
+                <button id="btn-send" type="button" class="send-btn" title="发送" aria-label="发送" disabled>↑</button>
               </div>
             </div>
           </div>
@@ -1457,14 +1477,16 @@ code.inline {
     loop_guard_reached: "触达轮次上限",
     mission_closed: "会诊结束",
     task_requeued: "重新入队",
-    task_stale: "进度超时陈旧"
+    task_stale: "进度超时陈旧",
+    task_handoff: "任务交接"
   };
   const DRAWER_TABS = [
     { key: "tasks", label: "任务" },
     { key: "worktrees", label: "工作树" },
     { key: "accounts", label: "模型与账号" },
     { key: "subagents", label: "子 Agent" },
-    { key: "artifacts", label: "文件" }
+    { key: "artifacts", label: "文件" },
+    { key: "prefs", label: "偏好" }
   ];
   const SLASH_COMMANDS = [
     { cmd: "/mission", desc: "打开或定位左侧会诊列表面板", action: "focus_mission" },
@@ -1473,7 +1495,9 @@ code.inline {
     { cmd: "/tasks", desc: "打开右侧「任务」面板查看认领状态与控制", action: "tab:tasks" },
     { cmd: "/worktrees", desc: "查看各任务的隔离工作树分支清单", action: "tab:worktrees" },
     { cmd: "/accounts", desc: "查看各端模型列表、当前激活账号与只读账号池", action: "tab:accounts" },
-    { cmd: "/subagents", desc: "查看子 Agent 上报占位说明（阶段 3 启用）", action: "tab:subagents" }
+    { cmd: "/subagents", desc: "查看子 Agent 上报占位说明（阶段 3 启用）", action: "tab:subagents" },
+    { cmd: "/prefs", desc: "查看和删除三端学到的使用偏好", action: "tab:prefs" },
+    { cmd: "/new", desc: "开始一个新会诊", action: "new_chat" }
   ];
 
   let appState = null;
@@ -1483,6 +1507,9 @@ code.inline {
   let rightTab = null; // Closed by default per minimalist chat spec
   let openPopoverPeer = null;
   let handoffTarget = "claude";
+  let composingNew = false;
+  let sendTargets = [];
+  let sending = false;
   let slashOpen = false;
   let sidebarDesktopOpen = true;
   let sidebarMobileOpen = false;
@@ -1614,6 +1641,7 @@ code.inline {
   }
 
   function getActiveMission(state) {
+    if (composingNew) return null;
     const missions = (state && state.missions) || [];
     if (!missions.length) return null;
     if (selectedMissionId) {
@@ -1646,8 +1674,8 @@ code.inline {
           '<span class="dot ' + dotCls + '"></span>' +
         '</div>' +
         '<div class="mission-item-sub">' +
-          '<span class="mono">' + esc(m.mission_id) + '</span>' +
-          '<span class="tabular-nums">' + doneCnt + '/' + tasks.length + '</span>' +
+          '<span>' + esc(m.status === "completed" ? "已完成" : (m.status === "cancelled" || m.status === "failed" ? "已结束" : (m.status === "ready_to_report" ? (m.coordinator_peer === "user" ? "已回复" : "待汇总") : "进行中"))) + '</span>' +
+          '<span class="tabular-nums" title="' + esc(m.mission_id + " · " + doneCnt + "/" + tasks.length) + '">' + esc(relativeAge(m.updated_at)) + '</span>' +
         '</div>' +
       '</button>';
     }).join("");
@@ -1655,8 +1683,9 @@ code.inline {
 
   function renderTopBar(state) {
     const cur = getActiveMission(state);
-    document.getElementById("active-mission-title").textContent = cur ? cur.title : "等待创建会诊";
-    document.getElementById("active-mission-badge").textContent = cur ? (cur.status === "completed" ? "已完成" : (cur.status === "active" ? "进行中" : cur.status)) : "空闲";
+    document.getElementById("active-mission-title").textContent = cur ? cur.title : "新会诊";
+    const MISSION_STATUS_TEXT = { active: "进行中", ready_to_report: cur && cur.coordinator_peer === "user" ? "已回复" : "待汇总", completed: "已完成", cancelled: "已取消", failed: "失败" };
+    document.getElementById("active-mission-badge").textContent = cur ? (MISSION_STATUS_TEXT[cur.status] || cur.status) : "空闲";
 
     const peers = (state && state.peers) || [];
     const quotas = {};
@@ -1820,110 +1849,110 @@ code.inline {
     '</article>';
   }
 
+  function peerLabel(pid) {
+    if (pid === "user") return "你";
+    return (PEER_META[pid] || { label: pid || "系统" }).label;
+  }
+
+  function renderNote(text, hint) {
+    return '<div class="chat-note"' + (hint ? ' title="' + esc(hint) + '"' : "") + '>' + esc(text) + '</div>';
+  }
+
+  function renderUserMsg(u) {
+    const targets = (u.targets || []).map(peerLabel).join("、");
+    const meta = u.mode === "auto" ? "自动分配" + (targets ? " · 先交给 " + targets : "") : "交给 " + targets;
+    return '<div class="chat-user">' +
+      '<div class="chat-user-bubble">' + renderMarkdownBlock(u.text || "") + '</div>' +
+      '<div class="chat-user-meta" title="' + esc(formatClock(u.created_at)) + '">' + esc(meta) + '</div>' +
+    '</div>';
+  }
+
+  function renderAgentMsg(ev, task) {
+    const p = ev.payload || {};
+    const meta = PEER_META[ev.from_peer] || { label: peerLabel(ev.from_peer), short: "S", cls: "system" };
+    const st = p.status || (task && task.status) || "done";
+    const tag = st === "failed" ? '<span class="chat-tag bad">失败</span>' : (st === "blocked" ? '<span class="chat-tag bad">受阻</span>' : "");
+    const artifacts = Array.isArray(p.artifacts) ? p.artifacts : [];
+    const chips = artifacts.slice(0, 6).map(a =>
+      '<button type="button" class="chip-btn mono" data-open-tab="artifacts">📄 ' + esc(String(a).split("/").pop()) + '</button>'
+    ).join("");
+    return '<article class="chat-agent">' +
+      '<div class="avatar ' + meta.cls + '">' + esc(meta.short) + '</div>' +
+      '<div class="chat-agent-body">' +
+        '<div class="chat-agent-head"><span class="msg-author">' + esc(meta.label) + '</span>' + tag +
+          '<span class="msg-sub" title="' + esc(formatClock(ev.created_at)) + '">' + esc(relativeAge(ev.created_at)) + '</span></div>' +
+        '<div class="chat-agent-text">' + renderMarkdownBlock(p.result_summary || "") + '</div>' +
+        (chips ? '<div style="display:flex;flex-wrap:wrap;gap:6px;padding-top:6px;">' + chips + '</div>' : "") +
+      '</div>' +
+    '</article>';
+  }
+
+  function renderPending(t, state) {
+    const waiters = (state && state.active_waiters) || {};
+    const pid = t.assignee_peer;
+    const label = peerLabel(pid);
+    const standby = Number(waiters[pid] || 0) > 0;
+    let txt;
+    if (t.status === "queued") {
+      txt = standby ? label + " 已收到，马上开始" : "等 " + label + " 接收 · 它现在没在待命，已发通知";
+    } else {
+      txt = label + " 正在处理" + (t.progress_note ? "：" + t.progress_note : "…");
+    }
+    const age = t.updated_at ? " · 最后上报于 " + relativeAge(t.updated_at) : "";
+    const openBtn = (t.status === "queued" && !standby)
+      ? '<button type="button" class="btn-link" data-open-native="' + esc(pid) + '">在 ' + esc(label) + ' 里打开</button>'
+      : "";
+    return '<div class="chat-pending"><span class="dot ' + (t.status === "queued" ? "offline" : "working") + '"></span>' +
+      '<span>' + esc(txt + age) + '</span>' + openBtn + '</div>';
+  }
+
   function renderConversation(state) {
     const container = document.getElementById("chat-container");
     const m = getActiveMission(state);
     if (!m) {
-      container.innerHTML =
-        '<div style="text-align:center;padding:64px 16px;color:var(--text-muted);">' +
-          '<div style="font-size:16px;font-weight:600;color:var(--text-primary);margin-bottom:6px;">等待发起三端会诊</div>' +
-          '<div style="font-size:13px;">通过 MCP <code class="inline">consilium_create_mission</code> 创建会诊后，各端事件会按对话流实时呈现在这里。</div>' +
-        '</div>';
+      const markEl = document.querySelector(".brand-mark");
+      container.innerHTML = '<div class="chat-empty">' +
+        '<div class="chat-empty-mark">' + (markEl ? markEl.innerHTML : "") + '</div>' +
+        '<div class="chat-empty-title">今天要三端一起做什么？</div>' +
+        '<div class="chat-empty-sub">直接输入就行。点名某一端就交给它；不点名，会交给待命中、额度充足的一端来分配。</div>' +
+      '</div>';
       return;
     }
-
     const tasks = m.tasks || [];
-    const totalCnt = tasks.length;
-    const doneOnlyCnt = tasks.filter(t => t.status === "done").length;
-    const hasErr = tasks.some(t => t.status === "failed");
-    const hasBlocked = tasks.some(t => t.status === "blocked");
-    const pct = totalCnt > 0 ? Math.round((doneOnlyCnt / totalCnt) * 100) : 0;
-    const barCls = hasErr ? "err" : (hasBlocked ? "warn" : (totalCnt > 0 && doneOnlyCnt === totalCnt ? "complete" : ""));
-
-    const openingHtml =
-      '<div class="mission-banner">' +
-        '<div class="mission-banner-top">' +
-          '<div style="min-width:0;flex:1;">' +
-            '<h1 class="mission-banner-title">' + esc(m.title) + '</h1>' +
-            '<p class="mission-banner-goal">' + renderInline(m.goal || "") + '</p>' +
-          '</div>' +
-          '<span class="chip tabular-nums">' + doneOnlyCnt + '/' + totalCnt + ' 完成</span>' +
-        '</div>' +
-        '<div class="progress-row">' +
-          '<div class="progress-track"><div class="progress-fill ' + barCls + '" style="width:' + pct + '%;"></div></div>' +
-          '<span class="tabular-nums" style="font-size:12px;color:var(--text-muted);">' + pct + '%</span>' +
-        '</div>' +
-        '<div class="meta-chips">' +
-          '<span class="chip mono">' + esc(m.mission_id) + '</span>' +
-          '<span class="chip">协调者 ' + esc((PEER_META[m.coordinator_peer] || { label: m.coordinator_peer }).label) + '</span>' +
-          (m.workspace_path ? '<span class="chip mono">' + esc(m.workspace_path) + '</span>' : "") +
-          (m.status !== "completed" && m.status !== "cancelled" && m.status !== "failed"
-            ? '<button type="button" class="btn btn-sm btn-subtle-danger" style="margin-left:auto;" data-close-mission="' + esc(m.mission_id) + '">关闭会诊</button>'
-            : "") +
-        '</div>' +
-      '</div>';
-
-    const eventsAsc = (m.events || []).slice().sort((a, b) => Number(a.event_id) - Number(b.event_id));
-    const reviewEvents = eventsAsc.filter(e => e.kind === "review_request" || e.kind === "loop_guard_reached");
-    const streamEvents = eventsAsc.filter(e => e.kind !== "review_request" && e.kind !== "loop_guard_reached" && e.kind !== "mission_closed");
-
-    const LIMIT = 6;
-    const isFoldOpen = expandedFolds.has(m.mission_id);
-    const hasOlder = streamEvents.length > LIMIT;
-    const olderEvents = hasOlder ? streamEvents.slice(0, streamEvents.length - LIMIT) : [];
-    const recentEvents = hasOlder ? streamEvents.slice(streamEvents.length - LIMIT) : streamEvents;
-
-    let streamHtml = "";
-    if (olderEvents.length) {
-      if (!isFoldOpen) {
-        streamHtml += '<div class="fold-wrap"><div class="timeline-fade">' +
-          olderEvents.slice(-2).map(ev => {
-            const ep = ev.payload || {};
-            const et = (m.tasks || []).find(t => t.task_id === ep.task_id) || null;
-            const eTxt = ep.progress_note || ep.result_summary || ep.summary || ep.reason || ep.prompt || (ev.kind === "task_assigned" && et ? (et.prompt || et.title || "") : "");
-            return '<div style="font-size:12.5px;color:var(--text-muted);padding:2px 0;">#' + esc(ev.event_id) + ' ' + esc(EVENT_LABELS[ev.kind] || ev.kind) + (eTxt ? ' · ' + esc(eTxt) : "") + '</div>';
-          }).join("") +
-        '</div><button type="button" class="btn btn-sm" style="margin-top:6px;" data-toggle-fold="' + esc(m.mission_id) + '">显示更早事件（' + olderEvents.length + ' 条）</button></div>';
-      } else {
-        streamHtml += olderEvents.map(ev => renderSingleEventMessage(ev, m)).join("") +
-          '<div><button type="button" class="btn btn-sm" data-toggle-fold="' + esc(m.mission_id) + '">收起更早事件</button></div>';
-      }
+    const taskById = {};
+    tasks.forEach(t => { taskById[t.task_id] = t; });
+    const items = [];
+    const userMsgs = m.user_messages || [];
+    userMsgs.forEach(u => items.push({ ts: u.created_at || "", order: 0, id: Number(u.message_id), html: renderUserMsg(u) }));
+    if (!userMsgs.length) {
+      items.push({ ts: m.created_at || "", order: -1, id: 0, html: renderNote(peerLabel(m.coordinator_peer) + " 发起了会诊：" + (m.goal || m.title)) });
     }
-    streamHtml += recentEvents.map(ev => renderSingleEventMessage(ev, m)).join("");
-
-    let reviewHtml = "";
-    if (reviewEvents.length) {
-      const revOpen = expandedReviews.has(m.mission_id);
-      const lastRev = reviewEvents[reviewEvents.length - 1];
-      const maxR = Number(m.max_rounds || 3);
-      const curR = Number(m.current_round || reviewEvents.length);
-      reviewHtml = '<div class="review-box">' +
-        '<button type="button" data-toggle-review="' + esc(m.mission_id) + '" style="width:100%;border:none;background:transparent;display:flex;align-items:center;justify-content:space-between;cursor:pointer;font-size:12.5px;padding:2px 0;">' +
-          '<span>交叉复核轮次 <strong class="tabular-nums">' + Math.min(curR, maxR) + '/' + maxR + '</strong>' + (lastRev.kind === "loop_guard_reached" ? " · 已触达轮次上限交回协调者" : "") + '</span>' +
-          '<span style="color:var(--text-muted);">' + (revOpen ? "收起 ▾" : "展开 " + reviewEvents.length + " 条 ▸") + '</span>' +
-        '</button>' +
-        (revOpen
-          ? '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px;font-size:12.5px;">' +
-              reviewEvents.map(r => {
-                const rp = r.payload || {};
-                return '<div><strong>' + esc(r.from_peer) + ' → ' + esc(r.to_peer) + '</strong>：' + renderInline(rp.question || rp.summary || rp.reason || "") + '</div>';
-              }).join("") +
-            '</div>'
-          : "") +
-      '</div>';
+    const evs = (m.events || []).slice().sort((a, b) => Number(a.event_id) - Number(b.event_id));
+    evs.forEach(ev => {
+      const p = ev.payload || {};
+      let html = "";
+      if (ev.kind === "task_done") html = renderAgentMsg(ev, taskById[p.task_id]);
+      else if (ev.kind === "task_assigned" && p.origin !== "user") html = renderNote(peerLabel(ev.from_peer) + " 把一部分工作交给了 " + peerLabel(ev.to_peer), p.prompt_preview || "");
+      else if (ev.kind === "task_handoff") html = renderNote(peerLabel(ev.from_peer) + " 把任务交给了 " + peerLabel(ev.to_peer) + (p.note ? "：" + p.note : ""));
+      else if (ev.kind === "task_stale") html = renderNote(peerLabel(p.assignee_peer || ev.from_peer) + " 很久没有新进展了");
+      else if (ev.kind === "task_requeued") html = renderNote("任务已重新排队" + (p.reason ? "（" + p.reason + "）" : ""));
+      else if (ev.kind === "review_request") html = renderNote(peerLabel(ev.from_peer) + " 请 " + peerLabel(ev.to_peer) + " 复核", p.question || p.summary || p.reason || "");
+      else if (ev.kind === "loop_guard_reached") html = renderNote("复核到了轮次上限，交回协调者处理");
+      if (html) items.push({ ts: ev.created_at || "", order: 1, id: Number(ev.event_id), html: html });
+    });
+    if (m.final_summary && m.coordinator_peer !== "user") {
+      items.push({ ts: m.updated_at || "", order: 2, id: 1e12, html: renderAgentMsg(
+        { from_peer: m.coordinator_peer, created_at: m.updated_at, payload: { result_summary: m.final_summary, status: "done" } }, null
+      ).replace('<span class="msg-sub"', '<span class="chat-tag">汇总</span><button type="button" class="btn-link" data-export-md="1">复制</button><span class="msg-sub"') });
     }
-
-    const summaryHtml = m.final_summary
-      ? '<div class="summary-card">' +
-          '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">' +
-            '<span style="font-size:13px;font-weight:650;">最终汇总 · Final Summary</span>' +
-            '<button type="button" class="btn btn-sm" data-export-md="1">复制 Markdown</button>' +
-          '</div>' +
-          '<div style="font-size:13.5px;">' + renderMarkdownBlock(m.final_summary) + '</div>' +
-        '</div>'
-      : "";
-
-    container.innerHTML = openingHtml + streamHtml + reviewHtml + summaryHtml;
+    items.sort((a, b) => (a.ts < b.ts ? -1 : (a.ts > b.ts ? 1 : ((a.order - b.order) || (a.id - b.id)))));
+    const closed = m.status === "completed" || m.status === "cancelled" || m.status === "failed";
+    const pending = closed ? [] : tasks.filter(t => t.status === "queued" || t.status === "claimed" || t.status === "running");
+    const head = '<div class="chat-head"><span class="chat-head-title">' + esc(m.title) + '</span>' +
+      (closed ? '<span class="chat-head-state">已结束</span>'
+              : '<button type="button" class="btn-link-danger" data-close-mission="' + esc(m.mission_id) + '">关闭会诊</button>') +
+      '</div>';
+    container.innerHTML = head + items.map(i => i.html).join("") + pending.map(t => renderPending(t, state)).join("");
   }
 
   function renderRightDrawer(state) {
@@ -2030,6 +2059,16 @@ code.inline {
       return;
     }
 
+    if (rightTab === "prefs") {
+      const prefs = (state && state.preferences) || [];
+      body.innerHTML = '<div style="font-size:12.5px;color:var(--text-muted);margin-bottom:8px;">三端从你的使用中学到的习惯。自动分配时会交给协调者参考；不对的直接删掉。</div>' +
+        (prefs.length ? prefs.map(pf =>
+          '<div class="panel-card"><div class="pref-row">' +
+            '<span style="font-size:13px;">' + renderInline(pf.text) + '</span>' +
+            '<button type="button" class="btn-link-danger" data-del-pref="' + esc(pf.pref_id) + '">删除</button>' +
+          '</div><div style="font-size:11.5px;color:var(--text-muted);">' + esc(peerLabel(pf.source) + " 记录 · " + relativeAge(pf.created_at)) + '</div></div>'
+        ).join("") : '<div class="panel-card" style="font-size:12.5px;color:var(--text-muted);">还没有学到偏好。</div>');
+    }
     if (rightTab === "subagents") {
       body.innerHTML =
         ["claude", "chatgpt", "antigravity"].map(pid => {
@@ -2046,10 +2085,17 @@ code.inline {
   }
 
   function renderComposerBar(state) {
-    document.getElementById("handoff-targets").innerHTML = ["claude", "chatgpt", "antigravity"].map(pid => {
-      const active = handoffTarget === pid;
-      return '<button type="button" class="tab-chip' + (active ? " active" : "") + '" data-handoff-peer="' + pid + '">@' + esc(PEER_META[pid].label) + '</button>';
-    }).join("");
+    const waiters = (state && state.active_waiters) || {};
+    const peers = (state && state.peers) || [];
+    const chips = ['<button type="button" class="target-chip' + (sendTargets.length === 0 ? " active" : "") + '" data-send-target="auto" title="不点名：交给待命中、额度充足的一端，由它决定怎么分">自动</button>'];
+    ["claude", "chatgpt", "antigravity"].forEach(pid => {
+      const pr = peers.find(x => x.peer_id === pid) || { status: "offline" };
+      const st = Number(waiters[pid] || 0) > 0 ? "standby" : (STATUS_TEXT[pr.status] ? pr.status : "offline");
+      chips.push('<button type="button" class="target-chip' + (sendTargets.indexOf(pid) >= 0 ? " active" : "") + '" data-send-target="' + pid + '" title="' + esc(PEER_META[pid].appName + " · " + STATUS_TEXT[st]) + '">' +
+        '<span class="dot ' + st + '"></span>' + esc(PEER_META[pid].label) + '</button>');
+    });
+    document.getElementById("handoff-targets").innerHTML = chips.join("");
+    document.getElementById("btn-send").disabled = sending || !(document.getElementById("composer-input").value || "").trim();
 
     const val = document.getElementById("composer-input").value || "";
     const pal = document.getElementById("slash-palette");
@@ -2245,27 +2291,57 @@ code.inline {
     }
   });
 
-  document.getElementById("btn-slash-toggle").addEventListener("click", ev => {
-    ev.stopPropagation();
-    slashOpen = !slashOpen;
+  async function sendMessage() {
+    const inp = document.getElementById("composer-input");
+    const text = (inp.value || "").trim();
+    if (!text || sending || text.startsWith("/")) return;
+    const cur = getActiveMission(appState);
+    const open = cur && !(cur.status === "completed" || cur.status === "cancelled" || cur.status === "failed");
+    const path = open ? "/api/missions/" + encodeURIComponent(cur.mission_id) + "/message" : "/api/conversations";
+    sending = true;
     renderComposerBar(appState);
-  });
-
-  document.getElementById("btn-copy-handoff").addEventListener("click", () => {
-    const raw = (document.getElementById("composer-input").value || "").trim() || "请调用 consilium_pickup_inbox(peer_id=" + JSON.stringify(handoffTarget) + ") 认领任务。";
-    copyTextSafe(raw, "已复制交给 " + PEER_META[handoffTarget].label + " 的提示词");
-  });
-
-  document.getElementById("btn-open-native").addEventListener("click", () => {
-    const curM = getActiveMission(appState);
-    const ws = curM ? curM.workspace_path : "";
-    const txt = (document.getElementById("composer-input").value || "").trim() || "检查 Consilium 收件箱并调用 consilium_pickup_inbox 认领任务";
-    const url = buildHandoffDeeplink(handoffTarget, txt, ws);
-    if (!url) {
-      copyTextSafe(txt, "Antigravity 无统一新会话深链，已复制提示词到剪贴板");
-      return;
+    try {
+      const res = await fetch(path, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: writeHeaders(),
+        body: JSON.stringify({ text: text, targets: sendTargets.slice() })
+      });
+      if (res.status === 401) { showLogin(true); return; }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { showToast(data.error || ("发送失败（HTTP " + res.status + "）")); return; }
+      inp.value = "";
+      inp.style.height = "";
+      composingNew = false;
+      selectedMissionId = data.result.mission_id;
+      await fetchState();
+    } catch (err) {
+      showToast("发送失败：" + err);
+    } finally {
+      sending = false;
+      renderComposerBar(appState);
     }
-    window.location.href = url;
+  }
+
+  document.getElementById("btn-send").addEventListener("click", sendMessage);
+  document.getElementById("composer-input").addEventListener("keydown", ev => {
+    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
+      const pal = document.getElementById("slash-palette");
+      if (!pal.classList.contains("hidden")) return;
+      ev.preventDefault();
+      sendMessage();
+    }
+  });
+  document.getElementById("composer-input").addEventListener("input", ev => {
+    const el = ev.target;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 220) + "px";
+  });
+  document.getElementById("new-chat-btn").addEventListener("click", () => {
+    composingNew = true;
+    selectedMissionId = null;
+    if (appState) renderAll(appState);
+    document.getElementById("composer-input").focus();
   });
 
   document.addEventListener("click", ev => {
@@ -2280,6 +2356,7 @@ code.inline {
     const missionBtn = ev.target.closest("[data-select-mission]");
     if (missionBtn) {
       selectedMissionId = missionBtn.getAttribute("data-select-mission");
+      composingNew = false;
       if (isNarrowViewport()) sidebarMobileOpen = false;
       if (appState) renderAll(appState);
       return;
@@ -2325,8 +2402,42 @@ code.inline {
         if (appState) { renderTopBar(appState); renderRightDrawer(appState); }
       } else if (act === "export_md") {
         exportMissionMarkdown();
+      } else if (act === "new_chat") {
+        composingNew = true;
+        selectedMissionId = null;
+        if (appState) renderAll(appState);
       }
       renderComposerBar(appState);
+      return;
+    }
+
+    const sendTargetBtn = ev.target.closest("[data-send-target]");
+    if (sendTargetBtn) {
+      const tgt = sendTargetBtn.getAttribute("data-send-target");
+      if (tgt === "auto") sendTargets = [];
+      else if (sendTargets.indexOf(tgt) >= 0) sendTargets = sendTargets.filter(x => x !== tgt);
+      else sendTargets = sendTargets.concat([tgt]);
+      renderComposerBar(appState);
+      return;
+    }
+
+    const openNativeBtn = ev.target.closest("[data-open-native]");
+    if (openNativeBtn) {
+      const pid = openNativeBtn.getAttribute("data-open-native");
+      const curM = getActiveMission(appState);
+      const txt = "调用 consilium_pickup_inbox(peer_id=\"" + pid + "\") 认领 Consilium 里的新消息，按 consilium-collab 技能处理。";
+      const url = buildHandoffDeeplink(pid, txt, curM ? curM.workspace_path : "");
+      if (!url) { copyTextSafe(txt, "已复制，请到 " + peerLabel(pid) + " 里粘贴"); return; }
+      window.location.href = url;
+      return;
+    }
+
+    const delPrefBtn = ev.target.closest("[data-del-pref]");
+    if (delPrefBtn) {
+      const pidPref = delPrefBtn.getAttribute("data-del-pref");
+      fetch("/api/preferences/" + encodeURIComponent(pidPref) + "/delete", {
+        method: "POST", credentials: "same-origin", headers: writeHeaders(), body: "{}"
+      }).then(r => { if (r.status === 401) showLogin(true); return fetchState(); }).catch(() => showToast("删除失败"));
       return;
     }
 
