@@ -340,8 +340,7 @@ def build_auto_coordinator_prompt(
         "2. 收齐结果后，用 consilium_complete_task 交付你自己的这个任务：result_summary 直接写给使用者看的最终回答。\n"
         "3. 如果这次看出使用者稳定的习惯（例如某类事固定交给谁、喜欢的回答方式），用 consilium_learn_preference 记一句话；不确定就不记。\n"
         "4. 你自己的额度快用完时，用 consilium_handoff_task 把任务连同进度交给另一端。切换账号由使用者手动完成，需要时在回答里提醒。\n"
-        "5. 用 consilium_set_title 给会诊起一个不超过 20 字的标题；如果这件事属于某个项目文件夹而会诊还没有工作区，用 consilium_set_workspace 记下（绝对路径）。"
-        "派子任务时把工作区写进任务说明。"
+        "5. 用 consilium_set_title 给会诊起一个不超过 20 字的标题。会诊的文件夹由使用者选定（见 workspace_path），在里面工作；派子任务时写明这个文件夹。"
         "上报进度时用 model_used 写上你实际使用的模型。\n\n"
         f"【各端状态】\n" + "\n".join(_quota_line(i) for i in digest) + "\n\n"
         f"【使用者偏好】\n{pref_lines}\n\n"
@@ -481,6 +480,19 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "name": "consilium_preferences",
         "description": "Read the user's learned preferences, recent explicit routing choices, and each peer's standby/quota digest before deciding who should do what.",
         "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "consilium_bind_session",
+        "description": "Record which of your native sessions handles this conversation (e.g. the Claude Code session id you started). Later messages in the conversation carry it as native_session so they can be forwarded there.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["mission_id", "peer_id", "session_ref"],
+            "properties": {
+                "mission_id": {"type": "string"},
+                "peer_id": {"type": "string", "enum": list(VALID_PEERS)},
+                "session_ref": {"type": "string", "maxLength": 200},
+            },
+        },
     },
     {
         "name": "consilium_set_title",
@@ -1064,6 +1076,13 @@ class ConsiliumMCPDispatcher:
                 "peers": peer_quota_digest(self.store, self.rendezvous_dir),
             }
 
+        if name == "consilium_bind_session":
+            res = self.store.bind_native_session(
+                str(args["mission_id"]), str(args["peer_id"]), str(args["session_ref"])
+            )
+            pub_warn = self._emit_mutation("bind_session")
+            return {"committed": True, "result": res, "delivery": {"warnings": [pub_warn] if pub_warn else []}}
+
         if name == "consilium_set_title":
             res = self.store.set_mission_title(
                 str(args["mission_id"]), str(args["title"]), actor=str(args["peer_id"])
@@ -1544,6 +1563,7 @@ class ConsiliumDaemon:
         mission_id: Optional[str] = None,
         workspace_hint: str = "",
         new_session: bool = False,
+        tier: str = "",
     ) -> Dict[str, Any]:
         """Send a message typed in the dashboard: @-mentioned peers get it directly; no mention = auto."""
         body = str(text or "").strip()
@@ -1570,24 +1590,28 @@ class ConsiliumDaemon:
         digest = peer_quota_digest(store, self.rendezvous_dir)
         title = body.splitlines()[0][:40]
         mode = "direct" if chosen else "auto"
-        workspace = detect_workspace(body, explicit=workspace_hint)
-        hint = os.path.expanduser(str(workspace_hint or "").strip())
-        pending_ws = hint if (hint.startswith("/") and not workspace) else ""
+        # The folder is chosen by the user (recent list or the native folder picker), never guessed from text.
+        workspace = ""
+        hint = str(workspace_hint or "").strip()
+        if hint:
+            resolved = os.path.realpath(os.path.expanduser(hint))
+            if not hint.startswith(("/", "~")) or not os.path.isdir(resolved):
+                raise ValueError("请选择一个已存在的文件夹")
+            workspace = resolved
+        tier_key = {"fast": "fast", "balanced": "balanced", "deep": "pro_reasoning", "pro_reasoning": "pro_reasoning"}.get(
+            str(tier or "").strip().lower(), ""
+        )
 
         def _wrap(prompt: str) -> str:
-            notes = []
-            if pending_ws:
-                notes.append(f"使用者指定的工作区还不存在：{pending_ws}。请按该位置的目录规范新建，再用 consilium_set_workspace 记下。")
-            if new_session:
-                notes.append("使用者要求新开一个会话来处理这件事（工作区和会话名称见任务里的 workspace_path、mission_title）。")
-            return prompt if not notes else prompt + "\n\n" + "\n".join("【Consilium】" + n for n in notes)
+            return prompt
         events: List[Dict[str, Any]] = []
 
         if mission_id is None:
             if chosen:
                 coordinator = USER_PEER
                 task_specs = [
-                    {"assignee_peer": pid, "prompt": _wrap(body), "origin": "user", "new_session": new_session}
+                    {"assignee_peer": pid, "prompt": _wrap(body), "origin": "user", "new_session": True,
+                     "model_tier": tier_key or "balanced"}
                     for pid in chosen
                 ]
             else:
@@ -1596,7 +1620,8 @@ class ConsiliumDaemon:
                     body, coordinator, digest, store.list_preferences(), store.recent_user_routing()
                 )
                 task_specs = [
-                    {"assignee_peer": coordinator, "prompt": _wrap(prompt), "origin": "user", "new_session": new_session}
+                    {"assignee_peer": coordinator, "prompt": _wrap(prompt), "origin": "user", "new_session": True,
+                     "model_tier": tier_key or "balanced"}
                 ]
             res = store.create_mission(
                 title=title,
@@ -1614,6 +1639,8 @@ class ConsiliumDaemon:
                 },
             )
             mid = res["mission"]["mission_id"]
+            if tier_key:
+                store.set_mission_tier(mid, tier_key)
             events = list(res.get("events") or [])
             warnings = list(res.get("post_commit_warnings") or [])
         else:
@@ -1623,11 +1650,7 @@ class ConsiliumDaemon:
                 raise ValueError("这个会诊已经关闭，请新开一个")
             mid = mission_id
             coord = mission.get("coordinator_peer") or USER_PEER
-            if workspace and not mission.get("workspace_path"):
-                try:
-                    store.set_mission_workspace(mid, workspace, actor=USER_PEER)
-                except (KeyError, ValueError):
-                    pass
+            bindings = store.mission_bindings(mid)
             reason = ""
             if chosen:
                 plan = [(pid, body) for pid in chosen]
@@ -1647,7 +1670,8 @@ class ConsiliumDaemon:
                     assignee_peer=pid,
                     prompt=_wrap(prompt),
                     origin="user",
-                    new_session=new_session,
+                    new_session=pid not in bindings,
+                    model_tier=(mission.get("tier") or "balanced") if (mission.get("tier") or "") in ("fast", "balanced", "pro_reasoning") else "balanced",
                     user_message=(
                         {"text": body, "targets": chosen or [plan[0][0]], "mode": mode, "reason": reason}
                         if idx == 0 else None
@@ -2239,8 +2263,41 @@ class ConsiliumDaemon:
                             payload.get("targets") or [],
                             target_mid,
                             workspace_hint=str(payload.get("workspace") or ""),
-                            new_session=bool(payload.get("new_session") is True),
+                            tier=str(payload.get("tier") or ""),
                         )
+                        self._send_json(200, {"committed": True, "result": res})
+                    except KeyError as exc:
+                        self._send_json(404, {"error": str(exc)})
+                    except ValueError as exc:
+                        self._send_json(400, {"error": str(exc)})
+                    return
+
+                if route.startswith("/api/missions/") and (
+                    route.endswith("/title") or route.endswith("/archive") or route.endswith("/unarchive")
+                ):
+                    ok_sec, auth_mode, session_rec, _ver = self._check_security(allow_cookie=True)
+                    if not ok_sec or auth_mode is None:
+                        return
+                    if not self._check_cookie_write_csrf(auth_mode, session_rec):
+                        return
+                    ok, payload = self._read_json_body()
+                    if not ok:
+                        return
+                    if not isinstance(payload, dict):
+                        self._send_json(400, {"error": "Expected JSON object"})
+                        return
+                    tail = route.rsplit("/", 1)[1]
+                    act_mid = urllib.parse.unquote(route[len("/api/missions/") : -(len(tail) + 1)])
+                    st = daemon.dispatcher.store
+                    try:
+                        if tail == "title":
+                            res = st.set_mission_title(act_mid, str(payload.get("title") or ""), actor=USER_PEER)
+                        else:
+                            res = st.set_mission_archived(act_mid, tail == "archive")
+                        try:
+                            daemon.publish_state_update("ui_" + tail)
+                        except Exception:
+                            pass
                         self._send_json(200, {"committed": True, "result": res})
                     except KeyError as exc:
                         self._send_json(404, {"error": str(exc)})

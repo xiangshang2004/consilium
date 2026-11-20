@@ -258,6 +258,10 @@ class BusStore:
                 "ALTER TABLE tasks ADD COLUMN model_used TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE user_messages ADD COLUMN reason TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE tasks ADD COLUMN new_session INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE missions ADD COLUMN native_sessions_json TEXT NOT NULL DEFAULT '{}'",
+                "ALTER TABLE missions ADD COLUMN title_locked INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE missions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE missions ADD COLUMN tier TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE quota_windows ADD COLUMN is_current INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE quota_windows ADD COLUMN is_historical INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE quota_windows ADD COLUMN account_alias TEXT NOT NULL DEFAULT ''",
@@ -1250,13 +1254,19 @@ class BusStore:
                         if refreshed is not None:
                             claimed = self._decode_task(refreshed)
                             mrow = conn.execute(
-                                "SELECT title, workspace_path, coordinator_peer FROM missions WHERE mission_id = ?",
+                                "SELECT title, workspace_path, coordinator_peer, native_sessions_json, tier FROM missions WHERE mission_id = ?",
                                 (claimed["mission_id"],),
                             ).fetchone()
                             if mrow is not None:
                                 claimed["mission_title"] = mrow["title"]
                                 claimed["workspace_path"] = mrow["workspace_path"]
                                 claimed["mission_coordinator"] = mrow["coordinator_peer"]
+                                claimed["mission_tier"] = mrow["tier"]
+                                try:
+                                    bindings = json.loads(mrow["native_sessions_json"] or "{}")
+                                except ValueError:
+                                    bindings = {}
+                                claimed["native_session"] = (bindings.get(peer) or {}).get("ref", "")
                             claimed_tasks.append(claimed)
                         # Annotate the triggering assignment/requeue event with claim_latency_ms + attempt_id.
                         src_ev = conn.execute(
@@ -2291,11 +2301,70 @@ class BusStore:
                     ).fetchone()
                     if involved is None:
                         raise ValueError(f"Peer {who!r} is not part of mission {mission_id}")
+                if who != USER_PEER and int(mission["title_locked"] or 0):
+                    return {"mission_id": mission_id, "title": mission["title"], "set_by": USER_PEER, "locked": True}
                 conn.execute(
-                    "UPDATE missions SET title = ?, updated_at = ? WHERE mission_id = ?",
-                    (clean, now, mission_id),
+                    "UPDATE missions SET title = ?, title_locked = ?, updated_at = ? WHERE mission_id = ?",
+                    (clean, 1 if who == USER_PEER else int(mission["title_locked"] or 0), now, mission_id),
                 )
         return {"mission_id": mission_id, "title": clean, "set_by": who}
+
+    def bind_native_session(self, mission_id: str, peer_id: str, session_ref: str) -> Dict[str, Any]:
+        """Remember which native session (e.g. a Claude Code session id) handles this conversation for a peer."""
+        peer = validate_peer(peer_id)
+        ref = str(session_ref or "").strip()
+        if not ref or len(ref) > 200:
+            raise ValueError("session_ref must be 1-200 characters")
+        now = utc_now_iso()
+        with self._connect() as conn:
+            with self._tx(conn):
+                mission = conn.execute(
+                    "SELECT native_sessions_json FROM missions WHERE mission_id = ?", (mission_id,)
+                ).fetchone()
+                if mission is None:
+                    raise KeyError(f"Unknown mission_id: {mission_id}")
+                try:
+                    bindings = json.loads(mission["native_sessions_json"] or "{}")
+                    if not isinstance(bindings, dict):
+                        bindings = {}
+                except ValueError:
+                    bindings = {}
+                bindings[peer] = {"ref": ref, "bound_at": now}
+                conn.execute(
+                    "UPDATE missions SET native_sessions_json = ?, updated_at = ? WHERE mission_id = ?",
+                    (json.dumps(bindings, ensure_ascii=False), now, mission_id),
+                )
+        return {"mission_id": mission_id, "peer_id": peer, "session_ref": ref}
+
+    def mission_bindings(self, mission_id: str) -> Dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT native_sessions_json FROM missions WHERE mission_id = ?", (mission_id,)
+            ).fetchone()
+        if row is None:
+            return {}
+        try:
+            data = json.loads(row["native_sessions_json"] or "{}")
+            return data if isinstance(data, dict) else {}
+        except ValueError:
+            return {}
+
+    def set_mission_archived(self, mission_id: str, archived: bool) -> Dict[str, Any]:
+        now = utc_now_iso()
+        with self._connect() as conn:
+            with self._tx(conn):
+                cur = conn.execute(
+                    "UPDATE missions SET archived = ?, updated_at = ? WHERE mission_id = ?",
+                    (1 if archived else 0, now, mission_id),
+                )
+                if cur.rowcount == 0:
+                    raise KeyError(f"Unknown mission_id: {mission_id}")
+        return {"mission_id": mission_id, "archived": bool(archived)}
+
+    def set_mission_tier(self, mission_id: str, tier: str) -> None:
+        with self._connect() as conn:
+            with self._tx(conn):
+                conn.execute("UPDATE missions SET tier = ? WHERE mission_id = ?", (tier, mission_id))
 
     def set_mission_workspace(self, mission_id: str, path: str, actor: str) -> Dict[str, Any]:
         """Record the folder a conversation works in. Must be an existing absolute directory."""
@@ -2530,6 +2599,10 @@ class BusStore:
                     counts[st] = counts.get(st, 0) + 1
                 item = _row_to_dict(m)
                 item["task_counts"] = counts
+                try:
+                    item["native_sessions"] = json.loads(item.pop("native_sessions_json", "{}") or "{}")
+                except ValueError:
+                    item["native_sessions"] = {}
                 item["tasks"] = tasks_dec
                 item["events"] = [self._decode_event(e) for e in event_rows]
                 item["user_messages"] = [
