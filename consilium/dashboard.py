@@ -337,34 +337,38 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Consilium · 三端会诊看板</title>
+<title>Consilium · 三端原生会诊台</title>
 <style>
 :root {
-  --bg-canvas: #f4f6f9;
+  --bg-canvas: #f8fafc;
   --bg-surface: #ffffff;
-  --bg-subtle: #f8fafc;
+  --bg-subtle: #f1f5f9;
   --bg-elevated: #ffffff;
-  --bg-hover: #f1f5f9;
+  --bg-hover: #e9eef5;
   --border: rgba(15, 23, 42, 0.09);
   --border-strong: rgba(15, 23, 42, 0.16);
   --text-primary: #0f172a;
   --text-secondary: #475569;
   --text-muted: #64748b;
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 1px rgba(15, 23, 42, 0.03);
-  --shadow-md: 0 8px 24px rgba(15, 23, 42, 0.07), 0 2px 6px rgba(15, 23, 42, 0.04);
+  --accent: #2563eb;
+  --accent-fg: #ffffff;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 10px 28px rgba(15, 23, 42, 0.09), 0 2px 6px rgba(15, 23, 42, 0.04);
   --shadow-modal: 0 24px 60px rgba(15, 23, 42, 0.22);
 
   --peer-claude: #c8643c;
-  --peer-claude-soft: rgba(200, 100, 60, 0.11);
+  --peer-claude-soft: rgba(200, 100, 60, 0.12);
   --peer-chatgpt: #0d9470;
-  --peer-chatgpt-soft: rgba(13, 148, 112, 0.11);
+  --peer-chatgpt-soft: rgba(13, 148, 112, 0.12);
   --peer-antigravity: #4763e4;
-  --peer-antigravity-soft: rgba(71, 99, 228, 0.11);
+  --peer-antigravity-soft: rgba(71, 99, 228, 0.12);
 
   --status-standby: #16a34a;
   --status-standby-soft: rgba(22, 163, 74, 0.12);
   --status-working: #2563eb;
   --status-working-soft: rgba(37, 99, 235, 0.12);
+  --status-online: #0ea5e9;
+  --status-online-soft: rgba(14, 165, 233, 0.12);
   --status-offline: #94a3b8;
   --status-offline-soft: rgba(148, 163, 184, 0.16);
   --status-stale: #ea580c;
@@ -384,23 +388,25 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 @media (prefers-color-scheme: dark) {
   :root[data-theme="system"] {
     --bg-canvas: #0b0e14;
-    --bg-surface: #131822;
+    --bg-surface: #121722;
     --bg-subtle: #181e2b;
     --bg-elevated: #1c2333;
-    --bg-hover: #212a3d;
-    --border: rgba(248, 250, 252, 0.08);
-    --border-strong: rgba(248, 250, 252, 0.16);
+    --bg-hover: #222b3e;
+    --border: rgba(248, 250, 252, 0.09);
+    --border-strong: rgba(248, 250, 252, 0.18);
     --text-primary: #f1f5f9;
     --text-secondary: #cbd5e1;
     --text-muted: #94a3b8;
+    --accent: #3b82f6;
+    --accent-fg: #ffffff;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-    --shadow-md: 0 10px 28px rgba(0, 0, 0, 0.42);
-    --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.65);
+    --shadow-md: 0 12px 32px rgba(0, 0, 0, 0.45);
+    --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.68);
 
     --peer-claude: #eb8a63;
     --peer-claude-soft: rgba(235, 138, 99, 0.16);
     --peer-chatgpt: #34d3a3;
-    --peer-chatgpt-soft: rgba(52, 211, 163, 0.15);
+    --peer-chatgpt-soft: rgba(52, 211, 163, 0.16);
     --peer-antigravity: #7c96ff;
     --peer-antigravity-soft: rgba(124, 150, 255, 0.16);
 
@@ -408,6 +414,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     --status-standby-soft: rgba(34, 197, 94, 0.16);
     --status-working: #60a5fa;
     --status-working-soft: rgba(96, 165, 250, 0.16);
+    --status-online: #38bdf8;
+    --status-online-soft: rgba(56, 189, 248, 0.15);
     --status-offline: #64748b;
     --status-offline-soft: rgba(100, 116, 139, 0.22);
     --status-stale: #fb923c;
@@ -421,23 +429,25 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
 :root[data-theme="dark"] {
   --bg-canvas: #0b0e14;
-  --bg-surface: #131822;
+  --bg-surface: #121722;
   --bg-subtle: #181e2b;
   --bg-elevated: #1c2333;
-  --bg-hover: #212a3d;
-  --border: rgba(248, 250, 252, 0.08);
-  --border-strong: rgba(248, 250, 252, 0.16);
+  --bg-hover: #222b3e;
+  --border: rgba(248, 250, 252, 0.09);
+  --border-strong: rgba(248, 250, 252, 0.18);
   --text-primary: #f1f5f9;
   --text-secondary: #cbd5e1;
   --text-muted: #94a3b8;
+  --accent: #3b82f6;
+  --accent-fg: #ffffff;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-md: 0 10px 28px rgba(0, 0, 0, 0.42);
-  --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.65);
+  --shadow-md: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.68);
 
   --peer-claude: #eb8a63;
   --peer-claude-soft: rgba(235, 138, 99, 0.16);
   --peer-chatgpt: #34d3a3;
-  --peer-chatgpt-soft: rgba(52, 211, 163, 0.15);
+  --peer-chatgpt-soft: rgba(52, 211, 163, 0.16);
   --peer-antigravity: #7c96ff;
   --peer-antigravity-soft: rgba(124, 150, 255, 0.16);
 
@@ -445,6 +455,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   --status-standby-soft: rgba(34, 197, 94, 0.16);
   --status-working: #60a5fa;
   --status-working-soft: rgba(96, 165, 250, 0.16);
+  --status-online: #38bdf8;
+  --status-online-soft: rgba(56, 189, 248, 0.15);
   --status-offline: #64748b;
   --status-offline-soft: rgba(100, 116, 139, 0.22);
   --status-stale: #fb923c;
@@ -459,954 +471,982 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 html, body {
   margin: 0;
   padding: 0;
+  height: 100%;
+  overflow: hidden;
   background: var(--bg-canvas);
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
-  transition: background-color var(--t), color var(--t);
 }
 
-.nums { font-variant-numeric: tabular-nums; }
-.mono { font-family: var(--font-mono); }
+.tabular-nums { font-variant-numeric: tabular-nums; }
+.hidden { display: none !important; }
+button, input, textarea, select { font-family: inherit; color: inherit; }
 
+code, .mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+code.inline {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+
+/* App Shell */
 .app-shell {
-  max-width: 1320px;
-  margin: 0 auto;
-  padding: 20px 24px 48px;
+  display: flex;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+  position: relative;
 }
 
-/* Top Bar */
-.topbar {
+/* Left Sidebar */
+.sidebar {
+  width: 248px;
+  flex-shrink: 0;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.sidebar.collapsed { display: none; }
+.sidebar-head {
+  height: 52px;
+  padding: 0 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-  padding: 14px 20px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
-  margin-bottom: 20px;
-  transition: background-color var(--t), border-color var(--t);
-}
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.brand-mark {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  display: grid;
-  place-items: center;
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
-.brand-title {
-  font-size: 16px;
-  font-weight: 650;
-  letter-spacing: -0.02em;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-.brand-sub {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-muted);
-}
-.topbar-meta {
+.brand-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
 }
-.meta-pill {
+.brand-mark {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: var(--text-primary);
+  color: var(--bg-surface);
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.brand-name { font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+.sidebar-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+}
+.side-label {
+  padding: 4px 8px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.mission-item {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 9px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  transition: background var(--t);
+  margin-bottom: 3px;
+}
+.mission-item:hover { background: var(--bg-subtle); }
+.mission-item.active { background: var(--bg-hover); }
+.mission-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.mission-item-title {
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mission-item-sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.sidebar-foot {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* Main Workspace */
+.main-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-canvas);
+  position: relative;
+}
+
+/* Compact Single-Row Top Bar */
+.topbar {
+  min-height: 52px;
+  padding: 6px 12px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  position: relative;
+  z-index: 25;
+  flex-shrink: 0;
+}
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.icon-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  transition: background var(--t), color var(--t);
+}
+.icon-btn:hover { background: var(--bg-subtle); color: var(--text-primary); }
+.session-title-pill {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+
+/* Dedicated Compact Peer Sub-Bar (Always Unclipped Across 1440px & 390px) */
+.peer-subbar {
+  position: relative;
+  z-index: 24;
+  padding: 6px 14px;
+  background: var(--bg-canvas);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.peer-pills-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 0;
+}
+.peer-pill {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 10px;
+  padding: 4px 10px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background var(--t), border-color var(--t);
+}
+.peer-pill:hover, .peer-pill.open {
+  background: var(--bg-subtle);
+  border-color: var(--border-strong);
+}
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.dot.standby { background: var(--status-standby); }
+.dot.working { background: var(--status-working); animation: softPulse 1.6s ease-in-out infinite; }
+.dot.online { background: var(--status-online); }
+.dot.offline { background: var(--status-offline); }
+.dot.stale { background: var(--status-stale); }
+@keyframes softPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.pill-name { font-weight: 600; color: var(--text-primary); }
+.pill-state { color: var(--text-muted); }
+.pill-quota { font-weight: 550; color: var(--text-secondary); }
+.pill-quota.low { color: var(--status-stale); }
+.pill-quota.empty { color: var(--status-danger); }
+.pill-quota.unknown { color: var(--text-muted); }
+.pill-badge {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 5px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.pill-track {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 1px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--bar-track);
+  overflow: hidden;
+}
+.pill-fill { height: 100%; border-radius: 999px; }
+.pill-fill.claude { background: var(--peer-claude); }
+.pill-fill.chatgpt { background: var(--peer-chatgpt); }
+.pill-fill.antigravity { background: var(--peer-antigravity); }
+.pill-fill.low { background: var(--status-stale) !important; }
+.pill-fill.empty { background: var(--status-danger) !important; }
+.pill-fill.unknown { background: transparent !important; width: 0 !important; }
+
+/* Right Controls */
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.conn-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.conn-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--status-offline); }
+.conn-badge.live .conn-dot { background: var(--status-standby); }
+.conn-badge.poll .conn-dot { background: var(--status-stale); }
+
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  padding: 2px;
+  gap: 1px;
+}
+.seg-btn {
+  border: none;
+  background: transparent;
+  padding: 3px 7px;
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-muted);
+  white-space: nowrap;
+  transition: background var(--t), color var(--t);
+}
+.seg-btn:hover { color: var(--text-primary); }
+.seg-btn.active {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+.tab-group {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  padding: 2px;
+  gap: 1px;
+}
+.tab-chip {
+  border: none;
+  background: transparent;
+  padding: 3px 7px;
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  transition: background var(--t), color var(--t);
+}
+.tab-chip:hover { background: var(--bg-subtle); color: var(--text-primary); }
+.tab-chip.active { background: var(--text-primary); color: var(--bg-surface); font-weight: 600; }
+
+.btn-quiet {
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  border-radius: 8px;
+  padding: 4px 9px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.btn-quiet:hover { background: var(--bg-subtle); color: var(--text-primary); }
+
+/* Peer Popover (Opaque Elevated Surface) */
+.peer-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 344px;
+  max-width: calc(100vw - 24px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  box-shadow: var(--shadow-md);
+  padding: 14px;
+  z-index: 45;
+  font-size: 12.5px;
+}
+.pop-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.pop-body { padding: 10px 0; display: flex; flex-direction: column; gap: 8px; }
+.pop-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pop-actions {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 8px;
+}
+
+/* Workspace Body */
+.workspace-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+}
+
+/* Conversation Area */
+.chat-column {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+.chat-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 18px 28px;
+}
+.chat-container {
+  max-width: 740px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* Opening Mission Goal Header */
+.mission-banner {
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mission-banner-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.mission-banner-title { font-size: 15px; font-weight: 650; margin: 0; }
+.mission-banner-goal { font-size: 13px; color: var(--text-secondary); margin: 2px 0 0; }
+.meta-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
   border-radius: 999px;
   background: var(--bg-subtle);
   border: 1px solid var(--border);
   font-size: 12px;
   color: var(--text-secondary);
-  transition: background-color var(--t), border-color var(--t);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
-.meta-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--status-offline);
-  transition: background-color var(--t);
+.meta-chips .chip.mono {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.meta-dot.live { background: var(--status-standby); }
-.meta-dot.poll { background: var(--status-stale); }
-
-.theme-seg {
-  display: inline-flex;
-  padding: 3px;
-  background: var(--bg-subtle);
+.chip-btn {
   border: 1px solid var(--border);
-  border-radius: 999px;
-  gap: 2px;
-}
-.theme-btn {
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 500;
-  padding: 4px 10px;
-  border-radius: 999px;
-  cursor: pointer;
-  transition: background-color var(--t), color var(--t);
-}
-.theme-btn:hover { color: var(--text-primary); }
-.theme-btn.active {
   background: var(--bg-surface);
-  color: var(--text-primary);
+  border-radius: 7px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.chip-btn:hover { background: var(--bg-subtle); color: var(--text-primary); }
+
+.progress-row { display: flex; align-items: center; gap: 10px; }
+.progress-track {
+  flex: 1;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--bar-track);
+  overflow: hidden;
+}
+.progress-fill { height: 100%; border-radius: 999px; background: var(--status-working); transition: width var(--t); }
+.progress-fill.complete { background: var(--status-standby); }
+.progress-fill.warn { background: var(--status-stale); }
+.progress-fill.err { background: var(--status-danger); }
+
+/* Editorial Conversation Messages */
+.msg-turn {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+}
+.avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.avatar.claude { background: var(--peer-claude-soft); color: var(--peer-claude); }
+.avatar.chatgpt { background: var(--peer-chatgpt-soft); color: var(--peer-chatgpt); }
+.avatar.antigravity { background: var(--peer-antigravity-soft); color: var(--peer-antigravity); }
+.avatar.system { background: var(--bg-subtle); color: var(--text-secondary); }
+
+.msg-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.msg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.msg-author { font-size: 13.5px; font-weight: 600; color: var(--text-primary); }
+.msg-sub { font-size: 12px; color: var(--text-muted); }
+.msg-text { font-size: 14px; color: var(--text-primary); word-break: break-word; }
+
+.trace-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.trace-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.trace-pill.hot { color: var(--status-standby); }
+.trace-pill.cold { color: var(--status-stale); }
+.trace-pill.lat { color: var(--status-working); }
+
+/* Folded Earlier Events Fade */
+.fold-wrap { position: relative; }
+.timeline-fade {
+  position: relative;
+  max-height: 82px;
+  overflow: hidden;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: var(--bg-surface);
+}
+.timeline-fade::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 44px;
+  background: linear-gradient(to bottom, transparent, var(--bg-surface));
+  pointer-events: none;
+}
+
+/* Review Accordion & Final Summary */
+.review-box {
+  margin-left: 39px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  border-radius: 12px;
+  padding: 9px 12px;
+}
+.summary-card {
+  margin-left: 39px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  border-radius: 14px;
+  padding: 14px 16px;
   box-shadow: var(--shadow-sm);
 }
 
+/* Bottom Pure-Frontend Composer / Handoff Bar */
+.composer-wrap {
+  flex-shrink: 0;
+  padding: 8px 18px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+  position: relative;
+}
+.composer-inner { max-width: 740px; margin: 0 auto; position: relative; }
+.slash-palette {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  width: 100%;
+  max-width: 440px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-md);
+  padding: 6px;
+  z-index: 60;
+}
+.slash-item {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 7px 10px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.slash-item:hover { background: var(--bg-subtle); }
+.slash-cmd { font-family: var(--font-mono); font-weight: 600; color: var(--accent); flex-shrink: 0; }
+
+.composer-box {
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--bg-subtle);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.composer-input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  resize: none;
+  font-size: 13.5px;
+  color: var(--text-primary);
+  outline: none;
+  min-height: 22px;
+  max-height: 96px;
+}
+.composer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Collapsible Right Tabbed Inspector */
+.right-drawer {
+  width: 348px;
+  max-width: 90vw;
+  flex-shrink: 0;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.right-drawer.closed { display: none; }
+.drawer-head {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12.5px;
+}
+.panel-card {
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  border-radius: 10px;
+  padding: 10px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Shared Buttons */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
   border: 1px solid var(--border-strong);
   background: var(--bg-surface);
   color: var(--text-primary);
-  font-family: inherit;
   font-size: 12.5px;
   font-weight: 550;
-  padding: 6px 12px;
-  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background-color var(--t), border-color var(--t), opacity var(--t);
+  transition: background var(--t);
 }
-.btn:hover:not(:disabled) { background: var(--bg-hover); }
-.btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn-primary {
-  background: var(--text-primary);
-  color: var(--bg-surface);
-  border-color: transparent;
-}
-.btn-primary:hover:not(:disabled) { opacity: 0.88; background: var(--text-primary); }
-.btn-danger {
-  color: var(--status-danger);
-  border-color: rgba(220, 38, 38, 0.28);
-  background: var(--status-danger-soft);
-}
-.btn-danger:hover:not(:disabled) { border-color: var(--status-danger); }
-.btn-subtle-danger:hover:not(:disabled) {
-  color: var(--status-danger);
-  border-color: rgba(220, 38, 38, 0.35);
-  background: var(--status-danger-soft);
-}
-
-/* Section Header */
-.section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin: 0 2px 12px;
-}
-.section-title {
-  font-size: 13px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-}
-.section-count {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-/* Three Peer Cards */
-.peers-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-  margin-bottom: 24px;
-}
-.peer-card {
-  position: relative;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 18px 20px;
-  box-shadow: var(--shadow-sm);
-  overflow: hidden;
-  transition: background-color var(--t), border-color var(--t), transform var(--t);
-}
-.peer-card::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
-  background: var(--peer-accent, var(--border));
-}
-.peer-card[data-peer="claude"] { --peer-accent: var(--peer-claude); --peer-soft: var(--peer-claude-soft); }
-.peer-card[data-peer="chatgpt"] { --peer-accent: var(--peer-chatgpt); --peer-soft: var(--peer-chatgpt-soft); }
-.peer-card[data-peer="antigravity"] { --peer-accent: var(--peer-antigravity); --peer-soft: var(--peer-antigravity-soft); }
-
-.peer-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-.peer-id-wrap {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.peer-badge {
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  background: var(--peer-soft);
-  color: var(--peer-accent);
-  font-weight: 700;
-  font-size: 13px;
-  display: grid;
-  place-items: center;
-}
-.peer-name {
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-}
-.peer-branch-prefix {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 550;
-  transition: background-color var(--t), color var(--t);
-}
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-}
-.status-standby { background: var(--status-standby-soft); color: var(--status-standby); }
-.status-standby .status-dot { background: var(--status-standby); }
-.status-working { background: var(--status-working-soft); color: var(--status-working); }
-.status-working .status-dot { background: var(--status-working); }
-.status-online { background: var(--bg-subtle); color: var(--text-secondary); border: 1px solid var(--border-strong); }
-.status-online .status-dot { background: var(--text-secondary); }
-.status-offline { background: var(--status-offline-soft); color: var(--text-muted); opacity: 0.85; }
-.status-offline .status-dot { background: var(--status-offline); }
-.status-stale { background: var(--status-stale-soft); color: var(--status-stale); }
-.status-stale .status-dot { background: var(--status-stale); }
-
-.peer-session {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-bottom: 14px;
-}
-.peer-session-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.quota-box {
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 10px 12px;
-  margin-bottom: 14px;
-}
-.quota-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  font-size: 12px;
-  margin-bottom: 6px;
-}
-.quota-label { color: var(--text-muted); font-weight: 500; display: inline-flex; align-items: center; gap: 6px; }
-.demo-tag {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--status-stale-soft);
-  color: var(--status-stale);
-}
-.quota-value { font-weight: 650; color: var(--text-primary); }
-.quota-value.unknown { color: var(--text-muted); font-weight: 500; }
-.bar-track {
-  width: 100%;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--bar-track);
-  overflow: hidden;
-}
-.bar-fill {
-  height: 100%;
-  border-radius: 999px;
-  background: var(--peer-accent, var(--status-working));
-  transition: width var(--t), background-color var(--t);
-}
-.bar-fill.low { background: var(--status-stale); }
-.bar-fill.empty { background: var(--status-danger); }
-.bar-fill.unknown { width: 0%; }
-.quota-reset {
-  margin-top: 5px;
-  font-size: 11px;
-  color: var(--text-muted);
-  display: flex;
-  justify-content: space-between;
-}
-
-.peer-counts {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-}
-.count-chip {
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 7px 8px;
-  text-align: center;
-}
-.count-num {
-  display: block;
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1.2;
-}
-.count-lbl {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-/* Mission List */
-.missions-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.mission-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
-  overflow: hidden;
-  transition: border-color var(--t), background-color var(--t);
-}
-.mission-card.expanded {
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-md);
-}
-.mission-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1.8fr) auto minmax(140px, 0.8fr) auto auto;
-  align-items: center;
-  gap: 16px;
-  padding: 15px 20px;
-  cursor: pointer;
-  transition: background-color var(--t);
-}
-.mission-row:hover { background: var(--bg-subtle); }
-.mission-title-col { min-width: 0; }
-.mission-title-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.mission-title {
-  font-size: 14.5px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-}
-.mission-id {
-  font-size: 11.5px;
-  color: var(--text-muted);
-}
-.mission-goal {
-  font-size: 12.5px;
-  color: var(--text-muted);
-  margin-top: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.peer-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-}
-.peer-tag.claude { background: var(--peer-claude-soft); color: var(--peer-claude); }
-.peer-tag.chatgpt { background: var(--peer-chatgpt-soft); color: var(--peer-chatgpt); }
-.peer-tag.antigravity { background: var(--peer-antigravity-soft); color: var(--peer-antigravity); }
-
-.progress-wrap { min-width: 130px; }
-.progress-top {
-  display: flex;
-  justify-content: space-between;
-  font-size: 11.5px;
-  color: var(--text-muted);
-  margin-bottom: 5px;
-}
-
-.rounds-wrap {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.round-dots {
-  display: inline-flex;
-  gap: 4px;
-}
-.round-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--bar-track);
-  transition: background-color var(--t);
-}
-.round-dot.filled { background: var(--status-working); }
-.round-dot.capped { background: var(--status-stale); }
-
-.mission-status-badge {
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.ms-active { background: var(--status-working-soft); color: var(--status-working); }
-.ms-ready_to_report { background: var(--status-stale-soft); color: var(--status-stale); }
-.ms-completed { background: var(--status-standby-soft); color: var(--status-standby); }
-.ms-cancelled, .ms-failed { background: var(--status-danger-soft); color: var(--status-danger); }
-
-.chevron {
-  width: 18px;
-  height: 18px;
-  color: var(--text-muted);
-  transition: transform var(--t);
-}
-.mission-card.expanded .chevron { transform: rotate(180deg); }
-
-/* Mission Detail */
-.mission-detail {
-  border-top: 1px solid var(--border);
-  padding: 18px 20px 22px;
-  background: var(--bg-subtle);
-}
-.detail-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 16px;
-}
-.detail-meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-.detail-chip {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  padding: 3px 9px;
-  border-radius: 6px;
-}
-
-.detail-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 16px;
-}
-
-.panel {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 16px;
-}
-.panel-title {
-  font-size: 12.5px;
-  font-weight: 650;
-  color: var(--text-secondary);
-  margin: 0 0 12px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-/* Task Columns */
-.kanban {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-.kanban.cols-5 {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-}
-.kanban-col {
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 10px;
-  min-height: 96px;
-  min-width: 0;
-}
-.kanban-col.empty-col {
+.btn:hover { background: var(--bg-hover); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.btn-primary:hover { opacity: 0.92; background: var(--accent); }
+.btn-subtle-danger {
   background: transparent;
-  border-style: dashed;
-  opacity: 0.78;
+  border-color: rgba(220, 38, 38, 0.35);
+  color: var(--status-danger);
 }
-.kanban-head {
-  display: flex;
-  justify-content: space-between;
-  font-size: 11.5px;
-  font-weight: 650;
-  color: var(--text-muted);
-  margin-bottom: 8px;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-.task-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px;
-  margin-bottom: 8px;
-  box-shadow: var(--shadow-sm);
-  transition: border-color var(--t);
-}
-.task-card:last-child { margin-bottom: 0; }
-.task-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  margin-bottom: 6px;
-  flex-wrap: wrap;
-}
-.tier-pill {
-  font-size: 10.5px;
-  font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 5px;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
-}
-.stale-pill {
-  background: var(--status-stale-soft);
-  border-color: transparent;
-  color: var(--status-stale);
-}
-.attempt-pill {
-  font-size: 10.5px;
-  font-weight: 550;
-  padding: 2px 6px;
-  border-radius: 5px;
-  background: var(--bg-subtle);
-  color: var(--text-muted);
-}
-.task-branch {
-  font-size: 11px;
-  color: var(--text-secondary);
-  background: var(--bg-subtle);
-  padding: 2px 6px;
-  border-radius: 5px;
-  display: inline-block;
-  margin-bottom: 6px;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.task-note {
-  font-size: 12.5px;
-  color: var(--text-secondary);
-  word-break: break-word;
-  line-height: 1.55;
-}
-.task-note code, .tl-desc code {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  padding: 1px 4px;
-  border-radius: 4px;
-}
-.task-foot {
-  margin-top: 8px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.task-id { font-size: 10.5px; color: var(--text-muted); white-space: nowrap; }
-.btn-xs { padding: 3px 8px; font-size: 11px; white-space: nowrap; flex-shrink: 0; }
+.btn-subtle-danger:hover { background: var(--status-danger-soft); }
+.btn-danger { background: var(--status-danger); border-color: var(--status-danger); color: #ffffff; }
+.btn-sm { padding: 4px 9px; font-size: 12px; }
 
-/* Final Summary Markdown */
-.summary-box {
-  margin-top: 14px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 16px;
-}
-.md-body h1, .md-body h2, .md-body h3 { margin: 10px 0 6px; font-weight: 650; }
-.md-body h1 { font-size: 16px; }
-.md-body h2 { font-size: 14.5px; }
-.md-body h3 { font-size: 13.5px; }
-.md-body p { margin: 6px 0; color: var(--text-secondary); }
-.md-body ul, .md-body ol { margin: 6px 0; padding-left: 20px; color: var(--text-secondary); }
-.md-body li { margin: 3px 0; }
-.md-body code {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  padding: 1px 5px;
-  border-radius: 4px;
-}
-.md-body pre {
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
-  overflow-x: auto;
-}
-.md-body pre code { border: none; padding: 0; background: transparent; }
-
-/* Event Timeline */
-.timeline-wrap {
-  position: relative;
-}
-.timeline {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.timeline-fade {
-  position: relative;
-  margin-top: -28px;
-  padding-top: 34px;
-  display: flex;
-  justify-content: center;
-  background: linear-gradient(to bottom, rgba(255, 255, 255, 0), var(--bg-surface) 62%);
-}
-:root[data-theme="dark"] .timeline-fade {
-  background: linear-gradient(to bottom, rgba(19, 24, 34, 0), var(--bg-surface) 62%);
-}
-@media (prefers-color-scheme: dark) {
-  :root[data-theme="system"] .timeline-fade {
-    background: linear-gradient(to bottom, rgba(19, 24, 34, 0), var(--bg-surface) 62%);
-  }
-}
-.timeline-more-row {
-  margin-top: 10px;
-  display: flex;
-  justify-content: center;
-}
-.tl-item {
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-}
-.tl-icon {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  display: grid;
-  place-items: center;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-}
-.tl-icon.guard { color: var(--status-stale); background: var(--status-stale-soft); border-color: transparent; }
-.tl-icon.done { color: var(--status-standby); background: var(--status-standby-soft); border-color: transparent; }
-.tl-body {
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 9px 11px;
-}
-.tl-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 4px;
-}
-.tl-kind { font-size: 12px; font-weight: 650; }
-.tl-time { font-size: 11px; color: var(--text-muted); }
-.tl-badges {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-bottom: 4px;
-}
-.delivery-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 7px;
-  border-radius: 999px;
-}
-.delivery-hot { background: var(--status-standby-soft); color: var(--status-standby); }
-.delivery-cold { background: var(--status-stale-soft); color: var(--status-stale); }
-.delivery-err { background: var(--status-danger-soft); color: var(--status-danger); }
-.delivery-claim { background: var(--status-working-soft); color: var(--status-working); }
-.delivery-muted { background: var(--status-offline-soft); color: var(--text-muted); }
-.tl-desc {
-  font-size: 12px;
-  color: var(--text-secondary);
-  word-break: break-word;
-}
-
-/* Auth Overlay & Modal */
+/* Login & Confirm Modals */
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.45);
-  backdrop-filter: blur(6px);
+  background: rgba(15, 23, 42, 0.56);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 20px;
-  z-index: 100;
+  padding: 16px;
+  z-index: 80;
 }
-.overlay.hidden { display: none; }
 .modal {
   width: 100%;
-  max-width: 440px;
-  background: var(--bg-surface);
+  max-width: 420px;
+  background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
-  padding: 24px;
   box-shadow: var(--shadow-modal);
+  padding: 20px;
 }
-.modal h2 { margin: 0 0 8px; font-size: 17px; font-weight: 650; }
-.modal p { margin: 0 0 14px; font-size: 13px; color: var(--text-secondary); }
+.modal h2 { margin: 0 0 6px; font-size: 16px; }
+.modal p { margin: 0 0 12px; font-size: 13px; color: var(--text-secondary); }
 .input, .textarea, .select {
   width: 100%;
-  font-family: inherit;
-  font-size: 13.5px;
-  color: var(--text-primary);
-  background: var(--bg-subtle);
+  padding: 8px 10px;
+  border-radius: 8px;
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  padding: 9px 12px;
-  margin-bottom: 12px;
-  outline: none;
-  transition: border-color var(--t);
-}
-.input:focus, .textarea:focus, .select:focus { border-color: var(--peer-antigravity); }
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 6px;
-}
-.err-text {
-  color: var(--status-danger);
-  font-size: 12px;
-  margin: -4px 0 10px;
-  min-height: 16px;
-}
-.empty-state {
   background: var(--bg-surface);
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-lg);
-  padding: 36px 20px;
-  text-align: center;
-  color: var(--text-muted);
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+.err-text { color: var(--status-danger); font-size: 12px; min-height: 18px; margin-bottom: 8px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+.toast {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  max-width: 340px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+  padding: 10px 12px;
+  font-size: 12.5px;
+  z-index: 90;
 }
 
-@media (max-width: 1120px) {
-  .kanban, .kanban.cols-5 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
-}
-@media (max-width: 960px) {
-  .detail-grid { grid-template-columns: 1fr; }
-  .mission-row { grid-template-columns: 1fr auto; }
-  .progress-wrap, .rounds-wrap { grid-column: 1 / -1; }
-}
-@media (max-width: 820px) {
-  .peers-grid { grid-template-columns: 1fr; }
-  .app-shell { padding: 14px 14px 36px; }
-}
-@media (max-width: 640px) {
-  .kanban, .kanban.cols-5 { grid-template-columns: 1fr !important; }
+/* Mobile / 390px Responsive */
+@media (max-width: 860px) {
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 55;
+    box-shadow: var(--shadow-modal);
+  }
+  .right-drawer {
+    position: fixed;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 55;
+    box-shadow: var(--shadow-modal);
+  }
+  .topbar { flex-wrap: wrap; row-gap: 6px; padding: 6px 10px; }
+  .topbar-right { width: 100%; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
+  .tab-group { max-width: 100%; flex-wrap: wrap; }
+  .tab-chip { padding: 3px 6px; }
+  .peer-subbar { padding: 6px 10px; justify-content: flex-start; }
+  .peer-pills-bar { justify-content: flex-start; }
+  .session-title-pill { max-width: 210px; }
+  .review-box, .summary-card { margin-left: 0; }
+  .hide-narrow { display: none !important; }
+  .chat-scroll { padding: 14px 12px 22px; }
+  .composer-wrap { padding: 8px 12px 12px; }
 }
 </style>
 </head>
 <body>
 <div class="app-shell">
-  <header class="topbar">
-    <div class="brand">
-      <div class="brand-mark" aria-hidden="true">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-          <circle cx="12" cy="5.5" r="3" fill="var(--peer-claude)"/>
-          <circle cx="6" cy="17" r="3" fill="var(--peer-chatgpt)"/>
-          <circle cx="18" cy="17" r="3" fill="var(--peer-antigravity)"/>
-          <path d="M10.4 8.1L7.5 14.2M13.6 8.1L16.5 14.2M9.2 17H14.8" stroke="var(--text-muted)" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
+  <!-- Left Retractable Sidebar: 会诊列表 -->
+  <aside id="sidebar" class="sidebar">
+    <div class="sidebar-head">
+      <div class="brand-row">
+        <span class="brand-mark">C</span>
+        <span class="brand-name">Consilium</span>
       </div>
-      <div>
-        <div class="brand-title">
-          Consilium
-          <span class="brand-sub">三端会诊看板</span>
+      <span id="mission-count-pill" class="chip tabular-nums">0</span>
+    </div>
+    <div class="sidebar-scroll">
+      <div class="side-label"><span>会诊列表</span><span>按最近更新</span></div>
+      <div id="mission-list"></div>
+    </div>
+    <div class="sidebar-foot">
+      <span class="tabular-nums">运行 <strong id="uptime-val">00:00:00</strong></span>
+      <span id="version-pill" class="mono">v__VERSION__</span>
+    </div>
+  </aside>
+
+  <!-- Main Workspace -->
+  <div class="main-col">
+    <!-- Compact Top Bar -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <button id="sidebar-toggle-btn" type="button" class="icon-btn" title="展开/收起会诊列表" aria-label="展开或收起侧栏">☰</button>
+        <span id="active-mission-title" class="session-title-pill">暂无会诊</span>
+        <span id="active-mission-badge" class="chip">空闲</span>
+      </div>
+
+      <!-- Right: Connection + Theme + Collapsible Right Drawer Tabs + Logout -->
+      <div class="topbar-right">
+        <div id="conn-pill" class="conn-badge hide-narrow">
+          <span class="conn-dot"></span>
+          <span id="conn-text">连接中</span>
         </div>
+        <div class="seg" role="group" aria-label="主题切换">
+          <button type="button" class="seg-btn" data-set-theme="light">浅色</button>
+          <button type="button" class="seg-btn" data-set-theme="dark">深色</button>
+          <button type="button" class="seg-btn" data-set-theme="system">系统</button>
+        </div>
+        <div id="top-drawer-tabs" class="tab-group" role="group" aria-label="右侧详情面板"></div>
+        <button id="logout-btn" type="button" class="btn-quiet">退出</button>
       </div>
-    </div>
-    <div class="topbar-meta">
-      <span class="meta-pill" id="conn-pill"><span class="meta-dot" id="conn-dot"></span><span id="conn-label">连接中</span></span>
-      <span class="meta-pill nums">运行 <strong id="uptime-val" class="mono">00:00:00</strong></span>
-      <span class="meta-pill mono nums" id="version-pill">v__VERSION__</span>
-      <div class="theme-seg" role="group" aria-label="主题切换">
-        <button class="theme-btn" data-set-theme="light">浅色</button>
-        <button class="theme-btn" data-set-theme="dark">深色</button>
-        <button class="theme-btn" data-set-theme="system">跟随系统</button>
-      </div>
-      <button class="btn" id="logout-btn" title="退出当前令牌会话">退出</button>
-    </div>
-  </header>
+    </header>
 
-  <section aria-label="三端状态">
-    <div class="section-head">
-      <span class="section-title">三端状态 · Peers</span>
-      <span class="section-count nums" id="peers-summary"></span>
+    <!-- Dedicated Compact 3-Peer Status & Quota Strip -->
+    <div class="peer-subbar">
+      <div id="top-peer-pills" class="peer-pills-bar" aria-label="三端原生状态与当前账号配额"></div>
+      <div id="peer-popover" class="peer-popover hidden" role="dialog" aria-label="原生端账号与接手详情"></div>
     </div>
-    <div class="peers-grid" id="peers-grid"></div>
-  </section>
 
-  <section aria-label="Mission 列表">
-    <div class="section-head">
-      <span class="section-title">会诊任务 · Missions</span>
-      <span class="section-count nums" id="missions-summary"></span>
-    </div>
-    <div class="missions-stack" id="missions-stack"></div>
-  </section>
-</div>
+    <div class="workspace-body">
+      <!-- Centered Minimalist Conversation Stream -->
+      <section class="chat-column">
+        <main id="chat-scroll" class="chat-scroll">
+          <div id="chat-container" class="chat-container"></div>
+        </main>
 
-<!-- Token Login Overlay -->
-<div class="overlay hidden" id="login-overlay" role="dialog" aria-modal="true" aria-labelledby="login-title">
-  <div class="modal">
-    <h2 id="login-title">登录 Consilium 看板</h2>
-    <p>推荐使用一条命令免密直达（自动签发一次性票据并记住当前浏览器会话，之后不用再输）：</p>
-    <p><code class="mono">python3 -m consilium.cli ui</code></p>
-    <p>若手动输入，可先复制本机令牌：<code class="mono">pbcopy &lt; ~/Library/Application\ Support/consilium/auth.token</code></p>
-    <input type="password" id="token-input" class="input mono" placeholder="粘贴本机 auth.token 令牌…" autocomplete="off">
-    <div class="err-text" id="login-err"></div>
-    <div class="modal-actions">
-      <button class="btn btn-primary" id="login-submit">进入看板</button>
+        <!-- Bottom Pure-Frontend Bar -->
+        <footer class="composer-wrap">
+          <div class="composer-inner">
+            <div id="slash-palette" class="slash-palette hidden" role="menu"></div>
+            <div class="composer-box">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+                <div id="handoff-targets" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"></div>
+                <span class="hide-narrow" style="font-size:12px;color:var(--text-muted);">只读对话流 · 仅拼装交接提示词（阶段 3 后开放直接派活）</span>
+              </div>
+              <textarea id="composer-input" class="composer-input" rows="1" placeholder="键入 / 呼出快捷命令，或输入交接提示词后复制 / 新开原生会话接手…"></textarea>
+              <div class="composer-foot">
+                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                  <button id="btn-slash-toggle" type="button" class="btn btn-sm">/ 功能</button>
+                  <button type="button" class="btn btn-sm" data-open-tab="accounts">账号池与建议</button>
+                  <button type="button" class="btn btn-sm" data-open-tab="worktrees">工作树</button>
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <button id="btn-copy-handoff" type="button" class="btn btn-sm">复制交接提示词</button>
+                  <button id="btn-open-native" type="button" class="btn btn-primary btn-sm">新开原生会话 ↗</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </footer>
+      </section>
+
+      <!-- Collapsible Right Tabbed Inspector (Closed by Default) -->
+      <aside id="right-drawer" class="right-drawer closed" aria-label="右侧详情抽屉">
+        <div class="drawer-head">
+          <div id="drawer-tabs-inner" class="tab-group"></div>
+          <button id="btn-close-drawer" type="button" class="icon-btn" title="收起右侧面板">✕</button>
+        </div>
+        <div id="drawer-body" class="drawer-body"></div>
+      </aside>
     </div>
   </div>
 </div>
 
-<!-- Double-Confirmation Action Modal -->
-<div class="overlay hidden" id="confirm-overlay" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
-  <div class="modal">
+<!-- Login Overlay -->
+<div id="login-overlay" class="overlay hidden">
+  <div class="modal" role="dialog" aria-labelledby="login-title">
+    <h2 id="login-title">连接本地 Consilium</h2>
+    <p>请输入本地 <code class="inline">auth.token</code>；或在终端运行 <code class="inline">python3 -m consilium.cli ui</code> 免密打开。<br>提示：请使用 <code class="inline">127.0.0.1:&lt;port&gt;/ui</code> 访问，勿混用 <code class="inline">localhost</code>（同主机异源会拦截 Cookie 写请求）。</p>
+    <input id="token-input" class="input mono" type="password" autocomplete="current-password" placeholder="粘贴 64 位 hex auth.token">
+    <div id="login-err" class="err-text"></div>
+    <div class="modal-actions">
+      <button id="login-submit" type="button" class="btn btn-primary">登录看板</button>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm Overlay -->
+<div id="confirm-overlay" class="overlay hidden">
+  <div class="modal" role="dialog" aria-labelledby="confirm-title">
     <h2 id="confirm-title">确认操作</h2>
     <p id="confirm-desc"></p>
     <div id="confirm-extra"></div>
-    <div class="err-text" id="confirm-err"></div>
+    <div id="confirm-err" class="err-text"></div>
     <div class="modal-actions">
-      <button class="btn" id="confirm-cancel">取消</button>
-      <button class="btn btn-danger" id="confirm-ok">二次确认并执行</button>
+      <button id="confirm-cancel" type="button" class="btn">取消</button>
+      <button class="btn btn-danger" id="confirm-ok" type="button">确认</button>
     </div>
   </div>
 </div>
 
+<div id="toast" class="toast hidden"></div>
+
 <script>
-(function () {
+(() => {
+  "use strict";
+
   const PEER_META = {
-    claude: { name: "Claude", subtitle: "Claude.app · Code", prefix: "claude/", monogram: "C" },
-    chatgpt: { name: "ChatGPT / Codex", subtitle: "ChatGPT.app · Codex", prefix: "codex/", monogram: "G" },
-    antigravity: { name: "Antigravity", subtitle: "Antigravity.app", prefix: "gemini/", monogram: "A" }
+    claude: { id: "claude", label: "Claude", appName: "Claude.app · Code", branchPrefix: "claude/", short: "C", cls: "claude" },
+    chatgpt: { id: "chatgpt", label: "Codex", appName: "ChatGPT.app · Codex", branchPrefix: "codex/", short: "G", cls: "chatgpt" },
+    antigravity: { id: "antigravity", label: "Antigravity", appName: "Antigravity.app", branchPrefix: "gemini/", short: "A", cls: "antigravity" }
   };
-  const STATUS_TEXT = {
-    standby: "待命",
-    working: "工作中",
-    online: "在线",
-    active: "在线",
-    offline: "离线",
-    stale: "陈旧"
-  };
-  const MISSION_STATUS_TEXT = {
-    active: "进行中",
-    ready_to_report: "待汇总",
-    completed: "已完成",
-    cancelled: "已取消",
-    failed: "已失败"
-  };
+  const STATUS_TEXT = { standby: "待命", working: "工作中", online: "在线", offline: "离线", stale: "陈旧" };
+  const TASK_STATUS_TEXT = { queued: "排队", claimed: "已认领", running: "执行中", blocked: "阻塞", failed: "失败", done: "已完成", cancelled: "已取消" };
   const EVENT_LABELS = {
     task_assigned: "派发任务",
-    progress: "进度回报",
-    task_done: "任务完成",
-    review_request: "交叉审核",
-    loop_guard_reached: "触发轮次上限",
-    task_requeued: "任务重新入队",
-    task_stale: "执行超时（陈旧）",
-    mission_closed: "关闭 Mission"
+    task_done: "完成交付",
+    progress: "进度上报",
+    review_request: "交叉复核",
+    loop_guard_reached: "触达轮次上限",
+    mission_closed: "会诊结束",
+    task_requeued: "重新入队",
+    task_stale: "进度超时陈旧"
   };
+  const SLASH_COMMANDS = [
+    { cmd: "/tasks", desc: "打开右侧「任务」面板查看认领状态与控制", action: "tab:tasks" },
+    { cmd: "/worktrees", desc: "查看各任务的隔离工作树分支清单", action: "tab:worktrees" },
+    { cmd: "/accounts", desc: "查看三端当前账号配额与 Cockpit 备用账号池", action: "tab:accounts" },
+    { cmd: "/artifacts", desc: "查看本次会诊汇总的产物路径列表", action: "tab:artifacts" },
+    { cmd: "/subagents", desc: "查看子 Agent 上报占位说明（阶段 3 启用）", action: "tab:subagents" },
+    { cmd: "/export", desc: "合成当前会诊 Markdown 并复制到剪贴板", action: "export_md" }
+  ];
 
   let appState = null;
   let csrfToken = "";
   let lastStateVersion = 0;
-  let expandedMissionIds = new Set();
-  let expandedTimelines = new Set();
-  let autoExpandedOnce = false;
+  let selectedMissionId = null;
+  let rightTab = null; // Closed by default per minimalist chat spec
+  let openPopoverPeer = null;
+  let handoffTarget = "claude";
+  let slashOpen = false;
+  let sidebarDesktopOpen = true;
+  let sidebarMobileOpen = false;
+  function isNarrowViewport() { return window.innerWidth <= 860; }
+  function isSidebarOpen() { return isNarrowViewport() ? sidebarMobileOpen : sidebarDesktopOpen; }
   let eventSource = null;
   let pollTimer = null;
   let sseReconnectTimer = null;
-  let uptimeTimer = null;
   let baseUptime = 0;
   let baseUptimeStamp = Date.now();
   let pendingConfirmFn = null;
+  const expandedFolds = new Set();
+  const expandedReviews = new Set();
 
   function esc(str) {
     return String(str == null ? "" : str)
@@ -1417,390 +1457,526 @@ html, body {
       .replace(/'/g, "&#39;");
   }
 
-  function formatDuration(sec) {
-    const total = Math.max(0, Math.floor(sec || 0));
-    const h = Math.floor(total / 3600);
-    const m = Math.floor((total % 3600) / 60);
-    const s = total % 60;
-    return [h, m, s].map(v => String(v).padStart(2, "0")).join(":");
+  function renderInline(str) {
+    return esc(str)
+      .replace(/`([^`\n]+)`/g, '<code class="inline">$1</code>')
+      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
   }
 
-  function formatRelTime(isoStr) {
-    if (!isoStr) return "从未活跃";
-    const dt = new Date(isoStr);
-    if (isNaN(dt.getTime())) return isoStr;
-    const diff = Math.max(0, Math.floor((Date.now() - dt.getTime()) / 1000));
-    if (diff < 5) return "刚刚";
+  function renderMarkdownBlock(mdText) {
+    if (!mdText) return "";
+    return String(mdText).split("\n").map(line => {
+      if (line.startsWith("### ")) return "<div style='font-weight:600;margin:6px 0 2px;'>" + renderInline(line.slice(4)) + "</div>";
+      if (line.startsWith("## ")) return "<div style='font-weight:650;font-size:14.5px;margin:6px 0 3px;'>" + renderInline(line.slice(3)) + "</div>";
+      if (line.startsWith("- ")) return "<div style='padding-left:10px;'>• " + renderInline(line.slice(2)) + "</div>";
+      if (!line.trim()) return "<div style='height:4px;'></div>";
+      return "<div>" + renderInline(line) + "</div>";
+    }).join("");
+  }
+
+  function formatDuration(sec) {
+    const s = Math.max(0, Math.floor(sec || 0));
+    const h = String(Math.floor(s / 3600)).padStart(2, "0");
+    const m = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+    const r = String(s % 60).padStart(2, "0");
+    return h + ":" + m + ":" + r;
+  }
+
+  function relativeAge(isoStr) {
+    if (!isoStr) return "暂无上报";
+    const ms = Date.parse(isoStr);
+    if (Number.isNaN(ms)) return "未知";
+    const diff = Math.max(0, Math.floor((Date.now() - ms) / 1000));
     if (diff < 60) return diff + " 秒前";
     if (diff < 3600) return Math.floor(diff / 60) + " 分钟前";
-    if (diff < 86400) return Math.floor(diff / 3600) + " 小时前";
-    return Math.floor(diff / 86400) + " 天前";
+    return Math.floor(diff / 3600) + " 小时前";
   }
 
   function formatClock(isoStr) {
     if (!isoStr) return "";
-    const dt = new Date(isoStr);
-    if (isNaN(dt.getTime())) return isoStr;
-    return dt.toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const d = new Date(isoStr);
+    if (Number.isNaN(d.getTime())) return isoStr;
+    return [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2, "0")).join(":");
   }
 
-  function renderInline(text) {
-    let s = esc(text);
-    s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
-    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    return s;
+  let toastTimer = null;
+  function showToast(msg) {
+    const el = document.getElementById("toast");
+    el.textContent = String(msg || "");
+    el.classList.remove("hidden");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.add("hidden"), 3200);
   }
 
-  function renderMarkdown(raw) {
-    if (!raw) return "";
-    const lines = String(raw).replace(/\r\n/g, "\n").split("\n");
-    let html = "";
-    let inList = null;
-    let inCode = false;
-    function closeList() {
-      if (inList) { html += "</" + inList + ">"; inList = null; }
-    }
-    for (const line of lines) {
-      if (line.trim().startsWith("```")) {
-        closeList();
-        if (!inCode) { html += "<pre><code>"; inCode = true; }
-        else { html += "</code></pre>"; inCode = false; }
-        continue;
-      }
-      if (inCode) { html += esc(line) + "\n"; continue; }
-      const h3 = line.match(/^###\s+(.+)/);
-      const h2 = line.match(/^##\s+(.+)/);
-      const h1 = line.match(/^#\s+(.+)/);
-      const ul = line.match(/^\s*[-*]\s+(.+)/);
-      const ol = line.match(/^\s*\d+\.\s+(.+)/);
-      if (h3) { closeList(); html += "<h3>" + renderInline(h3[1]) + "</h3>"; }
-      else if (h2) { closeList(); html += "<h2>" + renderInline(h2[1]) + "</h2>"; }
-      else if (h1) { closeList(); html += "<h1>" + renderInline(h1[1]) + "</h1>"; }
-      else if (ul) {
-        if (inList !== "ul") { closeList(); html += "<ul>"; inList = "ul"; }
-        html += "<li>" + renderInline(ul[1]) + "</li>";
-      } else if (ol) {
-        if (inList !== "ol") { closeList(); html += "<ol>"; inList = "ol"; }
-        html += "<li>" + renderInline(ol[1]) + "</li>";
-      } else if (line.trim() === "") {
-        closeList();
-      } else {
-        closeList();
-        html += "<p>" + renderInline(line) + "</p>";
-      }
-    }
-    closeList();
-    if (inCode) html += "</code></pre>";
-    return html;
+  function setConn(kind, text) {
+    const pill = document.getElementById("conn-pill");
+    pill.className = "conn-badge hide-narrow" + (kind ? " " + kind : "");
+    document.getElementById("conn-text").textContent = text;
   }
 
-  function eventIconSvg(kind) {
-    const icons = {
-      task_assigned: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg>',
-      progress: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
-      task_done: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 13l4 4L19 7"/></svg>',
-      review_request: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 10l5-5 5 5M17 14l-5 5-5-5"/></svg>',
-      loop_guard_reached: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.6L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.6a2 2 0 00-3.4 0z"/></svg>',
-      task_stale: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.6L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.6a2 2 0 00-3.4 0z"/></svg>',
-      task_requeued: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>',
-      mission_closed: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 12l2 2 4-4"/></svg>'
-    };
-    return icons[kind] || icons.progress;
-  }
-
-  function applyTheme(mode) {
-    document.documentElement.setAttribute("data-theme", mode);
-    try { localStorage.setItem("consilium-theme", mode); } catch (_) {}
-    document.querySelectorAll(".theme-btn").forEach(btn => {
-      btn.classList.toggle("active", btn.getAttribute("data-set-theme") === mode);
+  function applyTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    try { localStorage.setItem("consilium-theme", theme); } catch (_) {}
+    document.querySelectorAll("[data-set-theme]").forEach(btn => {
+      btn.classList.toggle("active", btn.getAttribute("data-set-theme") === theme);
     });
   }
 
-  function setConn(mode, label) {
-    const dot = document.getElementById("conn-dot");
-    const lbl = document.getElementById("conn-label");
-    dot.className = "meta-dot" + (mode ? " " + mode : "");
-    lbl.textContent = label;
-  }
-
-  function renderPeers(state) {
-    const grid = document.getElementById("peers-grid");
-    const quotasByPeer = {};
-    (state.quotas || []).forEach(q => { quotasByPeer[q.peer_id] = q; });
-    const orderedPeers = ["claude", "chatgpt", "antigravity"];
-    const peerById = {};
-    (state.peers || []).forEach(p => { peerById[p.peer_id] = p; });
-
-    let onlineCount = 0;
-    const cards = orderedPeers.map(pid => {
-      const p = peerById[pid] || { peer_id: pid, status: "offline", task_counts: { queued: 0, claimed: 0, running: 0 } };
-      const q = quotasByPeer[pid] || { min_remaining_percent: null, earliest_reset_in_human: "", windows: [] };
-      const meta = PEER_META[pid] || { name: pid, subtitle: pid, prefix: "", monogram: pid[0].toUpperCase() };
-      const st = p.status || "offline";
-      if (st === "standby" || st === "working" || st === "online" || st === "active") onlineCount += 1;
-
-      const hasQuota = q.min_remaining_percent !== null && q.min_remaining_percent !== undefined;
-      const pct = hasQuota ? Math.max(0, Math.min(100, Number(q.min_remaining_percent))) : 0;
-      const barCls = !hasQuota ? "unknown" : (pct <= 0 ? "empty" : (pct < 20 ? "low" : ""));
-      const quotaText = hasQuota ? pct.toFixed(pct % 1 === 0 ? 0 : 1) + "%" : "未知";
-      const resetText = hasQuota && q.earliest_reset_in_human ? ("重置 " + q.earliest_reset_in_human) : (hasQuota ? "无重置倒计时" : "暂无本地配额数据");
-      const isDemoQuota = (q.windows || []).some(w => w.source === "demo" || w.account_id === "demo");
-      const tc = p.task_counts || { queued: 0, claimed: 0, running: 0 };
-
-      return `
-        <article class="peer-card" data-peer="${esc(pid)}">
-          <div class="peer-top">
-            <div class="peer-id-wrap">
-              <div class="peer-badge">${esc(meta.monogram)}</div>
-              <div>
-                <div class="peer-name">${esc(meta.name)}</div>
-                <div class="peer-branch-prefix" title="${esc(meta.prefix ? ("分支前缀：" + meta.prefix) : "")}">${esc(meta.subtitle || meta.prefix)}</div>
-              </div>
-            </div>
-            <span class="status-pill status-${esc(st)}">
-              <span class="status-dot"></span>${esc(STATUS_TEXT[st] || st)}
-            </span>
-          </div>
-          <div class="peer-session">
-            <span class="peer-session-label mono" title="${esc(p.session_label || '')}">${esc(p.session_label || "未绑定会话")}</span>
-            <span class="nums">${esc(formatRelTime(p.last_seen_at))}</span>
-          </div>
-          <div class="quota-box">
-            <div class="quota-head">
-              <span class="quota-label">剩余配额${isDemoQuota ? `<span class="demo-tag">演示数据</span>` : ""}</span>
-              <span class="quota-value nums ${hasQuota ? "" : "unknown"}">${esc(quotaText)}</span>
-            </div>
-            <div class="bar-track"><div class="bar-fill ${barCls}" style="width:${hasQuota ? pct : 0}%"></div></div>
-            <div class="quota-reset nums">
-              <span>${esc(resetText)}</span>
-              <span>${q.windows && q.windows.length ? (q.windows.length + " 个窗口") : ""}</span>
-            </div>
-          </div>
-          <div class="peer-counts nums">
-            <div class="count-chip"><span class="count-num">${tc.queued || 0}</span><span class="count-lbl">排队</span></div>
-            <div class="count-chip"><span class="count-num">${tc.claimed || 0}</span><span class="count-lbl">已认领</span></div>
-            <div class="count-chip"><span class="count-num">${tc.running || 0}</span><span class="count-lbl">执行中</span></div>
-          </div>
-        </article>`;
-    });
-    grid.innerHTML = cards.join("");
-    document.getElementById("peers-summary").textContent = onlineCount + " / 3 端活跃";
-  }
-
-  function renderTaskBoard(mission) {
-    const tasks = mission.tasks || [];
-    const closed = ["completed", "cancelled", "failed"].includes(mission.status);
-    const cols = [
-      { key: "queued", label: "排队", filter: s => s === "queued" },
-      { key: "claimed", label: "已认领", filter: s => s === "claimed" },
-      { key: "running", label: "执行中", filter: s => s === "running" },
-      { key: "done", label: "已完成", filter: s => s === "done" },
-      { key: "other", label: "阻塞 / 其他", filter: s => ["failed", "blocked", "cancelled"].includes(s) }
-    ];
-    const visibleCols = cols.filter(c => c.key !== "other" || tasks.some(t => c.filter(t.status)));
-    const cls = visibleCols.length > 4 ? "kanban cols-5" : "kanban";
-    const anyNonEmpty = visibleCols.some(c => tasks.some(t => c.filter(t.status)));
-    const colTrack = anyNonEmpty
-      ? visibleCols.map(c => tasks.some(t => c.filter(t.status)) ? "minmax(220px, 1fr)" : "minmax(84px, 0.34fr)").join(" ")
-      : `repeat(${visibleCols.length}, minmax(0, 1fr))`;
-
-    return `<div class="${cls}" style="grid-template-columns:${colTrack}">` + visibleCols.map(col => {
-      const items = tasks.filter(t => col.filter(t.status));
-      const isEmpty = items.length === 0;
-      const cardsHtml = !isEmpty ? items.map(t => {
-        const canRequeue = !closed && ["claimed", "running", "failed", "blocked"].includes(t.status);
-        const noteRaw = t.result_summary || t.progress_note || t.prompt || "";
-        const noteClip = noteRaw.length > 180 ? (noteRaw.slice(0, 180) + "…") : noteRaw;
-        const stalePill = (t.running_stale || t.claim_stale) ? `<span class="tier-pill stale-pill">陈旧</span>` : "";
-        const histCnt = Array.isArray(t.attempt_history) ? t.attempt_history.length : 0;
-        const attemptPill = histCnt > 0 ? `<span class="attempt-pill nums" title="已归档历史尝试 ${histCnt} 次">第 ${Number(t.attempt_seq || (histCnt + 1))} 次</span>` : "";
-        return `
-          <div class="task-card">
-            <div class="task-top">
-              <span class="peer-tag ${esc(t.assignee_peer)}">${esc(t.assignee_peer)}</span>
-              <span style="display:inline-flex;gap:4px;align-items:center;flex-wrap:wrap;">
-                ${stalePill}${attemptPill}
-                <span class="tier-pill mono">${esc(t.model_tier)}</span>
-              </span>
-            </div>
-            ${t.worktree_branch ? `<div class="task-branch mono" title="${esc(t.worktree_branch)}">${esc(t.worktree_branch)}</div>` : ""}
-            <div class="task-note">${renderInline(noteClip)}</div>
-            <div class="task-foot">
-              <span class="task-id mono">${esc(t.task_id)}</span>
-              ${canRequeue ? `<button class="btn btn-xs" data-requeue-task="${esc(t.task_id)}">重新入队</button>` : ""}
-            </div>
-          </div>`;
-      }).join("") : `<div style="font-size:11.5px;color:var(--text-muted);padding:6px 0;">空</div>`;
-      return `<div class="kanban-col${isEmpty ? " empty-col" : ""}"><div class="kanban-head"><span>${col.label}</span><span class="nums">${items.length}</span></div>${cardsHtml}</div>`;
-    }).join("") + `</div>`;
-  }
-
-  function renderTimeline(events, missionId) {
-    if (!events || !events.length) {
-      return `<div style="font-size:12.5px;color:var(--text-muted);">暂无事件</div>`;
+  function buildHandoffDeeplink(peerId, promptText, workspace) {
+    const clean = (promptText || "请检查 Consilium 收件箱并调用 consilium_pickup_inbox 认领任务").replace(/^\/+/, "");
+    if (peerId === "claude") {
+      return "claude://code/new?q=" + encodeURIComponent(clean) + (workspace ? "&folder=" + encodeURIComponent(workspace) : "");
     }
-    const LIMIT = 6;
-    const isExpanded = expandedTimelines.has(missionId);
-    const hasMore = events.length > LIMIT;
-    const visibleEvents = (hasMore && !isExpanded) ? events.slice(0, LIMIT) : events;
-
-    const itemsHtml = visibleEvents.map(ev => {
-      const p = ev.payload || {};
-      const mode = p.delivery_mode || "";
-      const lat = p.wakeup_latency_ms;
-      const claimLat = p.claim_latency_ms;
-      let badges = [];
-      if (claimLat !== undefined && claimLat !== null) {
-        badges.push(`<span class="delivery-pill delivery-claim nums">⏱ 认领 ${Number(claimLat).toFixed(2)} ms</span>`);
-      }
-      if (mode === "hot_wakeup") {
-        const latStr = (lat !== undefined && lat !== null) ? (" · " + Number(lat).toFixed(2) + " ms") : "";
-        badges.push(`<span class="delivery-pill delivery-hot nums">⚡ 热唤醒${esc(latStr)}</span>`);
-      } else if (mode === "cold_notification") {
-        let cmdLabel = "🔔 冷通知";
-        if (p.dry_run) cmdLabel = "🔔 冷通知 · dry-run";
-        else if (p.command_ok || p.notified) cmdLabel = "🔔 已尝试 · 系统已投递";
-        else if (p.delivery_attempted) cmdLabel = "🔔 已尝试 · 系统命令失败";
-        badges.push(`<span class="delivery-pill delivery-cold">${esc(cmdLabel)}</span>`);
-        const acked = Boolean(ev.acked_at || p.peer_acked);
-        badges.push(`<span class="delivery-pill ${acked ? "delivery-hot" : "delivery-muted"}">${acked ? "✓ 对方已确认" : "待对方确认"}</span>`);
-      } else if (mode === "error") {
-        badges.push(`<span class="delivery-pill delivery-err">⚠ 投递异常</span>`);
-      }
-      if (p.round) {
-        badges.push(`<span class="tier-pill mono nums">R${p.round}/${p.max_rounds || ""}</span>`);
-      }
-      const iconCls = (ev.kind === "loop_guard_reached" || ev.kind === "task_stale") ? "guard" : (ev.kind === "task_done" || ev.kind === "mission_closed" ? "done" : "");
-      const descRaw = p.result_summary || p.progress_note || p.question || p.summary || p.reason || p.prompt_preview || p.final_summary || "";
-      const descClip = String(descRaw).length > 180 ? (String(descRaw).slice(0, 180) + "…") : String(descRaw);
-      return `
-        <div class="tl-item">
-          <div class="tl-icon ${iconCls}">${eventIconSvg(ev.kind)}</div>
-          <div class="tl-body">
-            <div class="tl-head">
-              <span class="tl-kind">${esc(EVENT_LABELS[ev.kind] || ev.kind)} <span class="mono" style="color:var(--text-muted);font-weight:500;">${esc(ev.from_peer)} → ${esc(ev.to_peer)}</span></span>
-              <span class="tl-time mono nums">#${ev.event_id} · ${esc(formatClock(ev.created_at))}</span>
-            </div>
-            ${badges.length ? `<div class="tl-badges">${badges.join("")}</div>` : ""}
-            ${descClip ? `<div class="tl-desc">${renderInline(descClip)}</div>` : ""}
-          </div>
-        </div>`;
-    }).join("");
-
-    let toggleHtml = "";
-    if (hasMore && !isExpanded) {
-      toggleHtml = `<div class="timeline-fade"><button class="btn btn-xs" data-toggle-timeline="${esc(missionId)}">显示更多（余 ${events.length - LIMIT} 条）</button></div>`;
-    } else if (hasMore && isExpanded) {
-      toggleHtml = `<div class="timeline-more-row"><button class="btn btn-xs" data-toggle-timeline="${esc(missionId)}">收起时间线</button></div>`;
+    if (peerId === "chatgpt") {
+      return "codex://new?prompt=" + encodeURIComponent(clean) + (workspace ? "&path=" + encodeURIComponent(workspace) : "");
     }
-    return `<div class="timeline-wrap"><div class="timeline">${itemsHtml}</div>${toggleHtml}</div>`;
+    return "";
   }
 
-  function renderMissions(state) {
-    const stack = document.getElementById("missions-stack");
-    const missions = state.missions || [];
-    document.getElementById("missions-summary").textContent = missions.length + " 条记录";
+  function getActiveMission(state) {
+    const missions = (state && state.missions) || [];
+    if (!missions.length) return null;
+    if (selectedMissionId) {
+      const found = missions.find(m => m.mission_id === selectedMissionId);
+      if (found) return found;
+    }
+    const active = missions.find(m => m.status === "active" || m.status === "ready_to_report");
+    return active || missions[0];
+  }
+
+  function renderSidebar(state) {
+    const sidebar = document.getElementById("sidebar");
+    sidebar.classList.toggle("collapsed", !isSidebarOpen());
+    const missions = (state && state.missions) || [];
+    document.getElementById("mission-count-pill").textContent = String(missions.length);
+    const cur = getActiveMission(state);
+    const listEl = document.getElementById("mission-list");
     if (!missions.length) {
-      stack.innerHTML = `<div class="empty-state">暂无 Mission。可在任意已接入 consilium 的桌面端发起会诊，或运行 <code class="mono">run_demo_a.py</code> 驱动实时演示。</div>`;
+      listEl.innerHTML = '<div style="padding:12px;font-size:12.5px;color:var(--text-muted);">暂无会诊记录</div>';
       return;
     }
-    if (!autoExpandedOnce && missions.length) {
-      expandedMissionIds.add(missions[0].mission_id);
-      autoExpandedOnce = true;
-    }
-
-    stack.innerHTML = missions.map(m => {
-      const expanded = expandedMissionIds.has(m.mission_id);
+    listEl.innerHTML = missions.map(m => {
       const tasks = m.tasks || [];
-      const doneOnlyCnt = tasks.filter(t => t.status === "done").length;
-      const settledCnt = tasks.filter(t => ["done", "failed", "blocked", "cancelled"].includes(t.status)).length;
-      const totalCnt = tasks.length;
-      const pct = totalCnt ? Math.round((settledCnt / totalCnt) * 100) : 0;
-      const hasFailed = tasks.some(t => t.status === "failed");
-      const hasBlocked = tasks.some(t => ["blocked", "cancelled"].includes(t.status));
-      const progColor = (totalCnt > 0 && doneOnlyCnt === totalCnt)
-        ? "var(--status-standby)"
-        : (hasFailed ? "var(--status-danger)" : (hasBlocked ? "var(--status-stale)" : "var(--status-working)"));
-      const maxR = Math.max(1, Number(m.max_rounds || 3));
-      const curR = Number(m.current_round || 0);
-      let dotsHtml = "";
-      for (let i = 1; i <= maxR; i++) {
-        const cls = i <= curR ? (curR >= maxR ? "round-dot capped" : "round-dot filled") : "round-dot";
-        dotsHtml += `<span class="${cls}"></span>`;
-      }
-      const isClosed = ["completed", "cancelled", "failed"].includes(m.status);
-
-      let detailHtml = "";
-      if (expanded) {
-        detailHtml = `
-          <div class="mission-detail">
-            <div class="detail-toolbar">
-              <div class="detail-meta">
-                ${m.workspace_path ? `<span class="detail-chip mono">${esc(m.workspace_path)}</span>` : ""}
-                <span class="detail-chip">隔离策略：<strong class="mono">${esc(m.isolation_policy)}</strong></span>
-                <span class="detail-chip nums">更新：${esc(formatRelTime(m.updated_at))}</span>
-              </div>
-              <div>
-                <button class="btn btn-subtle-danger" data-close-mission="${esc(m.mission_id)}" ${isClosed ? "disabled" : ""}>关闭 Mission</button>
-              </div>
-            </div>
-            <div class="detail-grid">
-              <div class="panel">
-                <div class="panel-title"><span>任务看板</span><span class="nums">${settledCnt}/${totalCnt} 完成</span></div>
-                ${renderTaskBoard(m)}
-              </div>
-              ${m.final_summary ? `<div class="summary-box" style="margin-top:0;"><div class="panel-title"><span>最终汇总 · Final Summary</span></div><div class="md-body">${renderMarkdown(m.final_summary)}</div></div>` : ""}
-              <div class="panel">
-                <div class="panel-title"><span>事件时间线（倒序）</span><span class="nums">${(m.events || []).length} 条</span></div>
-                ${renderTimeline(m.events || [], m.mission_id)}
-              </div>
-            </div>
-          </div>`;
-      }
-
-      return `
-        <article class="mission-card ${expanded ? "expanded" : ""}" data-mission="${esc(m.mission_id)}">
-          <div class="mission-row" data-toggle-mission="${esc(m.mission_id)}">
-            <div class="mission-title-col">
-              <div class="mission-title-line">
-                <span class="mission-title">${esc(m.title)}</span>
-                <span class="mission-id mono">${esc(m.mission_id)}</span>
-              </div>
-              <div class="mission-goal">${esc(m.goal)}</div>
-            </div>
-            <div><span class="peer-tag ${esc(m.coordinator_peer)}">协调：${esc(m.coordinator_peer)}</span></div>
-            <div class="progress-wrap">
-              <div class="progress-top nums"><span>进度</span><span>${settledCnt}/${totalCnt}</span></div>
-              <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${progColor}"></div></div>
-            </div>
-            <div class="rounds-wrap nums" title="交叉审核轮次">
-              <span class="round-dots">${dotsHtml}</span>
-              <span class="mono">${curR}/${maxR}</span>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;">
-              <span class="mission-status-badge ms-${esc(m.status)}">${esc(MISSION_STATUS_TEXT[m.status] || m.status)}</span>
-              <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
-            </div>
-          </div>
-          ${detailHtml}
-        </article>`;
+      const doneCnt = tasks.filter(t => t.status === "done").length;
+      const dotCls = m.status === "completed" ? "standby" : (m.status === "active" ? "working" : "offline");
+      const activeCls = cur && cur.mission_id === m.mission_id ? " active" : "";
+      return '<button type="button" class="mission-item' + activeCls + '" data-select-mission="' + esc(m.mission_id) + '">' +
+        '<div class="mission-item-top">' +
+          '<span class="mission-item-title">' + esc(m.title) + '</span>' +
+          '<span class="dot ' + dotCls + '"></span>' +
+        '</div>' +
+        '<div class="mission-item-sub">' +
+          '<span class="mono">' + esc(m.mission_id) + '</span>' +
+          '<span class="tabular-nums">' + doneCnt + '/' + tasks.length + '</span>' +
+        '</div>' +
+      '</button>';
     }).join("");
   }
 
-  function applyStateData(data) {
-    if (!data || typeof data !== "object") return;
-    if (typeof data.csrf_token === "string" && data.csrf_token) {
-      csrfToken = data.csrf_token;
-    }
-    const ver = Number(data.state_version || 0);
-    if (ver > 0 && lastStateVersion > 0 && ver < lastStateVersion) {
+  function renderTopBar(state) {
+    const cur = getActiveMission(state);
+    document.getElementById("active-mission-title").textContent = cur ? cur.title : "等待创建会诊";
+    document.getElementById("active-mission-badge").textContent = cur ? (cur.status === "completed" ? "已完成" : (cur.status === "active" ? "进行中" : cur.status)) : "空闲";
+
+    const peers = (state && state.peers) || [];
+    const quotas = {};
+    ((state && state.quotas) || []).forEach(q => { quotas[q.peer_id] = q; });
+
+    document.getElementById("top-peer-pills").innerHTML = ["claude", "chatgpt", "antigravity"].map(pid => {
+      const meta = PEER_META[pid];
+      const peer = peers.find(x => x.peer_id === pid) || { peer_id: pid, status: "offline" };
+      const q = quotas[pid] || { min_remaining_percent: null, windows: [], pool: [] };
+      const stKey = STATUS_TEXT[peer.status] ? peer.status : "offline";
+      const hasQuota = q.min_remaining_percent !== null && q.min_remaining_percent !== undefined;
+      const pct = hasQuota ? Math.max(0, Math.min(100, Number(q.min_remaining_percent))) : null;
+      const isDemo = (q.windows || []).some(w => w.source === "demo");
+      const poolLen = (q.pool || []).length;
+      const qCls = !hasQuota ? "unknown" : (pct <= 0 ? "empty" : (pct < 20 ? "low" : ""));
+      const barCls = !hasQuota ? "unknown" : (pct <= 0 ? "empty" : (pct < 20 ? "low" : ""));
+      const quotaLabel = q.account_switch_suspected ? "疑切号" : (q.current_account_unknown ? "未知" : (hasQuota ? Math.round(pct) + "%" : "未知"));
+      const activeCls = openPopoverPeer === pid ? " open" : "";
+
+      return '<button type="button" class="peer-pill' + activeCls + '" data-peer-pill="' + pid + '" title="' + esc(meta.appName + " · 分支前缀：" + meta.branchPrefix) + '">' +
+        '<span class="dot ' + stKey + '" style="box-shadow:0 0 0 2px var(--bg-surface);"></span>' +
+        '<span class="pill-name">' + esc(meta.label) + '</span>' +
+        '<span class="pill-state hide-narrow">' + esc(STATUS_TEXT[stKey]) + '</span>' +
+        '<span class="pill-quota tabular-nums ' + qCls + '">' + esc(quotaLabel) + '</span>' +
+        (isDemo ? '<span class="pill-badge">演示数据</span>' : "") +
+        (poolLen > 1 ? '<span class="pill-badge tabular-nums">' + poolLen + '号</span>' : "") +
+        '<span class="pill-track"><span class="pill-fill ' + meta.cls + ' ' + barCls + '" style="width:' + (hasQuota ? pct : 0) + '%;"></span></span>' +
+      '</button>';
+    }).join("");
+
+    const tabs = [
+      { key: "tasks", label: "任务" },
+      { key: "worktrees", label: "工作树" },
+      { key: "accounts", label: "账号池" },
+      { key: "artifacts", label: "产物" },
+      { key: "subagents", label: "子 Agent" }
+    ];
+    document.getElementById("top-drawer-tabs").innerHTML = tabs.map(tb => (
+      '<button type="button" class="tab-chip' + (rightTab === tb.key ? " active" : "") + '" data-open-tab="' + tb.key + '">' + esc(tb.label) + '</button>'
+    )).join("");
+
+    renderPeerPopover(state);
+  }
+
+  function renderPeerPopover(state) {
+    const pop = document.getElementById("peer-popover");
+    if (!openPopoverPeer || !state) {
+      pop.classList.add("hidden");
       return;
     }
-    if (ver > lastStateVersion) {
-      lastStateVersion = ver;
+    const pid = openPopoverPeer;
+    const meta = PEER_META[pid];
+    const peer = (state.peers || []).find(x => x.peer_id === pid) || { peer_id: pid, status: "offline", task_counts: {} };
+    const q = (state.quotas || []).find(x => x.peer_id === pid) || { min_remaining_percent: null, windows: [], pool: [] };
+    const hasQuota = q.min_remaining_percent !== null && q.min_remaining_percent !== undefined;
+    const pct = hasQuota ? Math.round(Number(q.min_remaining_percent)) : null;
+    const isDemo = (q.windows || []).some(w => w.source === "demo");
+    const stKey = STATUS_TEXT[peer.status] ? peer.status : "offline";
+    const curM = getActiveMission(state);
+    const ws = curM ? curM.workspace_path : "";
+    const deepUrl = buildHandoffDeeplink(pid, "检查 Consilium 收件箱并调用 consilium_pickup_inbox 认领任务", ws);
+
+    const poolHtml = (q.pool || []).map(acct => {
+      const aPct = acct.remaining_percent == null ? "未知" : Math.round(acct.remaining_percent) + "%";
+      return '<div class="pop-row" style="padding:3px 6px;border-radius:6px;' + (acct.is_current ? "background:var(--bg-subtle);font-weight:600;" : "") + '">' +
+        '<span>' + esc(acct.alias || "账号") + (acct.is_current ? " [当前]" : "") + '</span>' +
+        '<span class="tabular-nums" style="color:var(--text-muted);">' + esc(aPct) + (acct.reset_in_human ? " · " + esc(acct.reset_in_human) : "") + '</span>' +
+      '</div>';
+    }).join("");
+
+    const actionBtn = deepUrl
+      ? '<a class="btn btn-primary btn-sm" style="text-decoration:none;flex:1;" href="' + esc(deepUrl) + '">在 ' + esc(meta.label) + ' 新开会话接手 ↗</a>'
+      : '<button type="button" class="btn btn-primary btn-sm" style="flex:1;" data-copy-pickup="' + pid + '">复制接手提示词</button>';
+
+    pop.innerHTML =
+      '<div class="pop-head">' +
+        '<div>' +
+          '<div style="font-weight:650;" title="' + esc("分支前缀：" + meta.branchPrefix) + '">' + esc(meta.appName) + '</div>' +
+          '<div style="font-size:12px;color:var(--text-muted);">' + esc(STATUS_TEXT[stKey]) + ' · 最后上报于 ' + esc(relativeAge(peer.last_seen_at)) + '</div>' +
+        '</div>' +
+        '<button type="button" class="icon-btn" data-close-popover="1">✕</button>' +
+      '</div>' +
+      '<div class="pop-body">' +
+        '<div class="pop-row">' +
+          '<span style="color:var(--text-muted);">当前激活账号</span>' +
+          '<span style="font-weight:550;">' + esc(q.active_account_alias || (q.current_account_unknown ? "当前号未知" : "默认")) + '</span>' +
+        '</div>' +
+        '<div class="pop-row">' +
+          '<span style="color:var(--text-muted);display:inline-flex;align-items:center;gap:6px;">当前号余量' + (isDemo ? '<span class="pill-badge">演示数据</span>' : "") + '</span>' +
+          '<span class="tabular-nums" style="font-weight:600;">' + (hasQuota ? pct + "%" + (q.earliest_reset_in_human ? " · 重置 " + esc(q.earliest_reset_in_human) : "") : "未知") + '</span>' +
+        '</div>' +
+        (q.account_switch_suspected ? '<div style="padding:5px 8px;border-radius:7px;background:var(--status-stale-soft);color:var(--status-stale);font-size:12px;">最近配额样本已超过 30 分钟，账号可能已在客户端内切换</div>' : "") +
+        (q.switch_hint ? '<div style="padding:5px 8px;border-radius:7px;background:var(--status-standby-soft);color:var(--status-standby);font-size:12px;">' + esc(q.switch_hint) + '</div>' : "") +
+        (poolHtml ? '<div style="padding-top:4px;border-top:1px solid var(--border);"><div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">只读账号池</div>' + poolHtml + '</div>' : "") +
+      '</div>' +
+      '<div class="pop-actions">' + actionBtn + '<button type="button" class="btn btn-sm" data-focus-handoff="' + pid + '">指定交接</button></div>';
+    pop.classList.remove("hidden");
+  }
+
+  function renderTraceBadges(ev) {
+    const p = ev.payload || {};
+    const badges = [];
+    if (p.claim_latency_ms !== undefined && p.claim_latency_ms !== null) {
+      badges.push('<span class="trace-pill lat tabular-nums">⏱ 认领 ' + esc(p.claim_latency_ms) + ' ms</span>');
     }
-    showLogin(false);
-    renderAll(data);
+    if (p.delivery_mode === "hot_wakeup") {
+      const lat = p.wakeup_latency_ms !== undefined && p.wakeup_latency_ms !== null ? " · " + p.wakeup_latency_ms + " ms" : "";
+      badges.push('<span class="trace-pill hot tabular-nums">⚡ 热唤醒' + esc(lat) + '</span>');
+    } else if (p.delivery_mode === "cold_notification") {
+      let cmdTxt = "冷通知";
+      if (p.delivery_dry_run || p.command_status === "dry_run") cmdTxt = "冷通知 · dry-run";
+      else if (p.command_ok === true || p.command_status === "ok") cmdTxt = "冷通知 · 命令已发";
+      else if (p.command_status === "failed") cmdTxt = "冷通知 · 命令失败";
+      badges.push('<span class="trace-pill cold">🔔 ' + esc(cmdTxt) + '</span>');
+      badges.push('<span class="trace-pill">' + ((ev.acked_at || p.peer_acked) ? "✓ 对方已确认" : "待对方确认") + '</span>');
+    }
+    return badges.length ? '<div class="trace-row">' + badges.join("") + '</div>' : "";
+  }
+
+  function renderSingleEventMessage(ev, mission) {
+    const p = ev.payload || {};
+    const fromId = ev.from_peer || "";
+    const meta = PEER_META[fromId] || { label: fromId || "系统", appName: "Consilium", short: "S", cls: "system", branchPrefix: "" };
+    const isAssign = ev.kind === "task_assigned";
+    const evLabel = EVENT_LABELS[ev.kind] || ev.kind;
+    const linkedTask = ((mission && mission.tasks) || []).find(t => t.task_id === p.task_id) || null;
+    let noteClip = p.progress_note || p.result_summary || p.question || p.summary || p.reason || p.prompt || "";
+    if (!noteClip && isAssign && linkedTask) {
+      noteClip = linkedTask.prompt || linkedTask.title || "";
+    }
+    const branch = p.worktree_branch || (linkedTask && linkedTask.worktree_branch) || "";
+    const artifacts = Array.isArray(p.artifacts) ? p.artifacts : [];
+
+    let titleText = meta.label;
+    let subText = (EVENT_LABELS[ev.kind] || ev.kind) + (ev.created_at ? " · 最后上报于 " + formatClock(ev.created_at) : "");
+    if (isAssign) {
+      const targetMeta = PEER_META[ev.to_peer] || { label: ev.to_peer };
+      titleText = meta.label + " → @" + targetMeta.label;
+      subText = "派发任务" + (p.model_tier ? " · 建议档位 " + p.model_tier : "") + (ev.created_at ? " · " + formatClock(ev.created_at) : "");
+    }
+
+    const extraChips = [];
+    if (branch) extraChips.push('<button type="button" class="chip-btn mono" data-open-tab="worktrees">⎇ ' + esc(branch) + '</button>');
+    artifacts.slice(0, 4).forEach(a => {
+      extraChips.push('<button type="button" class="chip-btn mono" data-open-tab="artifacts">📄 ' + esc(String(a).split("/").pop()) + '</button>');
+    });
+
+    return '<article class="msg-turn">' +
+      '<div class="avatar ' + meta.cls + '" title="' + esc("分支前缀：" + meta.branchPrefix) + '">' + esc(meta.short) + '</div>' +
+      '<div class="msg-body">' +
+        '<div class="msg-head">' +
+          '<span class="msg-author">' + esc(titleText) + '</span>' +
+          '<span class="msg-sub tabular-nums">#' + esc(ev.event_id) + ' · ' + esc(subText) + '</span>' +
+        '</div>' +
+        renderTraceBadges(ev) +
+        (noteClip ? '<div class="msg-text">' + renderInline(noteClip) + '</div>' : "") +
+        (extraChips.length ? '<div style="display:flex;flex-wrap:wrap;gap:6px;padding-top:2px;">' + extraChips.join("") + '</div>' : "") +
+      '</div>' +
+    '</article>';
+  }
+
+  function renderConversation(state) {
+    const container = document.getElementById("chat-container");
+    const m = getActiveMission(state);
+    if (!m) {
+      container.innerHTML =
+        '<div style="text-align:center;padding:64px 16px;color:var(--text-muted);">' +
+          '<div style="font-size:16px;font-weight:600;color:var(--text-primary);margin-bottom:6px;">等待发起三端会诊</div>' +
+          '<div style="font-size:13px;">通过 MCP <code class="inline">consilium_create_mission</code> 创建会诊后，各端事件会按对话流实时呈现在这里。</div>' +
+        '</div>';
+      return;
+    }
+
+    const tasks = m.tasks || [];
+    const totalCnt = tasks.length;
+    const doneOnlyCnt = tasks.filter(t => t.status === "done").length;
+    const hasErr = tasks.some(t => t.status === "failed");
+    const hasBlocked = tasks.some(t => t.status === "blocked");
+    const pct = totalCnt > 0 ? Math.round((doneOnlyCnt / totalCnt) * 100) : 0;
+    const barCls = hasErr ? "err" : (hasBlocked ? "warn" : (totalCnt > 0 && doneOnlyCnt === totalCnt ? "complete" : ""));
+
+    const openingHtml =
+      '<div class="mission-banner">' +
+        '<div class="mission-banner-top">' +
+          '<div style="min-width:0;flex:1;">' +
+            '<h1 class="mission-banner-title">' + esc(m.title) + '</h1>' +
+            '<p class="mission-banner-goal">' + renderInline(m.goal || "") + '</p>' +
+          '</div>' +
+          '<span class="chip tabular-nums">' + doneOnlyCnt + '/' + totalCnt + ' 完成</span>' +
+        '</div>' +
+        '<div class="progress-row">' +
+          '<div class="progress-track"><div class="progress-fill ' + barCls + '" style="width:' + pct + '%;"></div></div>' +
+          '<span class="tabular-nums" style="font-size:12px;color:var(--text-muted);">' + pct + '%</span>' +
+        '</div>' +
+        '<div class="meta-chips">' +
+          '<span class="chip mono">' + esc(m.mission_id) + '</span>' +
+          '<span class="chip">协调者 ' + esc((PEER_META[m.coordinator_peer] || { label: m.coordinator_peer }).label) + '</span>' +
+          (m.workspace_path ? '<span class="chip mono">' + esc(m.workspace_path) + '</span>' : "") +
+          (m.status !== "completed" && m.status !== "cancelled" && m.status !== "failed"
+            ? '<button type="button" class="btn btn-sm btn-subtle-danger" style="margin-left:auto;" data-close-mission="' + esc(m.mission_id) + '">关闭 Mission</button>'
+            : "") +
+        '</div>' +
+      '</div>';
+
+    const eventsAsc = (m.events || []).slice().sort((a, b) => Number(a.event_id) - Number(b.event_id));
+    const reviewEvents = eventsAsc.filter(e => e.kind === "review_request" || e.kind === "loop_guard_reached");
+    const streamEvents = eventsAsc.filter(e => e.kind !== "review_request" && e.kind !== "loop_guard_reached" && e.kind !== "mission_closed");
+
+    const LIMIT = 6;
+    const isFoldOpen = expandedFolds.has(m.mission_id);
+    const hasOlder = streamEvents.length > LIMIT;
+    const olderEvents = hasOlder ? streamEvents.slice(0, streamEvents.length - LIMIT) : [];
+    const recentEvents = hasOlder ? streamEvents.slice(streamEvents.length - LIMIT) : streamEvents;
+
+    let streamHtml = "";
+    if (olderEvents.length) {
+      if (!isFoldOpen) {
+        streamHtml += '<div class="fold-wrap"><div class="timeline-fade">' +
+          olderEvents.slice(-2).map(ev => {
+            const ep = ev.payload || {};
+            const et = (m.tasks || []).find(t => t.task_id === ep.task_id) || null;
+            const eTxt = ep.progress_note || ep.result_summary || ep.summary || ep.reason || ep.prompt || (ev.kind === "task_assigned" && et ? (et.prompt || et.title || "") : "");
+            return '<div style="font-size:12.5px;color:var(--text-muted);padding:2px 0;">#' + esc(ev.event_id) + ' ' + esc(EVENT_LABELS[ev.kind] || ev.kind) + (eTxt ? ' · ' + esc(eTxt) : "") + '</div>';
+          }).join("") +
+        '</div><button type="button" class="btn btn-sm" style="margin-top:6px;" data-toggle-fold="' + esc(m.mission_id) + '">显示更早事件（' + olderEvents.length + ' 条）</button></div>';
+      } else {
+        streamHtml += olderEvents.map(ev => renderSingleEventMessage(ev, m)).join("") +
+          '<div><button type="button" class="btn btn-sm" data-toggle-fold="' + esc(m.mission_id) + '">收起更早事件</button></div>';
+      }
+    }
+    streamHtml += recentEvents.map(ev => renderSingleEventMessage(ev, m)).join("");
+
+    let reviewHtml = "";
+    if (reviewEvents.length) {
+      const revOpen = expandedReviews.has(m.mission_id);
+      const lastRev = reviewEvents[reviewEvents.length - 1];
+      const maxR = Number(m.max_rounds || 3);
+      const curR = Number(m.current_round || reviewEvents.length);
+      reviewHtml = '<div class="review-box">' +
+        '<button type="button" data-toggle-review="' + esc(m.mission_id) + '" style="width:100%;border:none;background:transparent;display:flex;align-items:center;justify-content:space-between;cursor:pointer;font-size:12.5px;padding:2px 0;">' +
+          '<span>交叉复核轮次 <strong class="tabular-nums">' + Math.min(curR, maxR) + '/' + maxR + '</strong>' + (lastRev.kind === "loop_guard_reached" ? " · 已触达轮次上限交回协调者" : "") + '</span>' +
+          '<span style="color:var(--text-muted);">' + (revOpen ? "收起 ▾" : "展开 " + reviewEvents.length + " 条 ▸") + '</span>' +
+        '</button>' +
+        (revOpen
+          ? '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px;font-size:12.5px;">' +
+              reviewEvents.map(r => {
+                const rp = r.payload || {};
+                return '<div><strong>' + esc(r.from_peer) + ' → ' + esc(r.to_peer) + '</strong>：' + renderInline(rp.question || rp.summary || rp.reason || "") + '</div>';
+              }).join("") +
+            '</div>'
+          : "") +
+      '</div>';
+    }
+
+    const summaryHtml = m.final_summary
+      ? '<div class="summary-card">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">' +
+            '<span style="font-size:13px;font-weight:650;">最终汇总 · Final Summary</span>' +
+            '<button type="button" class="btn btn-sm" data-export-md="1">复制 Markdown</button>' +
+          '</div>' +
+          '<div style="font-size:13.5px;">' + renderMarkdownBlock(m.final_summary) + '</div>' +
+        '</div>'
+      : "";
+
+    container.innerHTML = openingHtml + streamHtml + reviewHtml + summaryHtml;
+  }
+
+  function renderRightDrawer(state) {
+    const drawer = document.getElementById("right-drawer");
+    if (!rightTab || !state) {
+      drawer.classList.add("closed");
+      return;
+    }
+    drawer.classList.remove("closed");
+
+    const tabs = [
+      { key: "tasks", label: "任务" },
+      { key: "worktrees", label: "工作树" },
+      { key: "accounts", label: "账号池" },
+      { key: "artifacts", label: "产物" },
+      { key: "subagents", label: "子 Agent" }
+    ];
+    document.getElementById("drawer-tabs-inner").innerHTML = tabs.map(tb => (
+      '<button type="button" class="tab-chip' + (rightTab === tb.key ? " active" : "") + '" data-open-tab="' + tb.key + '">' + esc(tb.label) + '</button>'
+    )).join("");
+
+    const body = document.getElementById("drawer-body");
+    const m = getActiveMission(state);
+
+    if (rightTab === "tasks") {
+      if (!m || !(m.tasks || []).length) {
+        body.innerHTML = '<div style="color:var(--text-muted);">当前会诊暂无子任务。</div>';
+        return;
+      }
+      body.innerHTML = (m.tasks || []).map(t => {
+        const meta = PEER_META[t.assignee_peer] || { label: t.assignee_peer, appName: t.assignee_peer, branchPrefix: "" };
+        const stTxt = TASK_STATUS_TEXT[t.status] || t.status;
+        const canRequeue = t.status === "claimed" || t.status === "running" || t.status === "failed" || t.status === "blocked";
+        const noteClip = t.progress_note || t.result_summary || t.prompt || "";
+        return '<div class="panel-card">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">' +
+            '<span style="font-weight:600;" title="' + esc("分支前缀：" + meta.branchPrefix) + '">' + esc(meta.appName) + '</span>' +
+            '<span class="chip">' + esc(stTxt) + (t.stale_at ? " · 超时" : "") + '</span>' +
+          '</div>' +
+          '<div>' + renderInline(noteClip) + '</div>' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;color:var(--text-muted);" class="mono">' +
+            '<span>' + esc(t.task_id) + (t.attempt_id ? " · " + esc(t.attempt_id) : "") + '</span>' +
+            (canRequeue && m.status !== "completed" && m.status !== "cancelled" && m.status !== "failed"
+              ? '<button type="button" class="btn btn-sm" data-requeue-task="' + esc(t.task_id) + '">重新入队</button>'
+              : "") +
+          '</div>' +
+        '</div>';
+      }).join("");
+      return;
+    }
+
+    if (rightTab === "worktrees") {
+      const tasks = m ? (m.tasks || []) : [];
+      if (!tasks.length) {
+        body.innerHTML = '<div style="color:var(--text-muted);">暂无工作树记录。</div>';
+        return;
+      }
+      body.innerHTML = '<div style="color:var(--text-muted);">只读展示各任务登记的隔离策略与分支名称（阶段 5 开放 git diff 预览）：</div>' +
+        tasks.map(t => {
+          const meta = PEER_META[t.assignee_peer] || { appName: t.assignee_peer };
+          return '<div class="panel-card">' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;">' +
+              '<span style="font-weight:600;">' + esc(meta.appName) + '</span>' +
+              '<span class="chip">' + esc(t.isolation_policy || "worktree") + '</span>' +
+            '</div>' +
+            '<div class="mono">' + esc(t.worktree_branch || "（只读/未创建独立分支）") + '</div>' +
+          '</div>';
+        }).join("");
+      return;
+    }
+
+    if (rightTab === "accounts") {
+      const quotas = state.quotas || [];
+      body.innerHTML =
+        '<div style="color:var(--text-muted);">按当前激活账号判定主配额，备用池仅作切换提示（绝不读取 Cockpit 密文凭证）；model_tier 仅作派活建议，最终模型由各原生 App 自行决定。</div>' +
+        quotas.map(q => {
+          const meta = PEER_META[q.peer_id] || { appName: q.peer_id };
+          const hasQ = q.min_remaining_percent !== null && q.min_remaining_percent !== undefined;
+          const isDemo = (q.windows || []).some(w => w.source === "demo");
+          return '<div class="panel-card">' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;">' +
+              '<span style="font-weight:600;">' + esc(meta.appName) + '</span>' +
+              '<span class="tabular-nums">' + (hasQ ? Math.round(q.min_remaining_percent) + "%" : "未知") + (isDemo ? " · 演示数据" : "") + '</span>' +
+            '</div>' +
+            (q.switch_hint ? '<div style="color:var(--status-standby);">' + esc(q.switch_hint) + '</div>' : "") +
+            ((q.pool || []).map(a => '<div style="display:flex;justify-content:space-between;color:var(--text-muted);"><span>' + esc(a.alias) + (a.is_current ? " [当前]" : "") + '</span><span class="tabular-nums">' + (a.remaining_percent == null ? "未知" : Math.round(a.remaining_percent) + "%") + '</span></div>').join("") || '<div style="color:var(--text-muted);">暂无本地账号样本</div>') +
+          '</div>';
+        }).join("");
+      return;
+    }
+
+    if (rightTab === "artifacts") {
+      const tasks = m ? (m.tasks || []) : [];
+      const items = [];
+      tasks.forEach(t => {
+        (t.artifacts || []).forEach(a => items.push({ task: t.task_id, peer: t.assignee_peer, path: a }));
+      });
+      body.innerHTML = (m && m.workspace_path ? '<div class="panel-card"><div style="color:var(--text-muted);">会诊工作区</div><div class="mono">' + esc(m.workspace_path) + '</div></div>' : "") +
+        (items.length
+          ? items.map(it => '<div class="panel-card"><div class="mono">' + esc(it.path) + '</div><div style="color:var(--text-muted);">来自 ' + esc(it.peer) + ' · ' + esc(it.task) + '</div></div>').join("")
+          : '<div style="color:var(--text-muted);">当前会诊暂未上报产物路径（阶段 5 开放安全目录与源码只读预览）。</div>');
+      return;
+    }
+
+    if (rightTab === "subagents") {
+      body.innerHTML =
+        '<div class="panel-card">' +
+          '<div style="font-weight:600;">原生子 Agent 状态（只读占位）</div>' +
+          '<div style="color:var(--text-muted);">各端暂无结构化子 Agent 状态上报。阶段 3 将先由各端父会话通过 <code class="inline">report_progress(subagents=[...])</code> 主动汇报摘要，不读取原生对话全文日志。</div>' +
+        '</div>';
+    }
+  }
+
+  function renderComposerBar(state) {
+    document.getElementById("handoff-targets").innerHTML = ["claude", "chatgpt", "antigravity"].map(pid => {
+      const active = handoffTarget === pid;
+      return '<button type="button" class="tab-chip' + (active ? " active" : "") + '" data-handoff-peer="' + pid + '">@' + esc(PEER_META[pid].label) + '</button>';
+    }).join("");
+
+    const val = document.getElementById("composer-input").value || "";
+    const pal = document.getElementById("slash-palette");
+    const q = val.startsWith("/") && val.indexOf(" ") === -1 ? val.toLowerCase() : null;
+    const showPal = slashOpen || q !== null;
+    const matches = showPal ? SLASH_COMMANDS.filter(c => !q || q === "/" || c.cmd.startsWith(q)) : [];
+    if (!showPal || !matches.length) {
+      pal.classList.add("hidden");
+    } else {
+      pal.innerHTML = matches.map(c =>
+        '<button type="button" class="slash-item" data-slash-act="' + c.action + '">' +
+          '<span class="slash-cmd">' + esc(c.cmd) + '</span>' +
+          '<span style="color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(c.desc) + '</span>' +
+        '</button>'
+      ).join("");
+      pal.classList.remove("hidden");
+    }
   }
 
   function renderAll(state) {
@@ -1811,15 +1987,26 @@ html, body {
       document.getElementById("uptime-val").textContent = formatDuration(baseUptime);
       document.getElementById("version-pill").textContent = "v" + (state.daemon.version || "__VERSION__");
     }
-    renderPeers(state);
-    renderMissions(state);
+    renderSidebar(state);
+    renderTopBar(state);
+    renderConversation(state);
+    renderRightDrawer(state);
+    renderComposerBar(state);
+  }
+
+  function applyStateData(data) {
+    if (!data || typeof data !== "object") return;
+    if (typeof data.csrf_token === "string" && data.csrf_token) csrfToken = data.csrf_token;
+    const ver = Number(data.state_version || 0);
+    if (ver > 0 && lastStateVersion > 0 && ver < lastStateVersion) return;
+    if (ver > lastStateVersion) lastStateVersion = ver;
+    showLogin(false);
+    renderAll(data);
   }
 
   function showLogin(show) {
     document.getElementById("login-overlay").classList.toggle("hidden", !show);
-    if (show) {
-      document.getElementById("token-input").focus();
-    }
+    if (show) document.getElementById("token-input").focus();
   }
 
   function openConfirm(title, desc, extraHtml, onConfirm) {
@@ -1834,6 +2021,12 @@ html, body {
   function closeConfirm() {
     pendingConfirmFn = null;
     document.getElementById("confirm-overlay").classList.add("hidden");
+  }
+
+  function writeHeaders() {
+    const hdrs = { "Content-Type": "application/json" };
+    if (csrfToken) hdrs["X-Consilium-CSRF"] = csrfToken;
+    return hdrs;
   }
 
   async function fetchState() {
@@ -1890,9 +2083,7 @@ html, body {
       setConn("live", "SSE 实时");
     };
     es.addEventListener("state", ev => {
-      try {
-        applyStateData(JSON.parse(ev.data));
-      } catch (_) {}
+      try { applyStateData(JSON.parse(ev.data)); } catch (_) {}
     });
     es.addEventListener("update", ev => {
       try {
@@ -1907,54 +2098,209 @@ html, body {
       } else {
         try { es.close(); } catch (_) {}
       }
-      fetchState()
-        .then(ok => {
-          if (ok) {
-            startPollingFallback();
-            scheduleSSEReconnect();
-          }
-        })
-        .catch(() => {
+      fetchState().then(ok => {
+        if (ok) {
           startPollingFallback();
           scheduleSSEReconnect();
-        });
+        }
+      }).catch(() => {
+        startPollingFallback();
+        scheduleSSEReconnect();
+      });
     };
   }
 
-  function writeHeaders() {
-    const hdrs = { "Content-Type": "application/json" };
-    if (csrfToken) hdrs["X-Consilium-CSRF"] = csrfToken;
-    return hdrs;
+  function exportMissionMarkdown() {
+    const m = getActiveMission(appState);
+    if (!m) { showToast("暂无可导出的会诊"); return; }
+    const lines = ["# " + m.title + " (" + m.mission_id + ")", "", "目标：" + (m.goal || ""), ""];
+    if (m.final_summary) {
+      lines.push("## 最终汇总", "", m.final_summary, "");
+    }
+    lines.push("## 任务明细");
+    (m.tasks || []).forEach(t => lines.push("- [" + t.status + "] " + t.assignee_peer + " (" + t.task_id + "): " + (t.progress_note || t.result_summary || t.prompt || "")));
+    const md = lines.join("\n");
+    if (navigator.clipboard) navigator.clipboard.writeText(md).catch(() => {});
+    showToast("已复制当前会诊 Markdown 到剪贴板");
   }
 
-  // Event delegation for expand, timeline toggle, close mission, requeue task
-  document.getElementById("missions-stack").addEventListener("click", ev => {
-    const tlBtn = ev.target.closest("[data-toggle-timeline]");
-    if (tlBtn) {
+  // Event Listeners
+  document.getElementById("sidebar-toggle-btn").addEventListener("click", () => {
+    if (isNarrowViewport()) sidebarMobileOpen = !sidebarMobileOpen;
+    else sidebarDesktopOpen = !sidebarDesktopOpen;
+    renderSidebar(appState);
+  });
+
+  window.addEventListener("resize", () => {
+    if (isNarrowViewport()) sidebarMobileOpen = false;
+    if (appState) renderSidebar(appState);
+  });
+
+  document.getElementById("btn-close-drawer").addEventListener("click", () => {
+    rightTab = null;
+    if (appState) { renderTopBar(appState); renderRightDrawer(appState); }
+  });
+
+  document.getElementById("composer-input").addEventListener("input", () => renderComposerBar(appState));
+  document.addEventListener("keydown", ev => {
+    if (ev.key === "Escape") {
+      if (slashOpen || !document.getElementById("slash-palette").classList.contains("hidden")) {
+        slashOpen = false;
+        const inp = document.getElementById("composer-input");
+        if (inp.value.startsWith("/") && inp.value.indexOf(" ") === -1) inp.value = "";
+        renderComposerBar(appState);
+      }
+      if (openPopoverPeer) {
+        openPopoverPeer = null;
+        if (appState) renderTopBar(appState);
+      }
+    }
+  });
+
+  document.getElementById("btn-slash-toggle").addEventListener("click", ev => {
+    ev.stopPropagation();
+    slashOpen = !slashOpen;
+    renderComposerBar(appState);
+  });
+
+  document.getElementById("btn-copy-handoff").addEventListener("click", () => {
+    const raw = (document.getElementById("composer-input").value || "").trim() || "请调用 consilium_pickup_inbox(peer_id=" + JSON.stringify(handoffTarget) + ") 认领任务。";
+    if (navigator.clipboard) navigator.clipboard.writeText(raw).catch(() => {});
+    showToast("已复制交给 " + PEER_META[handoffTarget].label + " 的提示词");
+  });
+
+  document.getElementById("btn-open-native").addEventListener("click", () => {
+    const curM = getActiveMission(appState);
+    const ws = curM ? curM.workspace_path : "";
+    const txt = (document.getElementById("composer-input").value || "").trim() || "检查 Consilium 收件箱并调用 consilium_pickup_inbox 认领任务";
+    const url = buildHandoffDeeplink(handoffTarget, txt, ws);
+    if (!url) {
+      if (navigator.clipboard) navigator.clipboard.writeText(txt).catch(() => {});
+      showToast("Antigravity 无统一新会话深链，已复制提示词到剪贴板");
+      return;
+    }
+    window.location.href = url;
+  });
+
+  document.addEventListener("click", ev => {
+    if (!ev.target.closest("#slash-palette") && !ev.target.closest("#btn-slash-toggle") && slashOpen) {
+      slashOpen = false;
+      renderComposerBar(appState);
+    }
+
+    const themeBtn = ev.target.closest("[data-set-theme]");
+    if (themeBtn) { applyTheme(themeBtn.getAttribute("data-set-theme")); return; }
+
+    const missionBtn = ev.target.closest("[data-select-mission]");
+    if (missionBtn) {
+      selectedMissionId = missionBtn.getAttribute("data-select-mission");
+      if (isNarrowViewport()) sidebarMobileOpen = false;
+      if (appState) renderAll(appState);
+      return;
+    }
+
+    const pillBtn = ev.target.closest("[data-peer-pill]");
+    if (pillBtn) {
       ev.stopPropagation();
-      const mid = tlBtn.getAttribute("data-toggle-timeline");
-      if (expandedTimelines.has(mid)) expandedTimelines.delete(mid);
-      else expandedTimelines.add(mid);
-      if (appState) renderMissions(appState);
+      const pid = pillBtn.getAttribute("data-peer-pill");
+      openPopoverPeer = openPopoverPeer === pid ? null : pid;
+      if (appState) renderTopBar(appState);
+      return;
+    }
+
+    if (ev.target.closest("[data-close-popover]")) {
+      openPopoverPeer = null;
+      if (appState) renderTopBar(appState);
+      return;
+    }
+
+    const openTabBtn = ev.target.closest("[data-open-tab]");
+    if (openTabBtn) {
+      const tb = openTabBtn.getAttribute("data-open-tab");
+      rightTab = rightTab === tb ? null : tb;
+      if (appState) { renderTopBar(appState); renderRightDrawer(appState); }
+      return;
+    }
+
+    const slashActBtn = ev.target.closest("[data-slash-act]");
+    if (slashActBtn) {
+      const act = slashActBtn.getAttribute("data-slash-act");
+      slashOpen = false;
+      const inp = document.getElementById("composer-input");
+      if (inp.value.startsWith("/")) inp.value = "";
+      if (act.startsWith("tab:")) {
+        rightTab = act.slice(4);
+        if (appState) { renderTopBar(appState); renderRightDrawer(appState); }
+      } else if (act === "export_md") {
+        exportMissionMarkdown();
+      }
+      renderComposerBar(appState);
+      return;
+    }
+
+    const handoffPeerBtn = ev.target.closest("[data-handoff-peer]");
+    if (handoffPeerBtn) {
+      handoffTarget = handoffPeerBtn.getAttribute("data-handoff-peer");
+      renderComposerBar(appState);
+      return;
+    }
+
+    const focusHandoff = ev.target.closest("[data-focus-handoff]");
+    if (focusHandoff) {
+      handoffTarget = focusHandoff.getAttribute("data-focus-handoff");
+      openPopoverPeer = null;
+      if (appState) renderAll(appState);
+      document.getElementById("composer-input").focus();
+      return;
+    }
+
+    const copyPick = ev.target.closest("[data-copy-pickup]");
+    if (copyPick) {
+      const pid = copyPick.getAttribute("data-copy-pickup");
+      const txt = "consilium_pickup_inbox(peer_id=" + JSON.stringify(pid) + ")";
+      if (navigator.clipboard) navigator.clipboard.writeText(txt).catch(() => {});
+      showToast("已复制 " + txt);
+      return;
+    }
+
+    const foldBtn = ev.target.closest("[data-toggle-fold]");
+    if (foldBtn) {
+      const mid = foldBtn.getAttribute("data-toggle-fold");
+      if (expandedFolds.has(mid)) expandedFolds.delete(mid);
+      else expandedFolds.add(mid);
+      if (appState) renderConversation(appState);
+      return;
+    }
+
+    const revBtn = ev.target.closest("[data-toggle-review]");
+    if (revBtn) {
+      const mid = revBtn.getAttribute("data-toggle-review");
+      if (expandedReviews.has(mid)) expandedReviews.delete(mid);
+      else expandedReviews.add(mid);
+      if (appState) renderConversation(appState);
+      return;
+    }
+
+    if (ev.target.closest("[data-export-md]")) {
+      exportMissionMarkdown();
       return;
     }
 
     const closeBtn = ev.target.closest("[data-close-mission]");
     if (closeBtn) {
-      ev.stopPropagation();
       const mid = closeBtn.getAttribute("data-close-mission");
       openConfirm(
         "关闭 Mission " + mid,
-        "此操作将把该 Mission 标记为终态。若仍有未完成任务，可勾选强制取消剩余任务。",
-        `<textarea id="close-summary-input" class="textarea" rows="3" placeholder="输入最终汇总说明…">通过 Consilium 看板人工确认关闭。</textarea>
-         <select id="close-status-select" class="select">
-           <option value="completed">completed（正常完成）</option>
-           <option value="cancelled">cancelled（取消）</option>
-           <option value="failed">failed（失败）</option>
-         </select>
-         <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-bottom:8px;">
-           <input type="checkbox" id="close-force-check"> 强制取消未完成任务（force=true）
-         </label>`,
+        "此操作将把该会诊标记为终态。若仍有未完成任务，可勾选强制取消剩余任务。",
+        '<textarea id="close-summary-input" class="textarea" rows="3">通过 Consilium 会诊界面人工确认关闭。</textarea>' +
+        '<select id="close-status-select" class="select">' +
+          '<option value="completed">completed（正常完成）</option>' +
+          '<option value="cancelled">cancelled（取消）</option>' +
+          '<option value="failed">failed（失败）</option>' +
+        '</select>' +
+        '<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-bottom:8px;">' +
+          '<input type="checkbox" id="close-force-check"> 强制取消未完成任务（force=true）' +
+        '</label>',
         async () => {
           const summary = (document.getElementById("close-summary-input").value || "").trim() || "通过看板关闭。";
           const status = document.getElementById("close-status-select").value;
@@ -1966,13 +2312,7 @@ html, body {
             body: JSON.stringify({ final_summary: summary, status, force })
           });
           if (r.status === 401) {
-            closeConfirm();
-            stopStreams();
-            csrfToken = "";
-            lastStateVersion = 0;
-            setConn("", "待登录");
-            showLogin(true);
-            return;
+            closeConfirm(); stopStreams(); csrfToken = ""; lastStateVersion = 0; setConn("", "待登录"); showLogin(true); return;
           }
           const body = await r.json();
           if (!r.ok) throw new Error(body.error || ("HTTP " + r.status));
@@ -1984,12 +2324,11 @@ html, body {
 
     const reqBtn = ev.target.closest("[data-requeue-task]");
     if (reqBtn) {
-      ev.stopPropagation();
       const tid = reqBtn.getAttribute("data-requeue-task");
       openConfirm(
         "重新入队任务 " + tid,
-        "此操作将把任务状态重置为 queued，并向对应 peer 发送 task_requeued 通知。",
-        `<input id="requeue-reason-input" class="input" value="通过 Consilium 看板人工重新入队">`,
+        "此操作将把任务状态重置为 queued，并向对应端发送 task_requeued 通知。",
+        '<input id="requeue-reason-input" class="input" value="通过 Consilium 界面人工重新入队">',
         async () => {
           const reason = (document.getElementById("requeue-reason-input").value || "").trim() || "manual_requeue";
           const r = await fetch("/api/tasks/" + encodeURIComponent(tid) + "/requeue", {
@@ -1999,13 +2338,7 @@ html, body {
             body: JSON.stringify({ reason })
           });
           if (r.status === 401) {
-            closeConfirm();
-            stopStreams();
-            csrfToken = "";
-            lastStateVersion = 0;
-            setConn("", "待登录");
-            showLogin(true);
-            return;
+            closeConfirm(); stopStreams(); csrfToken = ""; lastStateVersion = 0; setConn("", "待登录"); showLogin(true); return;
           }
           const body = await r.json();
           if (!r.ok) throw new Error(body.error || ("HTTP " + r.status));
@@ -2015,17 +2348,10 @@ html, body {
       return;
     }
 
-    const row = ev.target.closest("[data-toggle-mission]");
-    if (row) {
-      const mid = row.getAttribute("data-toggle-mission");
-      if (expandedMissionIds.has(mid)) expandedMissionIds.delete(mid);
-      else expandedMissionIds.add(mid);
-      if (appState) renderMissions(appState);
+    if (openPopoverPeer && !ev.target.closest("#peer-popover")) {
+      openPopoverPeer = null;
+      if (appState) renderTopBar(appState);
     }
-  });
-
-  document.querySelectorAll("[data-set-theme]").forEach(btn => {
-    btn.addEventListener("click", () => applyTheme(btn.getAttribute("data-set-theme")));
   });
 
   document.getElementById("login-submit").addEventListener("click", async () => {
@@ -2091,7 +2417,7 @@ html, body {
   try { savedTheme = localStorage.getItem("consilium-theme") || "system"; } catch (_) {}
   applyTheme(savedTheme);
 
-  uptimeTimer = setInterval(() => {
+  setInterval(() => {
     if (!appState) return;
     const elapsed = baseUptime + (Date.now() - baseUptimeStamp) / 1000;
     document.getElementById("uptime-val").textContent = formatDuration(elapsed);
