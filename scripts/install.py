@@ -73,6 +73,14 @@ class TokenRotationError(RuntimeError):
         self.report = report
 
 
+class InstallApplyError(RuntimeError):
+    """Raised when run_installer Phase 2 fails mid-way, reporting exact per-target state."""
+
+    def __init__(self, message: str, *, report: Dict[str, Any]) -> None:
+        super().__init__(message)
+        self.report = report
+
+
 def _normalize_install_targets(
     targets: Optional[Iterable[str]] = None,
     *,
@@ -346,7 +354,7 @@ def _apply_claude_code_mcp(
     claude_bin: str,
     runner: Any = subprocess.run,
     secrets_to_redact: Iterable[str] = (),
-) -> None:
+) -> Optional[str]:
     """Apply Claude Code MCP change via CLI with saved entry and verified rollback."""
     saved_previous: Optional[Dict[str, Any]] = copy.deepcopy(previous_entry)
     if saved_previous is None and os.path.exists(path):
@@ -355,7 +363,7 @@ def _apply_claude_code_mcp(
         if existing is not None:
             saved_previous = copy.deepcopy(existing)
 
-    _backup_file(path, home_dir, backup_root)
+    backup_path = _backup_file(path, home_dir, backup_root)
     env = _claude_subprocess_env(home_dir)
 
     def _restore_and_verify(failure_summary: str) -> str:
@@ -482,6 +490,7 @@ def _apply_claude_code_mcp(
             raise RuntimeError(
                 _redact_secrets(f"{summary} ({rollback_note})", secrets_to_redact)
             )
+    return backup_path
 
 
 def _plan_text_file(
@@ -645,8 +654,11 @@ def run_installer(
         "env": {"PYTHONPATH": resolved_repo},
     }
 
+    secrets_to_redact: List[str] = [
+        s for s in (pending_new_token, effective_token) if s and s != "<generated-on-apply>"
+    ]
     operations: List[Dict[str, str]] = []
-    write_tasks: List[Callable[[], None]] = []
+    write_tasks: List[Tuple[str, str, str, Callable[[], Optional[str]]]] = []
 
     def _record(label: str, path: str, action: str, detail: str) -> None:
         operations.append({"target": label, "path": path, "action": action, "detail": detail})
@@ -667,10 +679,11 @@ def run_installer(
             )
             _record("antigravity_mcp", antigravity_path, action, detail)
             if apply_changes and content is not None:
-                def _do_write(p: str = antigravity_path, c: str = content) -> None:
-                    _backup_file(p, home_dir, backup_root)
+                def _do_write(p: str = antigravity_path, c: str = content) -> Optional[str]:
+                    bak = _backup_file(p, home_dir, backup_root)
                     _atomic_write_text(p, c, mode=0o600)
-                write_tasks.append(_do_write)
+                    return bak
+                write_tasks.append(("antigravity_mcp", antigravity_path, action, _do_write))
 
         _plan_safe("antigravity_mcp", antigravity_path, _plan_ag)
 
@@ -682,10 +695,11 @@ def run_installer(
             )
             _record("claude_desktop_mcp", claude_desktop_path, action, detail)
             if apply_changes and content is not None:
-                def _do_write(p: str = claude_desktop_path, c: str = content) -> None:
-                    _backup_file(p, home_dir, backup_root)
+                def _do_write(p: str = claude_desktop_path, c: str = content) -> Optional[str]:
+                    bak = _backup_file(p, home_dir, backup_root)
                     _atomic_write_text(p, c, mode=0o600)
-                write_tasks.append(_do_write)
+                    return bak
+                write_tasks.append(("claude_desktop_mcp", claude_desktop_path, action, _do_write))
 
         _plan_safe("claude_desktop_mcp", claude_desktop_path, _plan_cd)
 
@@ -705,8 +719,8 @@ def run_installer(
                     d: Dict[str, Any] = desired,
                     prev: Optional[Dict[str, Any]] = prev_entry,
                     cb: str = claude_bin,
-                ) -> None:
-                    _apply_claude_code_mcp(
+                ) -> Optional[str]:
+                    return _apply_claude_code_mcp(
                         p,
                         d,
                         prev,
@@ -715,8 +729,9 @@ def run_installer(
                         backup_root=backup_root,
                         claude_bin=cb,
                         runner=claude_runner,
+                        secrets_to_redact=secrets_to_redact,
                     )
-                write_tasks.append(_do_cc)
+                write_tasks.append(("claude_code_mcp", claude_code_path, action, _do_cc))
 
         _plan_safe("claude_code_mcp", claude_code_path, _plan_cc)
 
@@ -728,10 +743,11 @@ def run_installer(
             )
             _record("codex_mcp", codex_path, action, detail)
             if apply_changes and content is not None:
-                def _do_write(p: str = codex_path, c: str = content) -> None:
-                    _backup_file(p, home_dir, backup_root)
+                def _do_write(p: str = codex_path, c: str = content) -> Optional[str]:
+                    bak = _backup_file(p, home_dir, backup_root)
                     _atomic_write_text(p, c, mode=0o600)
-                write_tasks.append(_do_write)
+                    return bak
+                write_tasks.append(("codex_mcp", codex_path, action, _do_write))
 
         _plan_safe("codex_mcp", codex_path, _plan_cx)
 
@@ -788,28 +804,128 @@ def run_installer(
             _record(lbl, dst, action, detail)
             if apply_changes:
                 if action == "remove":
-                    def _do_rm(p: str = dst) -> None:
-                        _backup_file(p, home_dir, backup_root)
+                    def _do_rm(p: str = dst) -> Optional[str]:
+                        bak = _backup_file(p, home_dir, backup_root)
                         os.remove(p)
-                    write_tasks.append(_do_rm)
+                        return bak
+                    write_tasks.append((lbl, dst, action, _do_rm))
                 elif action in ("create", "update"):
-                    def _do_wr(p: str = dst, c: str = cnt, m: int = fm) -> None:
-                        _backup_file(p, home_dir, backup_root)
+                    def _do_wr(p: str = dst, c: str = cnt, m: int = fm) -> Optional[str]:
+                        bak = _backup_file(p, home_dir, backup_root)
                         _atomic_write_text(p, c, mode=m)
-                    write_tasks.append(_do_wr)
+                        return bak
+                    write_tasks.append((lbl, dst, action, _do_wr))
 
         _plan_safe(label, dest, _plan_txt)
 
     # ---- PHASE 2: EXECUTE WRITES ONLY AFTER ALL VALIDATIONS PASSED ----
-    if apply_changes:
+    target_results: List[Dict[str, Any]] = []
+    if not apply_changes:
+        for op in operations:
+            target_results.append(
+                {
+                    "target": op["target"],
+                    "path": op["path"],
+                    "action": op["action"],
+                    "status": "planned",
+                }
+            )
+    else:
         if mode == "apply":
             os.makedirs(log_dir, mode=0o700, exist_ok=True)
             if pending_new_token is not None:
                 write_auth_token(state_dir, pending_new_token)
             else:
                 ensure_auth_token(state_dir)
-        for task_fn in write_tasks:
-            task_fn()
+
+        queued_keys = {(lbl, pth) for lbl, pth, _, _ in write_tasks}
+        applied_targets: List[str] = []
+        for op in operations:
+            if (op["target"], op["path"]) not in queued_keys:
+                target_results.append(
+                    {
+                        "target": op["target"],
+                        "path": op["path"],
+                        "action": op["action"],
+                        "status": op["action"],
+                    }
+                )
+
+        for idx, (lbl, dst, act, task_fn) in enumerate(write_tasks):
+            try:
+                bak_path = task_fn()
+                applied_targets.append(lbl)
+                target_results.append(
+                    {
+                        "target": lbl,
+                        "path": dst,
+                        "action": act,
+                        "status": "applied",
+                        "backup_path": bak_path or "",
+                    }
+                )
+            except Exception as exc:
+                safe_error = _redact_secrets(str(exc), secrets_to_redact)
+                actual_backup = backup_root if os.path.exists(backup_root) else ""
+                candidate_bak = ""
+                if actual_backup:
+                    rel_dst = os.path.relpath(dst, home_dir)
+                    probe_bak = (
+                        os.path.join(actual_backup, rel_dst)
+                        if not rel_dst.startswith("..")
+                        else os.path.join(actual_backup, os.path.basename(dst))
+                    )
+                    if os.path.exists(probe_bak):
+                        candidate_bak = probe_bak
+                target_results.append(
+                    {
+                        "target": lbl,
+                        "path": dst,
+                        "action": act,
+                        "status": "failed",
+                        "may_be_modified": True,
+                        "backup_path": candidate_bak,
+                        "error": safe_error,
+                    }
+                )
+                not_attempted_targets: List[str] = []
+                for rem_lbl, rem_dst, rem_act, _ in write_tasks[idx + 1 :]:
+                    not_attempted_targets.append(rem_lbl)
+                    target_results.append(
+                        {
+                            "target": rem_lbl,
+                            "path": rem_dst,
+                            "action": rem_act,
+                            "status": "not_attempted",
+                            "may_be_modified": False,
+                        }
+                    )
+                partial_report = {
+                    "ok": False,
+                    "mode": mode,
+                    "selected_targets": list(selected_targets),
+                    "target_home": home_dir,
+                    "state_dir": state_dir,
+                    "rendezvous_dir": resolved_rv,
+                    "port": port,
+                    "failed_target": lbl,
+                    "failed_path": dst,
+                    "failed_target_may_be_modified": True,
+                    "error": safe_error,
+                    "applied_targets": applied_targets,
+                    "not_attempted_targets": not_attempted_targets,
+                    "backup_root": actual_backup,
+                    "target_results": target_results,
+                }
+                summary = _redact_secrets(
+                    (
+                        f"Installer {mode} failed at {lbl} ({dst}): {safe_error}. "
+                        f"applied={applied_targets}; not_attempted={not_attempted_targets}; "
+                        f"backup_root={actual_backup!r}"
+                    ),
+                    secrets_to_redact,
+                )
+                raise InstallApplyError(summary, report=partial_report) from exc
 
     return {
         "mode": mode,
@@ -824,6 +940,7 @@ def run_installer(
         "warnings": warnings,
         "backup_root": backup_root if (apply_changes and os.path.exists(backup_root)) else "",
         "operations": operations,
+        "target_results": target_results,
     }
 
 
@@ -1088,6 +1205,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             targets=args.targets,
             skip_claude_desktop=args.skip_claude_desktop,
         )
+    except InstallApplyError as exc:
+        print(json.dumps(exc.report, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 1
     except (ValueError, json.JSONDecodeError, RuntimeError, FileNotFoundError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
         return 1

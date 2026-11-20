@@ -326,7 +326,9 @@ class BusStore:
         queued = int(task_row["queued_cnt"] or 0) if task_row else 0
         return max_id, unacked, queued
 
-    def sync_peer_seq(self, peer_id: str, *, pulse: bool = False) -> Dict[str, Any]:
+    def sync_peer_seq(
+        self, peer_id: str, *, pulse: bool = False, pulse_if_backlog: bool = False
+    ) -> Dict[str, Any]:
         """Re-query SQLite inside .<peer>.seq.lock and atomically write signals/<peer>.seq."""
         peer = validate_peer(peer_id)
         return write_peer_seq(
@@ -334,6 +336,7 @@ class BusStore:
             peer,
             query_fn=lambda: self.query_peer_seq_counts(peer),
             pulse=pulse,
+            pulse_if_backlog=pulse_if_backlog,
         )
 
     def _safe_sync_peers_seq(

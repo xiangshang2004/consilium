@@ -351,6 +351,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <title>Consilium · 三端原生会诊台</title>
 <style>
 :root {
+  color-scheme: light;
   --bg-canvas: #f8fafc;
   --bg-surface: #ffffff;
   --bg-subtle: #f1f5f9;
@@ -398,6 +399,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
 @media (prefers-color-scheme: dark) {
   :root[data-theme="system"] {
+    color-scheme: dark;
     --bg-canvas: #0b0e14;
     --bg-surface: #121722;
     --bg-subtle: #181e2b;
@@ -439,6 +441,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 }
 
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --bg-canvas: #0b0e14;
   --bg-surface: #121722;
   --bg-subtle: #181e2b;
@@ -479,6 +482,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 }
 
 *, *::before, *::after { box-sizing: border-box; }
+:root.no-theme-transition *, :root.no-theme-transition *::before, :root.no-theme-transition *::after { transition: none !important; }
 html, body {
   margin: 0;
   padding: 0;
@@ -495,6 +499,7 @@ html, body {
 .tabular-nums { font-variant-numeric: tabular-nums; }
 .hidden { display: none !important; }
 button, input, textarea, select { font-family: inherit; color: inherit; }
+button { -webkit-appearance: none; appearance: none; }
 
 code, .mono {
   font-family: var(--font-mono);
@@ -1562,11 +1567,14 @@ code.inline {
   }
 
   function applyTheme(theme) {
+    document.documentElement.classList.add("no-theme-transition");
     document.documentElement.setAttribute("data-theme", theme);
     try { localStorage.setItem("consilium-theme", theme); } catch (_) {}
     document.querySelectorAll("[data-set-theme]").forEach(btn => {
       btn.classList.toggle("active", btn.getAttribute("data-set-theme") === theme);
     });
+    void document.documentElement.offsetHeight;
+    requestAnimationFrame(() => document.documentElement.classList.remove("no-theme-transition"));
   }
 
   function buildHandoffDeeplink(peerId, promptText, workspace) {

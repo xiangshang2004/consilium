@@ -44,11 +44,20 @@ def _account_alias(index: int) -> str:
 
 
 def _load_cockpit_codex_registry(cockpit_dir: str) -> Dict[str, Any]:
-    """Read ONLY codex_accounts.json non-secret routing metadata (never encrypted vaults)."""
+    """Read ONLY codex_accounts.json non-secret routing metadata (never open SQLite vaults)."""
     path = os.path.join(cockpit_dir, "codex_accounts.json")
-    empty = {"present": False, "current_id": "", "lookup": {}, "entries": []}
+    sqlite_path = os.path.join(cockpit_dir, "codex_accounts.sqlite")
+    empty = {"present": False, "current_id": "", "lookup": {}, "entries": [], "json_index_stale": False}
     if not os.path.isfile(path):
         return empty
+    json_index_stale = False
+    if os.path.isfile(sqlite_path):
+        try:
+            # Stat mtime ONLY (never open codex_accounts.sqlite): newer SQLite means JSON pointer may be stale.
+            if os.stat(sqlite_path).st_mtime > os.stat(path).st_mtime:
+                json_index_stale = True
+        except OSError:
+            pass
     try:
         with open(path, "r", encoding="utf-8") as handle:
             raw = json.load(handle)
@@ -57,7 +66,7 @@ def _load_cockpit_codex_registry(cockpit_dir: str) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         return empty
 
-    current_raw = str(raw.get("current_account_id") or "").strip()
+    current_raw = "" if json_index_stale else str(raw.get("current_account_id") or "").strip()
     items = raw.get("accounts")
     if not isinstance(items, list):
         return empty
@@ -110,6 +119,7 @@ def _load_cockpit_codex_registry(cockpit_dir: str) -> Dict[str, Any]:
         "current_id": current_canon,
         "lookup": lookup,
         "entries": entries,
+        "json_index_stale": json_index_stale,
     }
 
 
@@ -578,6 +588,8 @@ def sync_local_quotas(
     codex_registry = _load_cockpit_codex_registry(cockpit_dir)
     if codex_registry.get("present"):
         store.sync_peer_accounts("chatgpt", codex_registry.get("entries") or [])
+        if codex_registry.get("json_index_stale"):
+            store.clear_peer_cockpit_current("chatgpt")
     else:
         store.clear_peer_cockpit_current("chatgpt")
     discovered: List[Dict[str, Any]] = []

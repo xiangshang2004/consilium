@@ -196,6 +196,7 @@ def write_peer_seq(
     queued_tasks: Optional[int] = None,
     query_fn: Optional[Callable[[], Tuple[int, int, int]]] = None,
     pulse: bool = False,
+    pulse_if_backlog: bool = False,
 ) -> Dict[str, Any]:
     """Atomically write signals/<peer>.seq under an exclusive flock on <peer>.seq.lock.
 
@@ -226,7 +227,10 @@ def write_peer_seq(
             "updated_at": time.time(),
         }
         payload = json.dumps(state)
-        _write_seq_payload_locked(resolved_rv, peer, payload, pulse=pulse)
+        effective_pulse = bool(pulse) or (
+            bool(pulse_if_backlog) and (unacked_val > 0 or queued_val > 0)
+        )
+        _write_seq_payload_locked(resolved_rv, peer, payload, pulse=effective_pulse)
         return state
 
 
@@ -238,10 +242,10 @@ def read_peer_seq(rendezvous_dir: str, peer_id: str) -> Dict[str, Any]:
 
 
 def rebuild_all_peer_seqs(store: "BusStore") -> Dict[str, Dict[str, Any]]:
-    """Reconstruct signals/<peer>.seq for all peers directly from SQLite."""
+    """Reconstruct signals/<peer>.seq for all peers directly from SQLite, pulsing any backlog."""
     rebuilt: Dict[str, Dict[str, Any]] = {}
     for peer in VALID_PEERS:
-        rebuilt[peer] = store.sync_peer_seq(peer, pulse=False)
+        rebuilt[peer] = store.sync_peer_seq(peer, pulse=False, pulse_if_backlog=True)
     return rebuilt
 
 

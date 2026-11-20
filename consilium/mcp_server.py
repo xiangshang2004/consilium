@@ -1438,16 +1438,15 @@ class ConsiliumDaemon:
                 body: Any,
                 extra_headers: Optional[Dict[str, str]] = None,
             ) -> None:
-                has_unconsumed_post = (
-                    getattr(self, "command", "") in ("POST", "PUT", "PATCH")
-                    and not getattr(self, "_body_consumed", False)
+                has_unconsumed_body = (
+                    not getattr(self, "_body_consumed", False)
                     and bool(
                         self.headers.get_all("Transfer-Encoding")
                         or any(v.strip() != "0" for v in (self.headers.get_all("Content-Length") or []))
                     )
                 )
-                if status >= 400 or has_unconsumed_post:
-                    # Close keep-alive connections on error or unconsumed body so framing never desyncs (P3-2).
+                if status >= 400 or has_unconsumed_body:
+                    # Close keep-alive connections on error or unconsumed body so framing never desyncs (P3-2/R015).
                     self.close_connection = True
                 encoded = json.dumps(body, ensure_ascii=False).encode("utf-8")
                 self.send_response(status)
@@ -1465,6 +1464,15 @@ class ConsiliumDaemon:
                 self.wfile.write(encoded)
 
             def _send_html(self, status: int, html: str) -> None:
+                has_unconsumed_body = (
+                    not getattr(self, "_body_consumed", False)
+                    and bool(
+                        self.headers.get_all("Transfer-Encoding")
+                        or any(v.strip() != "0" for v in (self.headers.get_all("Content-Length") or []))
+                    )
+                )
+                if status >= 400 or has_unconsumed_body:
+                    self.close_connection = True
                 encoded = html.encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -1652,7 +1660,9 @@ class ConsiliumDaemon:
                     daemon.event_hub.unsubscribe(sub)
 
             def do_GET(self) -> None:
-                self._body_consumed = True
+                self._body_consumed = False
+                if not self._consume_optional_body():
+                    return
                 parsed = urllib.parse.urlparse(self.path)
                 route = parsed.path
                 if route in ("/", "/ui", "/ui/auth"):
