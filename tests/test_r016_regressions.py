@@ -107,6 +107,31 @@ class R016RegressionsTests(unittest.TestCase):
         self.assertTrue([t for t in agents if t.startswith("claude_agent:")])
         self.assertTrue([t for t in agents if t.startswith("codex_agent:")])
 
+    def test_codex_apply_then_uninstall_restores_file_and_removes_skill_dir(self) -> None:
+        import subprocess
+        import sys
+        import tempfile
+
+        for original in ('model = "x"\n', 'model = "x"\n\n', 'model = "x"'):
+            home = tempfile.mkdtemp(prefix="consilium-r016-rt-")
+            os.makedirs(os.path.join(home, ".codex"))
+            cfg = os.path.join(home, ".codex", "config.toml")
+            with open(cfg, "w", encoding="utf-8") as handle:
+                handle.write(original)
+            env = dict(os.environ)
+            env.pop("CLAUDE_CONFIG_DIR", None)
+            base = [sys.executable, "-B", os.path.join(REPO_ROOT, "scripts", "install.py"),
+                    "--target-home", home, "--rendezvous-dir", os.path.join(home, "rv"), "--targets", "codex"]
+            subprocess.run(base + ["--apply"], capture_output=True, text=True, check=True, env=env)
+            with open(cfg, "r", encoding="utf-8") as handle:
+                self.assertIn("# BEGIN CONSILIUM MCP", handle.read())
+            subprocess.run(base + ["--uninstall"], capture_output=True, text=True, check=True, env=env)
+            # Byte-exact, except a file that lacked a final newline keeps the one added on install.
+            expected = original if original.endswith("\n") else original + "\n"
+            with open(cfg, "r", encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), expected)
+            self.assertFalse(os.path.exists(os.path.join(home, ".codex", "skills", "consilium-collab")))
+
 
 if __name__ == "__main__":
     unittest.main()

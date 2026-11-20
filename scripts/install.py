@@ -32,6 +32,12 @@ CODEX_BLOCK_RE = re.compile(
     re.escape(BEGIN_MARKER) + r".*?" + re.escape(END_MARKER) + r"\n?",
     re.DOTALL,
 )
+# Removal also takes the one blank line the installer always inserts before the block,
+# so --apply followed by --uninstall restores the file byte for byte.
+CODEX_BLOCK_REMOVE_RE = re.compile(
+    r"\n?" + re.escape(BEGIN_MARKER) + r".*?" + re.escape(END_MARKER) + r"\n?",
+    re.DOTALL,
+)
 CODEX_DUP_TABLE_RE = re.compile(
     r"""(?m)^\s*\[\s*mcp_servers\.(?:"consilium"|'consilium'|consilium)(?:\s*\.[^\]]+)?\s*\]\s*(?:#.*)?$"""
 )
@@ -314,7 +320,7 @@ def _plan_codex_toml(
         _check_codex_duplicates(outside, path)
 
     if remove:
-        updated = outside
+        updated = CODEX_BLOCK_REMOVE_RE.sub("", original)
         if updated == original:
             return "unchanged", "managed block absent", None
         action = "remove"
@@ -324,7 +330,7 @@ def _plan_codex_toml(
             updated = CODEX_BLOCK_RE.sub(block, original)
         else:
             sep = "" if (not original or original.endswith("\n")) else "\n"
-            gap = "\n" if (original and not original.endswith("\n\n")) else ""
+            gap = "\n" if original else ""
             updated = original + sep + gap + block
         if updated == original:
             return "unchanged", "already configured", None
@@ -828,6 +834,12 @@ def run_installer(
                     def _do_rm(p: str = dst) -> Optional[str]:
                         bak = _backup_file(p, home_dir, backup_root)
                         os.remove(p)
+                        parent = os.path.dirname(p)
+                        if os.path.basename(parent) == "consilium-collab":
+                            try:
+                                os.rmdir(parent)  # only succeeds when empty
+                            except OSError:
+                                pass
                         return bak
                     write_tasks.append((lbl, dst, action, _do_rm))
                 elif action in ("create", "update"):
