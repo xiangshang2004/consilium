@@ -267,15 +267,27 @@ class R011RegressionsTests(unittest.TestCase):
         self.assertEqual(gpt["best_backup"]["alias"], "账号 B")
         self.assertIn("账号 B", gpt["switch_hint"])
         self.assertEqual(gpt["historical_accounts_count"], 1)
+        self.assertEqual(len(gpt["historical_accounts"]), 1)
+        self.assertTrue(gpt["historical_accounts"][0]["is_historical"])
+        self.assertEqual(gpt["historical_accounts"][0]["alias"], "历史账号 1")
 
-        # Zero plaintext emails persisted in DB or returned by quota API!
+        # Zero plaintext emails OR raw Cockpit IDs persisted in DB or returned by quota API!
         serialized = json.dumps(res, ensure_ascii=False)
-        self.assertNotIn("alice@example.com", serialized)
-        self.assertNotIn("bob@example.com", serialized)
-        self.assertNotIn("legacy@example.com", serialized)
+        for sensitive in (
+            "alice@example.com",
+            "bob@example.com",
+            "legacy@example.com",
+            "uid-a",
+            "uid-b",
+            "uid-old",
+            "alice-alt",
+        ):
+            self.assertNotIn(sensitive, serialized)
         with sqlite3.connect(store.db_path) as conn:
             dump = "\n".join(str(r) for r in conn.execute("SELECT * FROM quota_windows").fetchall())
             self.assertNotIn("@example.com", dump)
+            self.assertNotIn("uid-a", dump)
+            self.assertNotIn("uid-b", dump)
 
         # Also test backup exhausted (0%) while active is 80% -> NOT exhausted!
         with sqlite3.connect(codex_db) as conn:
@@ -306,6 +318,8 @@ class R011RegressionsTests(unittest.TestCase):
             os.path.join(cockpit_dir, "claude_accounts.json"),
             os.path.join(cockpit_dir, "current_account.json"),
             os.path.join(cockpit_dir, "secure-account-storage.key"),
+            os.path.join(cockpit_dir, "codex_accounts.sqlite"),
+            os.path.join(cockpit_dir, "claude_accounts.sqlite"),
             os.path.join(cockpit_dir, "accounts", "ag_secret.json"),
             os.path.join(cockpit_dir, "codex_accounts", "cx_secret.json"),
             os.path.join(cockpit_dir, "provider_current_accounts.json"),
@@ -351,7 +365,9 @@ class R011RegressionsTests(unittest.TestCase):
             conn.commit()
 
         opened_paths = []
+        sqlite_targets = []
         real_open = builtins.open
+        real_sqlite_connect = sqlite3.connect
 
         def _spy_open(file, *args, **kwargs):
             try:
@@ -360,12 +376,20 @@ class R011RegressionsTests(unittest.TestCase):
                 pass
             return real_open(file, *args, **kwargs)
 
+        def _spy_connect(database, *args, **kwargs):
+            sqlite_targets.append(str(database))
+            return real_sqlite_connect(database, *args, **kwargs)
+
         store = BusStore(self.tmp_state, rendezvous_dir=self.tmp_rv)
-        with mock.patch("builtins.open", side_effect=_spy_open):
+        with mock.patch("builtins.open", side_effect=_spy_open), mock.patch(
+            "sqlite3.connect", side_effect=_spy_connect
+        ):
             res = sync_local_quotas(store, user_home=self.tmp_home)
 
         for fp in forbidden_paths:
-            self.assertNotIn(os.path.abspath(fp), opened_paths)
+            abs_fp = os.path.abspath(fp)
+            self.assertNotIn(abs_fp, opened_paths)
+            self.assertFalse(any(os.path.basename(fp) in t for t in sqlite_targets))
 
         by_peer = {p["peer_id"]: p for p in res["peers"]}
         gpt = by_peer["chatgpt"]
@@ -378,6 +402,8 @@ class R011RegressionsTests(unittest.TestCase):
         self.assertIsNone(ag["min_remaining_percent"])
         self.assertIsNone(ag["dispatch_recommended"])
         self.assertEqual(len(ag["pool"]), 2)
+        self.assertNotIn("ag1", json.dumps(ag))
+        self.assertNotIn("ag2", json.dumps(ag))
 
     def test_r011_ui_minimalist_conversation_contract(self) -> None:
         html = render_dashboard_html("0.1.0")
@@ -397,6 +423,14 @@ class R011RegressionsTests(unittest.TestCase):
             "127.0.0.1:",
             "localhost",
             "只读账号池",
+            "模型与账号",
+            "\"文件\"",
+            "该端未上报",
+            "/mission",
+            "/files",
+            "/export",
+            "历史账号",
+            "copyTextSafe",
         ):
             self.assertIn(good, html)
 

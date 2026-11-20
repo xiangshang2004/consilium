@@ -135,11 +135,13 @@ class QuotaExtractionTests(unittest.TestCase):
         by_peer = {p["peer_id"]: p for p in summary["peers"]}
 
         ag = by_peer["antigravity"]
-        self.assertEqual(ag["min_remaining_percent"], 72.0)
-        self.assertTrue(ag["dispatch_recommended"])
-        self.assertFalse(ag["exhausted"])
-        self.assertEqual(ag["windows"][0]["source"], "cockpit_sqlite")
-        self.assertNotEqual(ag["windows"][0]["reset_in_human"], "")
+        self.assertTrue(ag["current_account_unknown"])
+        self.assertIsNone(ag["min_remaining_percent"])
+        self.assertIsNone(ag["dispatch_recommended"])
+        self.assertEqual(len(ag["pool"]), 1)
+        self.assertEqual(ag["pool"][0]["remaining_percent"], 72.0)
+        self.assertEqual(ag["pool"][0]["source"], "cockpit_sqlite")
+        self.assertNotEqual(ag["pool"][0]["reset_in_human"], "")
 
         gpt = by_peer["chatgpt"]
         self.assertEqual(gpt["min_remaining_percent"], 40.0)
