@@ -266,6 +266,17 @@ class EventHub:
             self._enqueue(sub, (0, "__close__", {}))
 
 
+_VOLATILE_TICK_KEYS = frozenset({
+    "age_seconds",
+    "claim_age_seconds",
+    "sample_age_seconds",
+    "reset_in_seconds",
+    "reset_in_human",
+    "earliest_reset_in_human",
+    "updated_at",
+})
+
+
 def _strip_volatile_fields(obj: Any) -> Any:
     if isinstance(obj, list):
         return [_strip_volatile_fields(x) for x in obj]
@@ -273,7 +284,7 @@ def _strip_volatile_fields(obj: Any) -> Any:
         return {
             k: _strip_volatile_fields(v)
             for k, v in obj.items()
-            if k not in ("age_seconds", "claim_age_seconds")
+            if k not in _VOLATILE_TICK_KEYS
         }
     return obj
 
@@ -283,7 +294,7 @@ def compute_state_fingerprint(state: Dict[str, Any]) -> str:
     relevant = {
         "peers": _strip_volatile_fields(state.get("peers") or []),
         "active_waiters": state.get("active_waiters") or {},
-        "quotas": state.get("quotas") or [],
+        "quotas": _strip_volatile_fields(state.get("quotas") or []),
         "missions": _strip_volatile_fields(state.get("missions") or []),
         "latest_event_id": int(state.get("latest_event_id", 0)),
     }
@@ -1343,7 +1354,7 @@ code.inline {
               <div class="composer-foot">
                 <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                   <button id="btn-slash-toggle" type="button" class="btn btn-sm">/ 功能</button>
-                  <button type="button" class="btn btn-sm" data-open-tab="accounts">账号池与建议</button>
+                  <button type="button" class="btn btn-sm" data-open-tab="accounts">模型与账号</button>
                   <button type="button" class="btn btn-sm" data-open-tab="worktrees">工作树</button>
                 </div>
                 <div style="display:flex;align-items:center;gap:6px;">
@@ -1418,13 +1429,21 @@ code.inline {
     task_requeued: "重新入队",
     task_stale: "进度超时陈旧"
   };
+  const DRAWER_TABS = [
+    { key: "tasks", label: "任务" },
+    { key: "worktrees", label: "工作树" },
+    { key: "accounts", label: "模型与账号" },
+    { key: "subagents", label: "子 Agent" },
+    { key: "artifacts", label: "文件" }
+  ];
   const SLASH_COMMANDS = [
+    { cmd: "/mission", desc: "打开或定位左侧会诊列表面板", action: "focus_mission" },
+    { cmd: "/files", desc: "查看本次会诊汇总的文件路径列表", action: "tab:artifacts" },
+    { cmd: "/export", desc: "合成当前会诊 Markdown 并复制到剪贴板", action: "export_md" },
     { cmd: "/tasks", desc: "打开右侧「任务」面板查看认领状态与控制", action: "tab:tasks" },
     { cmd: "/worktrees", desc: "查看各任务的隔离工作树分支清单", action: "tab:worktrees" },
-    { cmd: "/accounts", desc: "查看三端当前账号配额与 Cockpit 备用账号池", action: "tab:accounts" },
-    { cmd: "/artifacts", desc: "查看本次会诊汇总的产物路径列表", action: "tab:artifacts" },
-    { cmd: "/subagents", desc: "查看子 Agent 上报占位说明（阶段 3 启用）", action: "tab:subagents" },
-    { cmd: "/export", desc: "合成当前会诊 Markdown 并复制到剪贴板", action: "export_md" }
+    { cmd: "/accounts", desc: "查看各端模型列表、当前激活账号与只读账号池", action: "tab:accounts" },
+    { cmd: "/subagents", desc: "查看子 Agent 上报占位说明（阶段 3 启用）", action: "tab:subagents" }
   ];
 
   let appState = null;
@@ -1506,6 +1525,34 @@ code.inline {
     el.classList.remove("hidden");
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => el.classList.add("hidden"), 3200);
+  }
+
+  async function copyTextSafe(text, okMsg) {
+    const content = String(text || "");
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        await navigator.clipboard.writeText(content);
+        showToast(okMsg);
+        return true;
+      }
+    } catch (_) {}
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = content;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const copied = typeof document.execCommand === "function" && document.execCommand("copy");
+      document.body.removeChild(ta);
+      if (copied) {
+        showToast(okMsg);
+        return true;
+      }
+    } catch (_) {}
+    showToast("剪贴板写入失败，请手动复制");
+    return false;
   }
 
   function setConn(kind, text) {
@@ -1593,10 +1640,11 @@ code.inline {
       const poolLen = (q.pool || []).length;
       const qCls = !hasQuota ? "unknown" : (pct <= 0 ? "empty" : (pct < 20 ? "low" : ""));
       const barCls = !hasQuota ? "unknown" : (pct <= 0 ? "empty" : (pct < 20 ? "low" : ""));
-      const quotaLabel = q.account_switch_suspected ? "疑切号" : (q.current_account_unknown ? "未知" : (hasQuota ? Math.round(pct) + "%" : "未知"));
+      const quotaLabel = q.account_switch_suspected ? "可能已切换" : (q.current_account_unknown ? "账号未知" : (hasQuota ? Math.round(pct) + "%" : "账号未知"));
       const activeCls = openPopoverPeer === pid ? " open" : "";
+      const pillTitle = meta.appName + " · 分支前缀：" + meta.branchPrefix + (q.account_switch_suspected ? " · 账号可能已切换" : "");
 
-      return '<button type="button" class="peer-pill' + activeCls + '" data-peer-pill="' + pid + '" title="' + esc(meta.appName + " · 分支前缀：" + meta.branchPrefix) + '">' +
+      return '<button type="button" class="peer-pill' + activeCls + '" data-peer-pill="' + pid + '" title="' + esc(pillTitle) + '">' +
         '<span class="dot ' + stKey + '" style="box-shadow:0 0 0 2px var(--bg-surface);"></span>' +
         '<span class="pill-name">' + esc(meta.label) + '</span>' +
         '<span class="pill-state hide-narrow">' + esc(STATUS_TEXT[stKey]) + '</span>' +
@@ -1607,14 +1655,7 @@ code.inline {
       '</button>';
     }).join("");
 
-    const tabs = [
-      { key: "tasks", label: "任务" },
-      { key: "worktrees", label: "工作树" },
-      { key: "accounts", label: "账号池" },
-      { key: "artifacts", label: "产物" },
-      { key: "subagents", label: "子 Agent" }
-    ];
-    document.getElementById("top-drawer-tabs").innerHTML = tabs.map(tb => (
+    document.getElementById("top-drawer-tabs").innerHTML = DRAWER_TABS.map(tb => (
       '<button type="button" class="tab-chip' + (rightTab === tb.key ? " active" : "") + '" data-open-tab="' + tb.key + '">' + esc(tb.label) + '</button>'
     )).join("");
 
@@ -1630,7 +1671,7 @@ code.inline {
     const pid = openPopoverPeer;
     const meta = PEER_META[pid];
     const peer = (state.peers || []).find(x => x.peer_id === pid) || { peer_id: pid, status: "offline", task_counts: {} };
-    const q = (state.quotas || []).find(x => x.peer_id === pid) || { min_remaining_percent: null, windows: [], pool: [] };
+    const q = (state.quotas || []).find(x => x.peer_id === pid) || { min_remaining_percent: null, windows: [], pool: [], historical_accounts: [] };
     const hasQuota = q.min_remaining_percent !== null && q.min_remaining_percent !== undefined;
     const pct = hasQuota ? Math.round(Number(q.min_remaining_percent)) : null;
     const isDemo = (q.windows || []).some(w => w.source === "demo");
@@ -1639,10 +1680,12 @@ code.inline {
     const ws = curM ? curM.workspace_path : "";
     const deepUrl = buildHandoffDeeplink(pid, "检查 Consilium 收件箱并调用 consilium_pickup_inbox 认领任务", ws);
 
-    const poolHtml = (q.pool || []).map(acct => {
+    const poolRows = (q.pool || []).concat(q.historical_accounts || []);
+    const poolHtml = poolRows.map(acct => {
       const aPct = acct.remaining_percent == null ? "未知" : Math.round(acct.remaining_percent) + "%";
+      const badgeHtml = acct.is_current ? ' <span class="pill-badge">当前</span>' : (acct.is_historical ? ' <span class="pill-badge">历史账号</span>' : "");
       return '<div class="pop-row" style="padding:3px 6px;border-radius:6px;' + (acct.is_current ? "background:var(--bg-subtle);font-weight:600;" : "") + '">' +
-        '<span>' + esc(acct.alias || "账号") + (acct.is_current ? " [当前]" : "") + '</span>' +
+        '<span style="display:inline-flex;align-items:center;gap:4px;">' + esc(acct.alias || "账号") + badgeHtml + '</span>' +
         '<span class="tabular-nums" style="color:var(--text-muted);">' + esc(aPct) + (acct.reset_in_human ? " · " + esc(acct.reset_in_human) : "") + '</span>' +
       '</div>';
     }).join("");
@@ -1650,6 +1693,10 @@ code.inline {
     const actionBtn = deepUrl
       ? '<a class="btn btn-primary btn-sm" style="text-decoration:none;flex:1;" href="' + esc(deepUrl) + '">在 ' + esc(meta.label) + ' 新开会话接手 ↗</a>'
       : '<button type="button" class="btn btn-primary btn-sm" style="flex:1;" data-copy-pickup="' + pid + '">复制接手提示词</button>';
+
+    const activeAcctText = q.account_switch_suspected
+      ? "账号可能已切换"
+      : (q.active_account_alias || (q.current_account_unknown || !hasQuota ? "账号未知" : "默认账号"));
 
     pop.innerHTML =
       '<div class="pop-head">' +
@@ -1662,13 +1709,13 @@ code.inline {
       '<div class="pop-body">' +
         '<div class="pop-row">' +
           '<span style="color:var(--text-muted);">当前激活账号</span>' +
-          '<span style="font-weight:550;">' + esc(q.active_account_alias || (q.current_account_unknown ? "当前号未知" : "默认")) + '</span>' +
+          '<span style="font-weight:550;">' + esc(activeAcctText) + '</span>' +
         '</div>' +
         '<div class="pop-row">' +
           '<span style="color:var(--text-muted);display:inline-flex;align-items:center;gap:6px;">当前号余量' + (isDemo ? '<span class="pill-badge">演示数据</span>' : "") + '</span>' +
           '<span class="tabular-nums" style="font-weight:600;">' + (hasQuota ? pct + "%" + (q.earliest_reset_in_human ? " · 重置 " + esc(q.earliest_reset_in_human) : "") : "未知") + '</span>' +
         '</div>' +
-        (q.account_switch_suspected ? '<div style="padding:5px 8px;border-radius:7px;background:var(--status-stale-soft);color:var(--status-stale);font-size:12px;">最近配额样本已超过 30 分钟，账号可能已在客户端内切换</div>' : "") +
+        (q.account_switch_suspected ? '<div style="padding:5px 8px;border-radius:7px;background:var(--status-stale-soft);color:var(--status-stale);font-size:12px;">账号可能已切换（最近配额样本已超过 30 分钟），配额显示为未知</div>' : "") +
         (q.switch_hint ? '<div style="padding:5px 8px;border-radius:7px;background:var(--status-standby-soft);color:var(--status-standby);font-size:12px;">' + esc(q.switch_hint) + '</div>' : "") +
         (poolHtml ? '<div style="padding-top:4px;border-top:1px solid var(--border);"><div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">只读账号池</div>' + poolHtml + '</div>' : "") +
       '</div>' +
@@ -1710,12 +1757,14 @@ code.inline {
     const branch = p.worktree_branch || (linkedTask && linkedTask.worktree_branch) || "";
     const artifacts = Array.isArray(p.artifacts) ? p.artifacts : [];
 
+    const relTime = ev.created_at ? "最后上报于 " + relativeAge(ev.created_at) : "最后上报时间未知";
+    const clockHint = ev.created_at ? formatClock(ev.created_at) : "";
     let titleText = meta.label;
-    let subText = (EVENT_LABELS[ev.kind] || ev.kind) + (ev.created_at ? " · 最后上报于 " + formatClock(ev.created_at) : "");
+    let subText = evLabel + " · " + relTime;
     if (isAssign) {
       const targetMeta = PEER_META[ev.to_peer] || { label: ev.to_peer };
       titleText = meta.label + " → @" + targetMeta.label;
-      subText = "派发任务" + (p.model_tier ? " · 建议档位 " + p.model_tier : "") + (ev.created_at ? " · " + formatClock(ev.created_at) : "");
+      subText = "派发任务" + (p.model_tier ? " · 建议档位 " + p.model_tier : "") + " · " + relTime;
     }
 
     const extraChips = [];
@@ -1729,7 +1778,7 @@ code.inline {
       '<div class="msg-body">' +
         '<div class="msg-head">' +
           '<span class="msg-author">' + esc(titleText) + '</span>' +
-          '<span class="msg-sub tabular-nums">#' + esc(ev.event_id) + ' · ' + esc(subText) + '</span>' +
+          '<span class="msg-sub tabular-nums" title="' + esc(clockHint) + '">#' + esc(ev.event_id) + ' · ' + esc(subText) + '</span>' +
         '</div>' +
         renderTraceBadges(ev) +
         (noteClip ? '<div class="msg-text">' + renderInline(noteClip) + '</div>' : "") +
@@ -1852,14 +1901,7 @@ code.inline {
     }
     drawer.classList.remove("closed");
 
-    const tabs = [
-      { key: "tasks", label: "任务" },
-      { key: "worktrees", label: "工作树" },
-      { key: "accounts", label: "账号池" },
-      { key: "artifacts", label: "产物" },
-      { key: "subagents", label: "子 Agent" }
-    ];
-    document.getElementById("drawer-tabs-inner").innerHTML = tabs.map(tb => (
+    document.getElementById("drawer-tabs-inner").innerHTML = DRAWER_TABS.map(tb => (
       '<button type="button" class="tab-chip' + (rightTab === tb.key ? " active" : "") + '" data-open-tab="' + tb.key + '">' + esc(tb.label) + '</button>'
     )).join("");
 
@@ -1915,19 +1957,28 @@ code.inline {
 
     if (rightTab === "accounts") {
       const quotas = state.quotas || [];
+      const peersMap = {};
+      (state.peers || []).forEach(pr => { peersMap[pr.peer_id] = pr; });
       body.innerHTML =
-        '<div style="color:var(--text-muted);">按当前激活账号判定主配额，备用池仅作切换提示（绝不读取 Cockpit 密文凭证）；model_tier 仅作派活建议，最终模型由各原生 App 自行决定。</div>' +
+        '<div style="color:var(--text-muted);">只读展示各端已上报模型列表、当前激活账号主配额及账号池切换提示（绝不读取 Cockpit 密文凭证）。</div>' +
         quotas.map(q => {
           const meta = PEER_META[q.peer_id] || { appName: q.peer_id };
+          const peer = peersMap[q.peer_id] || {};
+          const models = Array.isArray(peer.supported_models) ? peer.supported_models : [];
+          const modelStr = models.length ? models.join(", ") : "暂未上报模型列表";
           const hasQ = q.min_remaining_percent !== null && q.min_remaining_percent !== undefined;
           const isDemo = (q.windows || []).some(w => w.source === "demo");
+          const statusTxt = q.account_switch_suspected ? "账号可能已切换" : (q.current_account_unknown || !hasQ ? "账号未知" : Math.round(q.min_remaining_percent) + "%");
+          const allAcctRows = (q.pool || []).concat(q.historical_accounts || []);
           return '<div class="panel-card">' +
             '<div style="display:flex;align-items:center;justify-content:space-between;">' +
               '<span style="font-weight:600;">' + esc(meta.appName) + '</span>' +
-              '<span class="tabular-nums">' + (hasQ ? Math.round(q.min_remaining_percent) + "%" : "未知") + (isDemo ? " · 演示数据" : "") + '</span>' +
+              '<span class="tabular-nums">' + esc(statusTxt) + (isDemo ? " · 演示数据" : "") + '</span>' +
             '</div>' +
+            '<div style="font-size:12px;color:var(--text-muted);">已上报模型：<span class="mono">' + esc(modelStr) + '</span></div>' +
+            (q.account_switch_suspected ? '<div style="color:var(--status-stale);font-size:12px;">最近样本超过 30 分钟，账号可能已在客户端内切换</div>' : "") +
             (q.switch_hint ? '<div style="color:var(--status-standby);">' + esc(q.switch_hint) + '</div>' : "") +
-            ((q.pool || []).map(a => '<div style="display:flex;justify-content:space-between;color:var(--text-muted);"><span>' + esc(a.alias) + (a.is_current ? " [当前]" : "") + '</span><span class="tabular-nums">' + (a.remaining_percent == null ? "未知" : Math.round(a.remaining_percent) + "%") + '</span></div>').join("") || '<div style="color:var(--text-muted);">暂无本地账号样本</div>') +
+            (allAcctRows.map(a => '<div style="display:flex;justify-content:space-between;color:var(--text-muted);"><span>' + esc(a.alias) + (a.is_current ? " [当前]" : (a.is_historical ? " [历史账号]" : "")) + '</span><span class="tabular-nums">' + (a.remaining_percent == null ? "未知" : Math.round(a.remaining_percent) + "%") + '</span></div>').join("") || '<div style="color:var(--text-muted);">暂无本地账号样本</div>') +
           '</div>';
         }).join("");
       return;
@@ -1942,16 +1993,22 @@ code.inline {
       body.innerHTML = (m && m.workspace_path ? '<div class="panel-card"><div style="color:var(--text-muted);">会诊工作区</div><div class="mono">' + esc(m.workspace_path) + '</div></div>' : "") +
         (items.length
           ? items.map(it => '<div class="panel-card"><div class="mono">' + esc(it.path) + '</div><div style="color:var(--text-muted);">来自 ' + esc(it.peer) + ' · ' + esc(it.task) + '</div></div>').join("")
-          : '<div style="color:var(--text-muted);">当前会诊暂未上报产物路径（阶段 5 开放安全目录与源码只读预览）。</div>');
+          : '<div style="color:var(--text-muted);">当前会诊暂未上报文件路径（阶段 5 开放文件树与源码只读预览）。</div>');
       return;
     }
 
     if (rightTab === "subagents") {
       body.innerHTML =
-        '<div class="panel-card">' +
-          '<div style="font-weight:600;">原生子 Agent 状态（只读占位）</div>' +
-          '<div style="color:var(--text-muted);">各端暂无结构化子 Agent 状态上报。阶段 3 将先由各端父会话通过 <code class="inline">report_progress(subagents=[...])</code> 主动汇报摘要，不读取原生对话全文日志。</div>' +
-        '</div>';
+        ["claude", "chatgpt", "antigravity"].map(pid => {
+          const meta = PEER_META[pid];
+          return '<div class="panel-card">' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;">' +
+              '<span style="font-weight:600;">' + esc(meta.appName) + '</span>' +
+              '<span class="chip">该端未上报</span>' +
+            '</div>' +
+            '<div style="font-size:12px;color:var(--text-muted);">阶段 3 起由该端通过结构化进度字段主动上报摘要，不读取本地对话全量日志。</div>' +
+          '</div>';
+        }).join("");
     }
   }
 
@@ -2119,9 +2176,7 @@ code.inline {
     }
     lines.push("## 任务明细");
     (m.tasks || []).forEach(t => lines.push("- [" + t.status + "] " + t.assignee_peer + " (" + t.task_id + "): " + (t.progress_note || t.result_summary || t.prompt || "")));
-    const md = lines.join("\n");
-    if (navigator.clipboard) navigator.clipboard.writeText(md).catch(() => {});
-    showToast("已复制当前会诊 Markdown 到剪贴板");
+    copyTextSafe(lines.join("\n"), "已复制当前会诊 Markdown 到剪贴板");
   }
 
   // Event Listeners
@@ -2165,8 +2220,7 @@ code.inline {
 
   document.getElementById("btn-copy-handoff").addEventListener("click", () => {
     const raw = (document.getElementById("composer-input").value || "").trim() || "请调用 consilium_pickup_inbox(peer_id=" + JSON.stringify(handoffTarget) + ") 认领任务。";
-    if (navigator.clipboard) navigator.clipboard.writeText(raw).catch(() => {});
-    showToast("已复制交给 " + PEER_META[handoffTarget].label + " 的提示词");
+    copyTextSafe(raw, "已复制交给 " + PEER_META[handoffTarget].label + " 的提示词");
   });
 
   document.getElementById("btn-open-native").addEventListener("click", () => {
@@ -2175,8 +2229,7 @@ code.inline {
     const txt = (document.getElementById("composer-input").value || "").trim() || "检查 Consilium 收件箱并调用 consilium_pickup_inbox 认领任务";
     const url = buildHandoffDeeplink(handoffTarget, txt, ws);
     if (!url) {
-      if (navigator.clipboard) navigator.clipboard.writeText(txt).catch(() => {});
-      showToast("Antigravity 无统一新会话深链，已复制提示词到剪贴板");
+      copyTextSafe(txt, "Antigravity 无统一新会话深链，已复制提示词到剪贴板");
       return;
     }
     window.location.href = url;
@@ -2228,7 +2281,13 @@ code.inline {
       slashOpen = false;
       const inp = document.getElementById("composer-input");
       if (inp.value.startsWith("/")) inp.value = "";
-      if (act.startsWith("tab:")) {
+      if (act === "focus_mission") {
+        if (isNarrowViewport()) sidebarMobileOpen = true;
+        else sidebarDesktopOpen = true;
+        if (appState) renderSidebar(appState);
+        document.getElementById("mission-list").scrollIntoView({ block: "nearest" });
+        showToast("已定位会诊列表");
+      } else if (act.startsWith("tab:")) {
         rightTab = act.slice(4);
         if (appState) { renderTopBar(appState); renderRightDrawer(appState); }
       } else if (act === "export_md") {
@@ -2258,8 +2317,7 @@ code.inline {
     if (copyPick) {
       const pid = copyPick.getAttribute("data-copy-pickup");
       const txt = "consilium_pickup_inbox(peer_id=" + JSON.stringify(pid) + ")";
-      if (navigator.clipboard) navigator.clipboard.writeText(txt).catch(() => {});
-      showToast("已复制 " + txt);
+      copyTextSafe(txt, "已复制 " + txt);
       return;
     }
 
