@@ -72,6 +72,12 @@
 - [x] 4.5.1 Build native macOS menu bar app `Consilium.app` (`app/macos/Sources/*.swift`, `app/macos/Info.plist`, `scripts/build_app.sh` using Xcode CLT `swiftc` + system `iconutil`/`codesign -s -`, `docs/brand/consilium-mark-template.svg`, committed `AppIcon.iconset` & `StatusIconTemplate*.png`, bundled stdlib `consilium` package, `NSAllowsLocalNetworking` + `WKWebsiteDataStore.nonPersistent()`, direct `POST /api/login` cookie injection, reuse-or-manage daemon lifecycle, and `UNUserNotificationCenter` R003 click deep links) and verify via `scripts/smoke_test_app.sh` + dated `2026-11-20` Light/Dark/menubar screenshots.
 - [x] 4.5.2 `Consilium.app` copied to `/Applications` (2026-11-20). Login item and `launchd` intentionally not set up (user: no auto-start for now).
 
+## Stage 4.6: Send From the App, Auto Routing, Preferences, Handoff (R017)
+
+- [x] 4.6.1 User-coordinated conversations from `/ui` (`POST /api/conversations`, `/api/missions/<id>/message`) with cookie/Origin/CSRF guards; auto routing picks a standby, non-exhausted peer as coordinator and briefs it with preferences, recent routing and quota.
+- [x] 4.6.2 Learned preferences (`consilium_preferences`, `consilium_learn_preference`, UI list + delete, max 30 active) and quota-aware `consilium_handoff_task`; account switching stays manual.
+- [x] 4.6.3 Claude-like desktop-only chat UI; SKILL.md §3; 93 tests; rebuilt and replaced `/Applications/Consilium.app`; skill re-synced to Claude Code and Codex.
+
 ## Stage 5: Daily-Use Polish (Blocked on Stage 4)
 - [ ] 5.1 Mission templates, Q5 user-selectable auto-dispatch hints, workspace file tree / read-only diff & source preview (respecting R012 §6 Git read-only isolation rules: `ls-tree -z`, `cat-file blob`, disallow `.gitattributes` filters/submodule traversal/untrusted `.git/config`), Markdown export enhancements, and refined per-app skills.
 
