@@ -17,6 +17,9 @@ from consilium.models import (
     DEFAULT_CLAIM_TIMEOUT_SEC,
     DEFAULT_RUNNING_TIMEOUT_SEC,
     MAX_ACTIVE_PREFERENCES,
+    MISSION_SOURCE_PEER,
+    MISSION_SOURCE_UI,
+    PICKUP_SCOPES,
     NON_TERMINAL_TASK_STATUSES,
     PROGRESS_TASK_STATUSES,
     REQUEUEABLE_TASK_STATUSES,
@@ -277,6 +280,20 @@ class BusStore:
                     conn.execute(stmt)
                 except sqlite3.OperationalError:
                     pass
+            # R020: where a conversation was started. 'ui' = typed by the user in the
+            # Consilium window; 'peer' = created by a desktop session through MCP.
+            try:
+                conn.execute("ALTER TABLE missions ADD COLUMN source TEXT NOT NULL DEFAULT 'peer'")
+                source_added = True
+            except sqlite3.OperationalError:
+                source_added = False
+            if source_added:
+                with self._tx(conn):
+                    conn.execute(
+                        "UPDATE missions SET source = 'ui' WHERE coordinator_peer = ? "
+                        "OR mission_id IN (SELECT DISTINCT mission_id FROM user_messages)",
+                        (USER_PEER,),
+                    )
             with self._tx(conn):
                 # Legacy DB backfill (R012 P2): give pre-attempt_id active tasks a deterministic fencing token
                 conn.execute(
@@ -786,8 +803,8 @@ class BusStore:
                     INSERT INTO missions (
                         mission_id, title, goal, coordinator_peer, workspace_path,
                         isolation_policy, max_rounds, current_round, status,
-                        final_summary, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'active', '', ?, ?)
+                        final_summary, created_at, updated_at, source
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'active', '', ?, ?, ?)
                     """,
                     (
                         mission_id,
@@ -799,6 +816,7 @@ class BusStore:
                         int(max_rounds),
                         now,
                         now,
+                        MISSION_SOURCE_UI if (user_message or coordinator == USER_PEER) else MISSION_SOURCE_PEER,
                     ),
                 )
 
@@ -1169,23 +1187,43 @@ class BusStore:
         session_label: str = "",
         claim_tasks: bool = True,
         limit: int = 20,
+        scope: str = "all",
+        mission_id: str = "",
     ) -> Dict[str, Any]:
-        """Atomically fetch/ack unread events, stamp claim latency, and claim queued tasks with attempt_id."""
+        """Atomically fetch/ack unread events, stamp claim latency, and claim queued tasks with attempt_id.
+
+        `scope` keeps work from different places apart: "consilium" only touches
+        conversations the user started in the Consilium window, "other" only those a
+        desktop session created itself, "all" both. `mission_id` narrows the pickup
+        to one conversation. Anything outside the filter is left unread and queued.
+        """
         peer = validate_peer(peer_id)
+        scope = validate_choice(scope or "all", PICKUP_SCOPES, "scope")
+        only_mission = str(mission_id or "").strip()
         now = utc_now_iso()
         now_ms = round(time.time() * 1000.0, 2)
         capped_limit = max(1, int(limit))
+        ui_missions = "(SELECT mission_id FROM missions WHERE source = 'ui')"
+        scope_sql = ""
+        scope_args: List[Any] = []
+        if scope == "consilium":
+            scope_sql += f" AND mission_id IN {ui_missions}"
+        elif scope == "other":
+            scope_sql += f" AND mission_id NOT IN {ui_missions}"
+        if only_mission:
+            scope_sql += " AND mission_id = ?"
+            scope_args.append(only_mission)
 
         with self._connect() as conn:
             with self._tx(conn):
                 event_rows = conn.execute(
                     """
                     SELECT * FROM events
-                    WHERE to_peer = ? AND acked_at = ''
+                    WHERE to_peer = ? AND acked_at = ''""" + scope_sql + """
                     ORDER BY event_id ASC
                     LIMIT ?
                     """,
-                    (peer, capped_limit),
+                    (peer, *scope_args, capped_limit),
                 ).fetchall()
                 decoded_events: List[Dict[str, Any]] = []
                 for erow in event_rows:
@@ -1209,11 +1247,11 @@ class BusStore:
                     queued_rows = conn.execute(
                         """
                         SELECT * FROM tasks
-                        WHERE assignee_peer = ? AND status = 'queued'
+                        WHERE assignee_peer = ? AND status = 'queued'""" + scope_sql + """
                         ORDER BY created_at ASC, task_id ASC
                         LIMIT ?
                         """,
-                        (peer, capped_limit),
+                        (peer, *scope_args, capped_limit),
                     ).fetchall()
                     events_by_id = {int(e["event_id"]): e for e in decoded_events}
                     for qrow in queued_rows:
@@ -2610,18 +2648,27 @@ class BusStore:
         return out
 
     def get_dashboard_missions(
-        self, limit: int = 20, events_per_mission: int = 100
+        self, limit: int = 20, events_per_mission: int = 100, source: str = ""
     ) -> tuple:
-        """Return enriched missions (with tasks and reverse-chronological events) and latest_event_id."""
+        """Return enriched missions (with tasks and reverse-chronological events) and latest_event_id.
+
+        `source="ui"` lists only conversations started in the Consilium window.
+        """
         with self._connect() as conn:
             latest_row = conn.execute(
                 "SELECT COALESCE(MAX(event_id), 0) AS max_id FROM events"
             ).fetchone()
             latest_event_id = int(latest_row["max_id"] or 0) if latest_row else 0
-            mission_rows = conn.execute(
-                "SELECT * FROM missions ORDER BY updated_at DESC LIMIT ?",
-                (max(1, int(limit)),),
-            ).fetchall()
+            if source:
+                mission_rows = conn.execute(
+                    "SELECT * FROM missions WHERE source = ? ORDER BY updated_at DESC LIMIT ?",
+                    (str(source), max(1, int(limit))),
+                ).fetchall()
+            else:
+                mission_rows = conn.execute(
+                    "SELECT * FROM missions ORDER BY updated_at DESC LIMIT ?",
+                    (max(1, int(limit)),),
+                ).fetchall()
             missions_out: List[Dict[str, Any]] = []
             for m in mission_rows:
                 mid = m["mission_id"]

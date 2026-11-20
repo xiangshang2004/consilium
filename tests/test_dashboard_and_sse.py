@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import socket
+import sqlite3
 import tempfile
 import threading
 import time
@@ -127,6 +128,12 @@ class DashboardAndSSETests(unittest.TestCase):
                 },
             }
         )
+
+        # The window lists only conversations started in it; mark the seeded one as such.
+        _conn = sqlite3.connect(self.daemon.dispatcher.store.db_path)
+        _conn.execute("UPDATE missions SET source = 'ui'")
+        _conn.commit()
+        _conn.close()
 
         # Authenticate /api/state via session cookie!
         st_state, _, raw_state = _raw_http_roundtrip(

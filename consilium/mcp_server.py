@@ -37,6 +37,7 @@ from consilium.models import (
     VALID_MISSION_CLOSE_STATUSES,
     VALID_MODEL_TIERS,
     VALID_PEERS,
+    PICKUP_SCOPES,
     USER_PEER,
     ensure_auth_token,
     read_auth_token,
@@ -413,13 +414,25 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     },
     {
         "name": "consilium_pickup_inbox",
-        "description": "Atomically acknowledge unread events and claim queued tasks assigned to peer_id.",
+        "description": (
+            "Atomically acknowledge unread events and claim queued tasks assigned to peer_id. "
+            "Keep work from different places apart: a standby session passes scope='consilium' "
+            "(only conversations the user started in the Consilium window); a session collecting "
+            "results for a mission it created passes mission_id. Anything outside the filter stays "
+            "unread for the session it belongs to."
+        ),
         "inputSchema": {
             "type": "object",
             "required": ["peer_id"],
             "properties": {
                 "peer_id": {"type": "string", "enum": list(VALID_PEERS)},
                 "session_label": {"type": "string"},
+                "scope": {
+                    "type": "string",
+                    "enum": list(PICKUP_SCOPES),
+                    "description": "consilium = started in the Consilium window; other = created by a desktop session; all = both. Defaults to consilium when session_label ends with 'standby', otherwise all.",
+                },
+                "mission_id": {"type": "string", "description": "Only this conversation's events and tasks."},
                 "claim_tasks": {"type": "boolean", "default": True},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
             },
@@ -911,12 +924,22 @@ class ConsiliumMCPDispatcher:
                         )
             except Exception:
                 pass
+            label = str(args.get("session_label", ""))
+            only_mission = str(args.get("mission_id") or "").strip()
+            scope = str(args.get("scope") or "").strip().lower()
+            if not scope:
+                # A standby session serves the Consilium window; it must not swallow
+                # receipts that belong to a session working on its own mission.
+                scope = "consilium" if (label.strip().lower().endswith("standby") and not only_mission) else "all"
             picked = self.store.pickup_inbox(
                 peer_id=peer,
-                session_label=str(args.get("session_label", "")),
+                session_label=label,
                 claim_tasks=claim_tasks,
                 limit=int(args.get("limit", 20)),
+                scope=scope,
+                mission_id=only_mission,
             )
+            picked["scope"] = scope
             pub_warn = self._emit_mutation("pickup_inbox")
             if pub_warn:
                 picked.setdefault("post_commit_warnings", []).append(pub_warn)

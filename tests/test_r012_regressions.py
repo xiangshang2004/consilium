@@ -667,7 +667,10 @@ class R012RegressionsTests(unittest.TestCase):
                 first_call["done"] = True
                 # Out-of-band stdio write directly to bus.db
                 out_store = BusStore(self.tmp_state, rendezvous_dir=self.tmp_rv)
-                out_store.create_mission("ExtSSE", "Re-snapshot inside publish lock", "claude")
+                out_store.create_mission(
+                    "ExtSSE", "Re-snapshot inside publish lock", "claude",
+                    user_message={"text": "seed", "targets": [], "mode": "auto"},
+                )
                 return daemon.get_dashboard_state(sync_quotas=False)
             return orig_cached(*args, **kwargs)
 

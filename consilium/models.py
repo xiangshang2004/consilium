@@ -14,6 +14,9 @@ VALID_PEERS = ("chatgpt", "claude", "antigravity")
 # agents' results for such missions are shown in the UI instead of being sent to a peer.
 USER_PEER = "user"
 MAX_ACTIVE_PREFERENCES = 30
+MISSION_SOURCE_UI = "ui"
+MISSION_SOURCE_PEER = "peer"
+PICKUP_SCOPES = ("all", "consilium", "other")
 VALID_ISOLATION = ("worktree", "read_only", "shared")
 VALID_MODEL_TIERS = ("pro_reasoning", "balanced", "fast", "custom")
 VALID_TASK_STATUSES = (

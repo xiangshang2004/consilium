@@ -1346,6 +1346,7 @@ class R010RegressionsTests(unittest.TestCase):
             "External change detection",
             "claude",
             tasks=[{"assignee_peer": "chatgpt", "prompt": "Work"}],
+            user_message={"text": "seed", "targets": [], "mode": "auto"},
         )
         picked = daemon.dispatcher.store.pickup_inbox("chatgpt", session_label="s1", claim_tasks=True)
         tid = picked["claimed_tasks"][0]["task_id"]

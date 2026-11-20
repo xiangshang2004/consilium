@@ -69,10 +69,15 @@ The Consilium window works like the Claude Code desktop app: **the user picks a 
 
 **Coordinating auto-routed messages** (the prompt says you are the coordinator): call `consilium_preferences` first; do it yourself or split it with `consilium_dispatch_task` (prefer peers on standby with quota; never an exhausted one); give the conversation a short title with `consilium_set_title` (at most 20 Chinese characters; ignored if the user renamed it); deliver the final answer with `consilium_complete_task`.
 
+**Keep sources apart**: the bus carries two kinds of conversations: those the user started in the Consilium window, and missions a desktop session created itself for its own project. They must not mix.
+- A standby session serves the Consilium window only: always call `consilium_pickup_inbox(peer_id=<self>, session_label="<self>-standby", scope="consilium")`. If it returns nothing, re-arm silently and say nothing.
+- A session that created its own mission collects results with `consilium_pickup_inbox(peer_id=<self>, mission_id=<that mission>)` or reads `consilium_status(mission_id)`; it never picks up without `mission_id`, so it cannot claim the user's Consilium messages.
+- Missions created by a session do not appear in the Consilium window. Archiving in the window only hides a conversation there; it never touches a session in Claude, Codex or Antigravity.
+
 **Learning**: record a clearly stable habit of the user in one sentence with `consilium_learn_preference`; never record guesses. The user can delete any preference.
 
 **Low quota**: hand the task off with `consilium_handoff_task(task_id, peer_id, attempt_id, to_peer, note)`; the note says what is done and why. Account switching is always manual; tell the user which account to switch to when every peer is low.
 
 **Standing by**:
-- Claude Code: run `PYTHONPATH=/Applications/Consilium.app/Contents/Resources/python /usr/bin/python3 -B -m consilium.cli wait --peer claude --session-label claude-standby --timeout 86400` with `run_in_background: true`, end the turn, and when it exits pick up, route, and re-arm. Never poll.
-- Codex / Antigravity: call `consilium_wait(peer_id=<self>, timeout_sec=300)` in a loop; on `woke: true` pick up and handle; keep each iteration terse.
+- Claude Code: run `PYTHONPATH=/Applications/Consilium.app/Contents/Resources/python /usr/bin/python3 -B -m consilium.cli wait --peer claude --session-label claude-standby --timeout 86400` with `run_in_background: true`, end the turn, and when it exits pick up with `scope="consilium"`, route, and re-arm. Never poll.
+- Codex / Antigravity: call `consilium_wait(peer_id=<self>, timeout_sec=300)` in a loop; on `woke: true` pick up with `session_label="<self>-standby", scope="consilium"` and handle; keep each iteration terse.

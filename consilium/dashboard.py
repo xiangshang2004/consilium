@@ -14,7 +14,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from consilium import __version__
-from consilium.models import utc_now_iso
+from consilium.models import MISSION_SOURCE_UI, utc_now_iso
 from consilium.quota import sync_local_quotas
 from consilium.store import BusStore
 from consilium.wakeup import query_active_waiters
@@ -321,7 +321,9 @@ def build_dashboard_state(
             sync_local_quotas(store)
         except Exception:
             pass
-    missions, latest_event_id = store.get_dashboard_missions(limit=20, events_per_mission=100)
+    missions, latest_event_id = store.get_dashboard_missions(
+        limit=20, events_per_mission=100, source=MISSION_SOURCE_UI
+    )
     peers = store.list_peers()
     active_waiters = query_active_waiters(rendezvous_dir)
     quotas_by_peer = {
@@ -1401,6 +1403,12 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 .mi-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mi-live { width: 6px; height: 6px; border-radius: 999px; background: var(--status-working); animation: pulseDot 1.6s ease-in-out infinite; flex-shrink: 0; }
 .mi-who { display: inline-flex; flex-shrink: 0; }
+.mission-item { cursor: pointer; user-select: none; -webkit-user-select: none; }
+.mission-item:focus-visible { outline: 2px solid var(--accent, #c96442); outline-offset: -2px; }
+.mi-archive { display: none; flex-shrink: 0; width: 22px; height: 22px; margin: -2px -4px -2px 0; padding: 0; border: none; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; align-items: center; justify-content: center; }
+.mi-archive:hover { background: var(--bg-subtle); color: var(--text-primary); }
+.mission-item:hover .mi-archive, .mission-item:focus-within .mi-archive { display: inline-flex; }
+.mission-item:hover .mi-who, .mission-item:focus-within .mi-who { display: none; }
 .mi-who .peer-icon { width: 14px; height: 14px; border-radius: 4px; margin-left: -3px; box-shadow: 0 0 0 1.5px var(--bg-side); }
 .archived-toggle { font-size: 12px; padding: 10px; }
 
@@ -1700,9 +1708,9 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     renderComposerBar(appState);
     document.getElementById("composer-input").focus();
   };
-  const AG_STANDBY_PROMPT = "请作为 Consilium 的 Antigravity 待命端（peer_id=antigravity）：反复调用 consilium_wait(peer_id=\"antigravity\", timeout_sec=300)；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"antigravity\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used）；超时没消息就继续等。每轮少说话，不要停下来问我。";
-  const CODEX_STANDBY_PROMPT = "请作为 Consilium 的 Codex 待命端（peer_id=chatgpt）：反复调用 consilium_wait(peer_id=\"chatgpt\", timeout_sec=300)；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"chatgpt\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used）；超时没消息就继续等。每轮少说话，不要停下来问我。";
-  const STANDBY_PROMPT = "请作为 Consilium 的 Claude 常驻待命端：先读 ~/.claude/skills/consilium-collab/SKILL.md 第 2、3 节；用 run_in_background 运行 `PYTHONPATH=/Applications/Consilium.app/Contents/Resources/python /usr/bin/python3 -B -m consilium.cli wait --peer claude --session-label claude-standby --timeout 86400`，被唤醒后用 consilium_pickup_inbox 取任务、处理、用 consilium_complete_task 回复，然后重新挂上等待。不要轮询，每轮少说话。";
+  const AG_STANDBY_PROMPT = "请作为 Consilium 的 Antigravity 待命端（peer_id=antigravity）：反复调用 consilium_wait(peer_id=\"antigravity\", timeout_sec=300)；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"antigravity\", session_label=\"antigravity-standby\", scope=\"consilium\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used）；超时没消息就继续等。每轮少说话，不要停下来问我。";
+  const CODEX_STANDBY_PROMPT = "请作为 Consilium 的 Codex 待命端（peer_id=chatgpt）：反复调用 consilium_wait(peer_id=\"chatgpt\", timeout_sec=300)；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"chatgpt\", session_label=\"chatgpt-standby\", scope=\"consilium\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used）；超时没消息就继续等。每轮少说话，不要停下来问我。";
+  const STANDBY_PROMPT = "请作为 Consilium 的 Claude 常驻待命端：先读 ~/.claude/skills/consilium-collab/SKILL.md 第 2、3 节；用 run_in_background 运行 `PYTHONPATH=/Applications/Consilium.app/Contents/Resources/python /usr/bin/python3 -B -m consilium.cli wait --peer claude --session-label claude-standby --timeout 86400`，被唤醒后用 consilium_pickup_inbox(peer_id=\"claude\", session_label=\"claude-standby\", scope=\"consilium\") 取任务（只取 Consilium 窗口里发起的，取到空就直接重新挂上）、处理、用 consilium_complete_task 回复，然后重新挂上等待。不要轮询，每轮少说话。";
   let sendTargets = [];
   let sending = false;
   let slashOpen = false;
@@ -1865,11 +1873,15 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       const busy = !closed && tasks.some(t => t.status === "queued" || t.status === "claimed" || t.status === "running");
       const activeCls = cur && cur.mission_id === m.mission_id ? " active" : "";
       const who = ["claude", "chatgpt", "antigravity"].filter(pid => tasks.some(t => t.assignee_peer === pid));
-      return '<button type="button" class="mission-item' + activeCls + '" data-select-mission="' + esc(m.mission_id) + '" title="' + esc(m.title + " · " + missionStatusText(m) + " · " + relativeAge(m.updated_at)) + '">' +
+      return '<div role="button" tabindex="0" class="mission-item' + activeCls + '" data-select-mission="' + esc(m.mission_id) + '" title="' + esc(m.title + " · " + missionStatusText(m) + " · " + relativeAge(m.updated_at)) + '">' +
         '<span class="mi-title">' + esc(m.title) + '</span>' +
         (busy ? '<span class="mi-live"></span>' : "") +
         '<span class="mi-who">' + who.map(pid => '<span class="peer-icon ' + pid + '" aria-hidden="true"></span>').join("") + '</span>' +
-      '</button>';
+        '<button type="button" class="mi-archive" data-archive-mission="' + esc(m.mission_id) + '"' +
+          (m.archived ? ' data-archive-undo="1" title="取消归档" aria-label="取消归档">' : ' title="归档（只在 Consilium 里收起，不动各 App 里的会话）" aria-label="归档">') +
+          '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="3.2" rx="0.8"/><path d="M3.2 6.2v5.6a1 1 0 0 0 1 1h7.6a1 1 0 0 0 1-1V6.2M6.5 9h3"/></svg>' +
+        '</button>' +
+      '</div>';
     };
     const live = missions.filter(m => !m.archived);
     const archived = missions.filter(m => m.archived);
@@ -1919,7 +1931,6 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
         (closedCur ? "" : ((cur.native_sessions || {}).claude
           ? '<span class="menu-item muted">Claude 专属会话已绑定</span>'
           : '<button type="button" class="menu-item" data-dedicated-session="' + esc(cur.mission_id) + '" title="在这个文件夹里新开一个同名 Claude Code 会话，之后这个会诊的消息都交给它">在 Claude 里开专属会话</button>')) +
-        '<button type="button" class="menu-item" data-archive-mission="' + esc(cur.mission_id) + '"' + (cur.archived ? ' data-archive-undo="1">取消归档' : '>归档') + '</button>' +
         '<div class="menu-sep"></div>';
     } else {
       actEl.innerHTML = "";
@@ -2604,6 +2615,12 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 
   document.getElementById("composer-input").addEventListener("input", () => renderComposerBar(appState));
   document.addEventListener("keydown", ev => {
+    if ((ev.key === "Enter" || ev.key === " ") && ev.target && ev.target.classList && ev.target.classList.contains("mission-item")) {
+      ev.preventDefault();
+      ev.target.click();
+    }
+  });
+  document.addEventListener("keydown", ev => {
     if (ev.key === "Escape") {
       if (slashOpen || !document.getElementById("slash-palette").classList.contains("hidden")) {
         slashOpen = false;
@@ -2722,6 +2739,18 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 
     const themeBtn = ev.target.closest("[data-set-theme]");
     if (themeBtn) { applyTheme(themeBtn.getAttribute("data-set-theme")); return; }
+
+    const archiveBtn = ev.target.closest("[data-archive-mission]");
+    if (archiveBtn) {
+      const amid = archiveBtn.getAttribute("data-archive-mission");
+      const undo = archiveBtn.getAttribute("data-archive-undo") === "1";
+      fetch("/api/missions/" + encodeURIComponent(amid) + (undo ? "/unarchive" : "/archive"), {
+        method: "POST", credentials: "same-origin", headers: writeHeaders(), body: "{}"
+      }).then(r => { if (r.status === 401) showLogin(true); if (!undo && selectedMissionId === amid) { composingNew = true; selectedMissionId = null; } return fetchState(); })
+        .then(() => showToast(undo ? "已取消归档" : "已归档，只是在 Consilium 里收起"))
+        .catch(() => showToast("操作失败"));
+      return;
+    }
 
     const missionBtn = ev.target.closest("[data-select-mission]");
     if (missionBtn) {
@@ -2860,16 +2889,6 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       return;
     }
 
-    const archiveBtn = ev.target.closest("[data-archive-mission]");
-    if (archiveBtn) {
-      const amid = archiveBtn.getAttribute("data-archive-mission");
-      const undo = archiveBtn.getAttribute("data-archive-undo") === "1";
-      fetch("/api/missions/" + encodeURIComponent(amid) + (undo ? "/unarchive" : "/archive"), {
-        method: "POST", credentials: "same-origin", headers: writeHeaders(), body: "{}"
-      }).then(r => { if (r.status === 401) showLogin(true); if (!undo && selectedMissionId === amid) { composingNew = true; selectedMissionId = null; } return fetchState(); })
-        .catch(() => showToast("操作失败"));
-      return;
-    }
     if (ev.target.closest("[data-toggle-archived]")) {
       showArchived = !showArchived;
       if (appState) renderSidebar(appState);
