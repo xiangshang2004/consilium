@@ -23,6 +23,11 @@
 - **AND** the button MUST open the same inline editor as the title and the “⋯” menu. Enter saves, Escape cancels, and focus returns to the button.
 - **AND** a live update that leaves the selected conversation and title unchanged MUST preserve focus on the button.
 
+#### Scenario: Display the model used on an Antigravity task
+- **WHEN** Antigravity's native execution log contains model information associated with the displayed task and attempt
+- **THEN** its reported model or verified planning and execution models MUST appear on the reply and in the task details.
+- **AND** if the available data contains only the application or Orchestrator name, the display MUST indicate that the specific model was not reported.
+
 ### Requirement: Snapshot API (`/api/state`) and Hardened Realtime SSE (`/api/stream`)
 `ConsiliumDaemon` MUST expose authenticated `GET /api/state` returning a complete JSON snapshot (daemon metadata, peers, quotas with `"unknown"` / `null` when missing, missions, tasks, and events) and `GET /api/stream` streaming Server-Sent Events (`text/event-stream`) with `SSE_MAX_SUBSCRIBERS = 16` (`503` beyond capacity), `try/finally` subscriber slot release wrapping header/snapshot writes, a `10s` socket write timeout, `auth_token_ver` pinned from `_authenticate_request` and re-verified before headers AND before initial snapshot emission, `_publish_lock`-linearized monotonic `state_version` (including re-snapshotting inside `snapshot_with_version` on idle `external_change` / `waiter_change` frames, guarded on both server output and frontend `lastStateVersion`), `compute_state_fingerprint` ignoring ticking display fields (`age_seconds`, `claim_age_seconds`, `sample_age_seconds`, `reset_in_seconds`, `reset_in_human`, `earliest_reset_in_human`, `updated_at`), and active stream termination on `token_version` change or `POST /api/logout`. The UI MUST automatically reconnect SSE and fall back to 3-second polling when SSE is unavailable.
 

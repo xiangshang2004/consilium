@@ -14,6 +14,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from consilium import __version__
+from consilium.antigravity_models import models_for_tasks
 from consilium.models import MISSION_SOURCE_UI, utc_now_iso
 from consilium.quota import sync_local_quotas
 from consilium.store import BusStore
@@ -324,6 +325,12 @@ def build_dashboard_state(
     missions, latest_event_id = store.get_dashboard_missions(
         limit=20, events_per_mission=100, source=MISSION_SOURCE_UI
     )
+    tasks = [task for mission in missions for task in mission.get("tasks", [])]
+    runtime_models = models_for_tasks(tasks)
+    for task in tasks:
+        model = runtime_models.get((task["task_id"], task.get("attempt_id")))
+        if model:
+            task["runtime_model_used"] = model
     peers = store.list_peers()
     active_waiters = query_active_waiters(rendezvous_dir)
     quotas_by_peer = {
@@ -2335,6 +2342,15 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     '</div>';
   }
 
+  function reportedTaskModel(peer, task) {
+    const label = (task && (task.runtime_model_used || task.model_used) || "").trim();
+    if (peer === "antigravity" &&
+        (!label || /^(?:antigravity(?:\.app)?(?: orchestrator)?|orchestrator(?: \(.*\))?)$/i.test(label))) {
+      return "具体型号未上报";
+    }
+    return label;
+  }
+
   function renderAgentMsg(ev, task) {
     const p = ev.payload || {};
     const pid = ev.from_peer || "";
@@ -2346,7 +2362,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       '<button type="button" class="chip-btn mono" data-open-tab="artifacts">📄 ' + esc(String(a).split("/").pop()) + '</button>'
     ).join("");
     const tn = tierNote(task);
-    const sub = [tn.label, task && task.model_used ? task.model_used : "", task && task.effort_used ? task.effort_used : "", relativeAge(ev.created_at)].filter(Boolean).join(" · ");
+    const sub = [tn.label, reportedTaskModel(pid, task), task && task.effort_used ? task.effort_used : "", relativeAge(ev.created_at)].filter(Boolean).join(" · ");
     return '<article class="chat-agent">' +
       (PEER_META[pid] ? '<span class="peer-icon ' + pid + '" aria-hidden="true"></span>' : '<div class="avatar ' + meta.cls + '">' + esc(meta.short) + '</div>') +
       '<div class="chat-agent-body">' +
@@ -2368,6 +2384,9 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       txt = standby ? label + " 已收到，马上开始" : "等 " + label + " 接收，它现在没在待命";
     } else {
       txt = label + " 正在处理" + (t.progress_note ? "：" + t.progress_note : "");
+    }
+    if (pid === "antigravity" && t.status === "running" && (t.runtime_model_used || t.model_used)) {
+      txt += " · " + reportedTaskModel(pid, t);
     }
     const openBtn = (t.status === "queued" && !standby)
       ? '<button type="button" class="btn-link" data-open-native="' + esc(pid) + '">在 ' + esc(label) + ' 里打开</button>'
@@ -2544,7 +2563,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       else if (kind === "bad") timeTxt = TASK_STATUS_TEXT[t.status] || t.status;
       const waitTxt = kind === "wait" ? (standby ? "已送到，马上开始" : "等它接收 · 它现在没在待命，已发通知") : "";
       const tn = tierNote(t);
-      const meta = [tn.label, t.model_used || "", t.effort_used || "", timeTxt, waitTxt, t.stale_at ? "很久没有新进展" : ""].filter(Boolean).join(" · ");
+      const meta = [tn.label, kind === "wait" ? "" : reportedTaskModel(pid, t), t.effort_used || "", timeTxt, waitTxt, t.stale_at ? "很久没有新进展" : ""].filter(Boolean).join(" · ");
       const isOpen = Object.prototype.hasOwnProperty.call(taskRowOpen, t.task_id) ? taskRowOpen[t.task_id] : kind === "run";
       const note = kind === "done" || kind === "bad" ? (t.result_summary || t.progress_note || "") : (t.progress_note || "");
       const canRequeue = !closed && (t.status === "claimed" || t.status === "running" || t.status === "failed" || t.status === "blocked");
