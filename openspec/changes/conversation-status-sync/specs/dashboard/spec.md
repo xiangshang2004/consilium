@@ -11,6 +11,10 @@ The conversation and task drawer MUST display consistent status from one snapsho
 - **WHEN** Cockpit identifies an account switch and subsequently observes the new account quota
 - **THEN** the view MUST wait for the matching sample before presenting the new quota and MUST preserve the task status until the respective task event arrives.
 
+#### Scenario: The conversation sidebar is hidden
+- **WHEN** the sidebar is closed or the window uses its narrow layout
+- **THEN** the conversation header MUST still show the current quota summary and offer access to account details. It MUST distinguish a known zero balance from an unconfirmed account or a missing sample.
+
 #### Scenario: Old progress is still on record
 - **WHEN** a task has a prior progress update but lacks a completion result
 - **THEN** the task card MUST show the last report time and use the authoritative lease status for an expiry indication.

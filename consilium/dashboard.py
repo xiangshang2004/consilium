@@ -681,9 +681,30 @@ code.inline {
   max-width: 320px;
 }
 
-/* Dedicated Compact Peer Sub-Bar (Always Unclipped Across 1440px & 390px) */
-/* Claude-like simplicity: peer status lives in the composer chips; the capsule strip is hidden. */
-.peer-subbar { display: none !important; }
+.quota-strip { flex-shrink: 0; padding: 0 18px 7px; }
+.quota-overview {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 11px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.35;
+  cursor: pointer;
+}
+.quota-overview:hover { background: var(--bg-hover); }
+.quota-overview:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.quota-entry { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
+.quota-value { font-weight: 650; color: var(--text-primary); }
+.quota-value.quota-pending { color: var(--status-stale); }
+.quota-value.quota-empty { color: var(--status-danger); }
+.quota-value.quota-unavailable { color: var(--text-muted); font-weight: 400; }
 .btn-link, .btn-link-danger { border: none; background: transparent; padding: 2px 4px; font-size: 12.5px; cursor: pointer; color: var(--text-muted); }
 .btn-link:hover { color: var(--text-primary); text-decoration: underline; }
 .btn-link-danger:hover { color: #dc2626; }
@@ -1360,7 +1381,7 @@ __PEER_ICON_CSS__
   .topbar-left { min-width: 0; flex: 1; }
   .topbar-right { flex-wrap: nowrap; gap: 6px; }
   .tab-chip { padding: 3px 6px; }
-  .peer-subbar { padding: 6px 10px; justify-content: flex-start; }
+  .quota-strip { padding: 0 10px 7px; }
   .peer-pills-bar { justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
   .peer-pills-bar::-webkit-scrollbar { display: none; }
   .peer-pill { padding: 4px 8px 6px; gap: 5px; }
@@ -1696,9 +1717,9 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       </div>
     </header>
 
-    <!-- Dedicated Compact 3-Peer Status & Quota Strip -->
-    <div class="peer-subbar">
-      <div id="top-peer-pills" class="peer-pills-bar" aria-label="三端原生状态与当前账号配额"></div>
+    <div class="quota-strip">
+      <button id="quota-overview" class="quota-overview" type="button" data-open-settings="accounts"
+        aria-haspopup="dialog" title="打开账号与额度">额度</button>
     </div>
 
     <div class="workspace-body">
@@ -2238,36 +2259,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       actEl.innerHTML = "";
     }
 
-    const peers = (state && state.peers) || [];
-    const quotas = {};
-    ((state && state.quotas) || []).forEach(q => { quotas[q.peer_id] = q; });
-
-    document.getElementById("top-peer-pills").innerHTML = ["claude", "chatgpt", "antigravity"].map(pid => {
-      const meta = PEER_META[pid];
-      const peer = peers.find(x => x.peer_id === pid) || { peer_id: pid, status: "offline" };
-      const q = quotas[pid] || { min_remaining_percent: null, windows: [], pool: [] };
-      const stKey = STATUS_TEXT[peer.status] ? peer.status : "offline";
-      const hasQuota = q.min_remaining_percent !== null && q.min_remaining_percent !== undefined;
-      const pct = hasQuota ? Math.max(0, Math.min(100, Number(q.min_remaining_percent))) : null;
-      const isDemo = (q.windows || []).some(w => w.source === "demo");
-      const poolLen = (q.pool || []).length;
-      const qCls = !hasQuota ? "unknown" : (pct <= 0 ? "empty" : (pct < 20 ? "low" : ""));
-      const barCls = !hasQuota ? "unknown" : (pct <= 0 ? "empty" : (pct < 20 ? "low" : ""));
-      const quotaLabel = q.account_switch_suspected ? "可能已切换" : (q.current_account_unknown ? "账号未知" : (hasQuota ? Math.round(pct) + "%" : "账号未知"));
-      const activeCls = openPopoverPeer === pid ? " open" : "";
-      const pillTitle = meta.appName + " · 分支前缀：" + meta.branchPrefix + (q.account_switch_suspected ? " · 账号可能已切换" : "");
-
-      return '<button type="button" class="peer-pill' + activeCls + '" data-peer-pill="' + pid + '" title="' + esc(pillTitle) + '">' +
-        '<span class="dot ' + stKey + '" style="box-shadow:0 0 0 2px var(--bg-surface);"></span>' +
-        '<span class="peer-icon ' + meta.cls + '" aria-hidden="true"></span>' +
-        '<span class="pill-name">' + esc(meta.label) + '</span>' +
-        '<span class="pill-state hide-narrow">' + esc(STATUS_TEXT[stKey]) + '</span>' +
-        '<span class="pill-quota tabular-nums ' + qCls + '">' + esc(quotaLabel) + '</span>' +
-        (isDemo ? '<span class="pill-badge hide-narrow">演示数据</span>' : "") +
-        (poolLen > 1 ? '<span class="pill-badge tabular-nums hide-narrow">' + poolLen + '号</span>' : "") +
-        '<span class="pill-track"><span class="pill-fill ' + meta.cls + ' ' + barCls + '" style="width:' + (hasQuota ? pct : 0) + '%;"></span></span>' +
-      '</button>';
-    }).join("");
+    renderQuotaOverview(state);
 
     document.getElementById("top-drawer-tabs").innerHTML = SETTINGS_TABS.map(tb => (
       '<button type="button" class="menu-item" data-open-settings="' + tb.key + '">' + esc(tb.label) + '</button>'
@@ -2275,6 +2267,41 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     renderPanelTools(state);
 
     renderPeerPopover(state);
+  }
+
+  function quotaPresentation(quota = {}) {
+    if (quota.account_switch_suspected) {
+      return {value:"待同步", tone:"quota-pending", percent:null, detail:"账号可能已切换，等待当前账号样本"};
+    }
+    if (quota.current_account_unknown) {
+      return {value:"账号未知", tone:"quota-unavailable", percent:null, detail:"暂未确认当前账号"};
+    }
+    const amount = quota.min_remaining_percent;
+    if (amount == null || !Number.isFinite(Number(amount))) {
+      return {value:"暂无样本", tone:"quota-unavailable", percent:null, detail:"当前账号暂无额度样本"};
+    }
+    const percent = Math.max(0, Math.min(100, Number(amount)));
+    const stale = quota.quota_stale && quota.sample_age_seconds != null;
+    return {value:Math.round(percent) + "%", tone:percent === 0 ? "quota-empty" : stale ? "quota-pending" : "",
+      percent, detail:stale ? "最近额度样本 " + agoText(quota.sample_age_seconds) : ""};
+  }
+
+  function renderQuotaOverview(state) {
+    const quotas = (state && state.quotas) || [];
+    const overview = document.getElementById("quota-overview");
+    const entries = Object.keys(PEER_META).map(pid => {
+      const quota = quotas.find(q => q.peer_id === pid);
+      const view = quotaPresentation(quota);
+      const demo = !!(quota && (quota.windows || []).some(w => w.source === "demo"));
+      return '<span class="quota-entry" data-quota-peer="' + pid + '"' +
+        (view.detail ? ' title="' + esc(view.detail) + '"' : '') + '>' + esc(peerLabel(pid)) +
+        ' <span class="quota-value tabular-nums ' + view.tone + '">' + esc(view.value) +
+        (demo ? "（演示）" : "") + '</span></span>';
+    }).join("");
+    if (overview.dataset.rendered !== entries) {
+      overview.dataset.rendered = entries;
+      overview.innerHTML = '<span>额度</span>' + entries;
+    }
   }
 
   function renderPeerPopover(state) {
@@ -2287,8 +2314,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     const meta = PEER_META[pid];
     const peer = (state.peers || []).find(x => x.peer_id === pid) || { peer_id: pid, status: "offline", task_counts: {} };
     const q = (state.quotas || []).find(x => x.peer_id === pid) || { min_remaining_percent: null, windows: [], pool: [], historical_accounts: [] };
-    const hasQuota = q.min_remaining_percent !== null && q.min_remaining_percent !== undefined;
-    const pct = hasQuota ? Math.round(Number(q.min_remaining_percent)) : null;
+    const quota = quotaPresentation(q);
+    const hasQuota = quota.percent !== null;
     const isDemo = (q.windows || []).some(w => w.source === "demo");
     const stKey = STATUS_TEXT[peer.status] ? peer.status : "offline";
     const curM = getActiveMission(state);
@@ -2328,7 +2355,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
         '</div>' +
         '<div class="pop-row">' +
           '<span style="color:var(--text-muted);display:inline-flex;align-items:center;gap:6px;">当前号余量' + (isDemo ? '<span class="pill-badge">演示数据</span>' : "") + '</span>' +
-          '<span class="tabular-nums" style="font-weight:600;">' + (hasQuota ? pct + "%" + (q.earliest_reset_in_human ? " · 重置 " + esc(q.earliest_reset_in_human) : "") : "未知") + '</span>' +
+          '<span class="tabular-nums" style="font-weight:600;">' + esc(quota.value) +
+            (hasQuota && q.earliest_reset_in_human ? " · 重置 " + esc(q.earliest_reset_in_human) : "") + '</span>' +
         '</div>' +
         (q.account_switch_suspected ? '<div style="padding:5px 8px;border-radius:7px;background:var(--status-stale-soft);color:var(--status-stale);font-size:12px;">账号可能已切换（最近配额样本已超过 30 分钟），配额显示为未知</div>' : "") +
         (q.switch_hint ? '<div style="padding:5px 8px;border-radius:7px;background:var(--status-standby-soft);color:var(--status-standby);font-size:12px;">' + esc(q.switch_hint) + '</div>' : "") +
@@ -2428,8 +2456,9 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       const standby = Number(waiters[pid] || 0) > 0;
       const busy = !!busyPeers[pid];
       const q = quotas[pid] || {};
-      const known = !(q.current_account_unknown || q.account_switch_suspected) && q.min_remaining_percent !== null && q.min_remaining_percent !== undefined;
-      const pct = known ? Math.max(0, Math.min(100, Number(q.min_remaining_percent))) : 0;
+      const quota = quotaPresentation(q);
+      const known = quota.percent !== null;
+      const pct = quota.percent;
       const stTxt = busy ? "处理中" : (standby ? "待命中" : "未待命");
       const outTxt = known && q.exhausted ? ("额度用完" + (q.earliest_reset_in_human ? "，" + q.earliest_reset_in_human + " 后恢复" : "")) : "";
       const modelTxt = [models[pid] || "", efforts[pid] || ""].filter(Boolean).join(" · ");
@@ -2437,14 +2466,14 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       const ageTxt = (known && q.quota_stale && q.sample_age_seconds) ? agoText(q.sample_age_seconds) : "";
       const color = pid === "claude" ? "var(--peer-claude)" : (pid === "chatgpt" ? "var(--peer-chatgpt)" : "var(--peer-antigravity)");
       const ring = known
-        ? '<svg class="dock-ring' + (q.quota_stale ? " stale" : "") + '" viewBox="0 0 24 24" aria-hidden="true"><circle class="bg" cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="9" stroke="' + color + '" stroke-linecap="round" stroke-dasharray="' + (pct * 0.5655).toFixed(1) + ' 56.6"/></svg>' + Math.round(pct) + '%'
-        : "";
+        ? '<svg class="dock-ring' + (q.quota_stale ? " stale" : "") + '" viewBox="0 0 24 24" aria-hidden="true"><circle class="bg" cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="9" stroke="' + color + '" stroke-linecap="round" stroke-dasharray="' + (pct * 0.5655).toFixed(1) + ' 56.6"/></svg>' + quota.value
+        : '<span class="quota-value ' + quota.tone + '">' + esc(quota.value) + '</span>';
       const wake = (!standby && !busy) ? '<button type="button" class="wake-btn" data-start-standby="' + pid + '" title="让它开始待命，之后发给它的消息会自动处理">叫醒</button>' : "";
       const acctTxt = (q.active_account_alias || "") + (q.active_plan_type ? "（" + q.active_plan_type + "）" : "");
       const tip = PEER_META[pid].appName + (acctTxt ? " · " + acctTxt : "") +
         (modelTxt ? " · " + modelTxt : "") +
         (known ? " · 余量 " + Math.round(pct) + "%" + (ageTxt ? "（Cockpit " + ageTxt + "的记录）" : "") + (q.earliest_reset_in_human ? "，" + q.earliest_reset_in_human + " 后重置" : "")
-               : (q.account_switch_suspected ? " · 账号可能已切换" : (pid === "claude" ? " · Cockpit 没有 Claude 的余量记录" : " · 余量未知"))) +
+               : " · " + quota.detail) +
         (q.switch_hint ? " · " + q.switch_hint : "");
       return '<div class="dock-row">' +
         '<button type="button" class="dock-main" data-peer-pill="' + pid + '" title="' + esc(tip) + '">' +
@@ -2937,17 +2966,16 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
           const peer = peersMap[q.peer_id] || {};
           const models = Array.isArray(peer.supported_models) ? peer.supported_models : [];
           const modelStr = models.join(", ");
-          const hasQ = q.min_remaining_percent !== null && q.min_remaining_percent !== undefined;
+          const quota = quotaPresentation(q);
           const isDemo = (q.windows || []).some(w => w.source === "demo");
-          const statusTxt = q.account_switch_suspected ? "账号可能已切换" : (q.current_account_unknown || !hasQ ? "账号未知" : Math.round(q.min_remaining_percent) + "%");
           const allAcctRows = (q.pool || []).concat(q.historical_accounts || []);
           return '<div class="panel-card">' +
             '<div style="display:flex;align-items:center;justify-content:space-between;">' +
               '<span style="font-weight:600;">' + esc(meta.appName) + '</span>' +
-              '<span class="tabular-nums">' + esc(statusTxt) + (isDemo ? " · 演示数据" : "") + '</span>' +
+              '<span class="quota-value tabular-nums ' + quota.tone + '">' + esc(quota.value) + (isDemo ? " · 演示数据" : "") + '</span>' +
             '</div>' +
             (modelStr ? '<div style="font-size:12px;color:var(--text-muted);">可用模型：<span class="mono">' + esc(modelStr) + '</span></div>' : "") +
-            (q.account_switch_suspected ? '<div style="color:var(--status-stale);font-size:12px;">最近样本超过 30 分钟，账号可能已在客户端内切换</div>' : "") +
+            (quota.detail ? '<div class="muted">' + esc(quota.detail) + '</div>' : "") +
             (q.switch_hint ? '<div style="color:var(--status-standby);">' + esc(q.switch_hint) + '</div>' : "") +
             (allAcctRows.map(a => '<div style="display:flex;justify-content:space-between;color:var(--text-muted);"><span>' + esc(a.alias) + (a.is_current ? " [当前]" : (a.is_historical ? " [历史账号]" : "")) + '</span><span class="tabular-nums">' + (a.remaining_percent == null ? "未知" : Math.round(a.remaining_percent) + "%") + '</span></div>').join("") || '<div style="color:var(--text-muted);">暂无本地账号样本</div>') +
           '</div>';
