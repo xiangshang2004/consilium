@@ -2,7 +2,7 @@
 
 Local MCP collaboration bus and zero-CLI doorbell wakeup bridge connecting **ChatGPT.app (Codex Desktop)**, **Claude.app (Claude Desktop)**, and **Antigravity.app** on macOS.
 
-> Status: **Stage 0 (`consilium-v1` OpenSpec), Stage 1 (R006), Stage 2/2.5 (R007/R010), Stage 2.6 ([R013](reviews/R013-antigravity-chat-ui-and-q4.md)), and R012 closed-loop remediation ([R012](reviews/R012-codex-review.md)) verified (`75` unit tests OK with and without isolation env vars, `openspec validate consilium-v1 --strict` valid); ★ paused at Gate 1 (Claude & Codex re-check of R012 fixes / R013) and Gate 2 (user visual sign-off on refreshed 2026-11-20 screenshots & 35.0s SSE video) before touching live configs.** See [reviews/R013-antigravity-chat-ui-and-q4.md](reviews/R013-antigravity-chat-ui-and-q4.md), [reviews/README.md](reviews/README.md), and [docs/README.md](docs/README.md).
+> Status: **Stage 0 (`consilium-v1` OpenSpec), Stage 1 (R006), Stage 2/2.5 (R007/R010), Stage 2.6 ([R013](reviews/R013-antigravity-chat-ui-and-q4.md)), and R012 closed-loop remediation ([R012](reviews/R012-codex-review.md)) verified (`75` unit tests OK with and without isolation env vars, `openspec validate consilium-v1 --strict` valid); ★ paused at Gate 1 (Claude & Codex re-check of R012 fixes / R013) and Gate 2 (user visual sign-off on refreshed 2026-11-20 screenshots) before touching live configs.** See [reviews/R013-antigravity-chat-ui-and-q4.md](reviews/R013-antigravity-chat-ui-and-q4.md), [reviews/README.md](reviews/README.md), and [docs/README.md](docs/README.md).
 
 ## Why `consilium`?
 
