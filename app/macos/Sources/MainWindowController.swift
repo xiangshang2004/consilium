@@ -283,7 +283,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
         }
         let scheme = (url.scheme ?? "").lowercased()
         if scheme == "claude" || scheme == "codex" {
-            NSWorkspace.shared.open(url)
+            // Only the deep links verified in R003: claude://code/new and codex://new (new session with a pre-filled prompt).
+            let host = (url.host ?? "").lowercased()
+            let path = url.path
+            let allowed = (scheme == "claude" && host == "code" && path == "/new")
+                || (scheme == "codex" && host == "new" && (path.isEmpty || path == "/"))
+            if allowed {
+                NSWorkspace.shared.open(url)
+            } else {
+                NSLog("Consilium: blocked unverified deep link %@", url.absoluteString)
+            }
             decisionHandler(.cancel)
             return
         }
