@@ -348,7 +348,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Consilium · 三端原生会诊台</title>
+<title>Consilium</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns=%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22 viewBox=%220 0 128 128%22%3E%3Cpath d='M95.09 89.17A40 40 0 0 1 47.94 100.64' stroke='%234763E4' stroke-width='15.2' stroke-linecap='round' fill='none'/%3E%3Cpath d='M32.20 88.26A40 40 0 0 1 32.20 39.74' stroke='%230D9470' stroke-width='15.2' stroke-linecap='round' fill='none'/%3E%3Cpath d='M47.94 27.36A40 40 0 0 1 95.09 38.83' stroke='%23C8643C' stroke-width='15.2' stroke-linecap='round' fill='none'/%3E%3Ccircle cx='67.2' cy='64' r='9.4' fill='%23111827'/%3E%3C/svg%3E">
 <style>
 :root {
   color-scheme: light;
@@ -550,11 +551,6 @@ code.inline {
 .brand-mark {
   width: 24px;
   height: 24px;
-  border-radius: 7px;
-  background: var(--text-primary);
-  color: var(--bg-surface);
-  font-size: 12px;
-  font-weight: 700;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -773,6 +769,12 @@ code.inline {
   gap: 6px;
   flex-shrink: 0;
 }
+.topbar-more {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.show-narrow { display: none !important; }
 .conn-badge {
   display: inline-flex;
   align-items: center;
@@ -1272,13 +1274,33 @@ code.inline {
     z-index: 55;
     box-shadow: var(--shadow-modal);
   }
-  .topbar { flex-wrap: wrap; row-gap: 6px; padding: 6px 10px; }
-  .topbar-right { width: 100%; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
-  .tab-group { max-width: 100%; flex-wrap: wrap; }
+  .topbar { flex-wrap: nowrap; padding: 6px 10px; position: relative; }
+  .topbar-left { min-width: 0; flex: 1; }
+  .topbar-right { flex-wrap: nowrap; gap: 6px; }
+  .show-narrow { display: inline-flex !important; }
+  .topbar-more {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 8px;
+    z-index: 70;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 10px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-md);
+  }
+  .topbar-more.open { display: flex; }
+  .topbar-more .tab-group { flex-wrap: wrap; max-width: 260px; }
   .tab-chip { padding: 3px 6px; }
   .peer-subbar { padding: 6px 10px; justify-content: flex-start; }
-  .peer-pills-bar { justify-content: flex-start; }
-  .session-title-pill { max-width: 210px; }
+  .peer-pills-bar { justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .peer-pills-bar::-webkit-scrollbar { display: none; }
+  .peer-pill { padding: 4px 8px 6px; gap: 5px; }
+  .session-title-pill { max-width: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .review-box, .summary-card { margin-left: 0; }
   .hide-narrow { display: none !important; }
   .chat-scroll { padding: 14px 12px 22px; }
@@ -1292,7 +1314,7 @@ code.inline {
   <aside id="sidebar" class="sidebar">
     <div class="sidebar-head">
       <div class="brand-row">
-        <span class="brand-mark">C</span>
+        <span class="brand-mark"><svg viewBox="0 0 128 128" width="24" height="24" aria-hidden="true"><path d="M95.09 89.17A40 40 0 0 1 47.94 100.64" stroke="var(--peer-antigravity)" stroke-width="15.2" stroke-linecap="round" fill="none"/><path d="M32.20 88.26A40 40 0 0 1 32.20 39.74" stroke="var(--peer-chatgpt)" stroke-width="15.2" stroke-linecap="round" fill="none"/><path d="M47.94 27.36A40 40 0 0 1 95.09 38.83" stroke="var(--peer-claude)" stroke-width="15.2" stroke-linecap="round" fill="none"/><circle cx="67.2" cy="64" r="9.4" fill="var(--text-primary)"/></svg></span>
         <span class="brand-name">Consilium</span>
       </div>
       <span id="mission-count-pill" class="chip tabular-nums">0</span>
@@ -1323,13 +1345,16 @@ code.inline {
           <span class="conn-dot"></span>
           <span id="conn-text">连接中</span>
         </div>
-        <div class="seg" role="group" aria-label="主题切换">
-          <button type="button" class="seg-btn" data-set-theme="light">浅色</button>
-          <button type="button" class="seg-btn" data-set-theme="dark">深色</button>
-          <button type="button" class="seg-btn" data-set-theme="system">系统</button>
+        <button id="more-btn" type="button" class="icon-btn show-narrow" title="更多" aria-label="更多" aria-haspopup="true" aria-expanded="false">⋯</button>
+        <div id="topbar-more" class="topbar-more">
+          <div class="seg" role="group" aria-label="主题切换">
+            <button type="button" class="seg-btn" data-set-theme="light">浅色</button>
+            <button type="button" class="seg-btn" data-set-theme="dark">深色</button>
+            <button type="button" class="seg-btn" data-set-theme="system">系统</button>
+          </div>
+          <div id="top-drawer-tabs" class="tab-group" role="group" aria-label="右侧详情面板"></div>
+          <button id="logout-btn" type="button" class="btn-quiet">退出</button>
         </div>
-        <div id="top-drawer-tabs" class="tab-group" role="group" aria-label="右侧详情面板"></div>
-        <button id="logout-btn" type="button" class="btn-quiet">退出</button>
       </div>
     </header>
 
@@ -1357,7 +1382,7 @@ code.inline {
               </div>
               <textarea id="composer-input" class="composer-input" rows="1" placeholder="键入 / 呼出快捷命令，或输入交接提示词后复制 / 新开原生会话接手…"></textarea>
               <div class="composer-foot">
-                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                <div class="hide-narrow" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                   <button id="btn-slash-toggle" type="button" class="btn btn-sm">/ 功能</button>
                   <button type="button" class="btn btn-sm" data-open-tab="accounts">模型与账号</button>
                   <button type="button" class="btn btn-sm" data-open-tab="worktrees">工作树</button>
@@ -1657,8 +1682,8 @@ code.inline {
         '<span class="pill-name">' + esc(meta.label) + '</span>' +
         '<span class="pill-state hide-narrow">' + esc(STATUS_TEXT[stKey]) + '</span>' +
         '<span class="pill-quota tabular-nums ' + qCls + '">' + esc(quotaLabel) + '</span>' +
-        (isDemo ? '<span class="pill-badge">演示数据</span>' : "") +
-        (poolLen > 1 ? '<span class="pill-badge tabular-nums">' + poolLen + '号</span>' : "") +
+        (isDemo ? '<span class="pill-badge hide-narrow">演示数据</span>' : "") +
+        (poolLen > 1 ? '<span class="pill-badge tabular-nums hide-narrow">' + poolLen + '号</span>' : "") +
         '<span class="pill-track"><span class="pill-fill ' + meta.cls + ' ' + barCls + '" style="width:' + (hasQuota ? pct : 0) + '%;"></span></span>' +
       '</button>';
     }).join("");
@@ -1833,7 +1858,7 @@ code.inline {
           '<span class="chip">协调者 ' + esc((PEER_META[m.coordinator_peer] || { label: m.coordinator_peer }).label) + '</span>' +
           (m.workspace_path ? '<span class="chip mono">' + esc(m.workspace_path) + '</span>' : "") +
           (m.status !== "completed" && m.status !== "cancelled" && m.status !== "failed"
-            ? '<button type="button" class="btn btn-sm btn-subtle-danger" style="margin-left:auto;" data-close-mission="' + esc(m.mission_id) + '">关闭 Mission</button>'
+            ? '<button type="button" class="btn btn-sm btn-subtle-danger" style="margin-left:auto;" data-close-mission="' + esc(m.mission_id) + '">关闭会诊</button>'
             : "") +
         '</div>' +
       '</div>';
@@ -2356,7 +2381,7 @@ code.inline {
     if (closeBtn) {
       const mid = closeBtn.getAttribute("data-close-mission");
       openConfirm(
-        "关闭 Mission " + mid,
+        "关闭会诊 " + mid,
         "此操作将把该会诊标记为终态。若仍有未完成任务，可勾选强制取消剩余任务。",
         '<textarea id="close-summary-input" class="textarea" rows="3">通过 Consilium 会诊界面人工确认关闭。</textarea>' +
         '<select id="close-status-select" class="select">' +
@@ -2452,6 +2477,25 @@ code.inline {
     if (e.key === "Enter") document.getElementById("login-submit").click();
   });
 
+  (function () {
+    const moreBtn = document.getElementById("more-btn");
+    const moreMenu = document.getElementById("topbar-more");
+    function setMore(open) {
+      moreMenu.classList.toggle("open", open);
+      moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+    moreBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setMore(!moreMenu.classList.contains("open"));
+    });
+    moreMenu.addEventListener("click", (e) => {
+      if (e.target.closest("button") && !e.target.closest(".seg")) setMore(false);
+    });
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest("#topbar-more") && !e.target.closest("#more-btn")) setMore(false);
+    });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") setMore(false); });
+  })();
   document.getElementById("logout-btn").addEventListener("click", async () => {
     stopStreams();
     await fetch("/api/logout", {
