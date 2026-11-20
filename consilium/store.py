@@ -34,6 +34,9 @@ from consilium.models import (
 )
 from consilium.wakeup import query_active_waiters, write_peer_seq
 
+# Account-level limit windows shown as a peer's remaining quota (per-model windows are detail only).
+HEADLINE_QUOTA_KEYS = {"antigravity": ("gemini-5h", "gemini-weekly")}
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS peers (
     peer_id TEXT PRIMARY KEY,
@@ -2946,11 +2949,14 @@ class BusStore:
                     pool_ids.append(aid)
 
             def _non_expired(wins: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-                return [
+                kept = [
                     w
                     for w in wins
                     if not (w.get("expired_reset") and w["remaining_percent"] <= 0.0)
                 ]
+                # Some sources report dozens of per-model windows; the account-level limits are the headline.
+                headline = [w for w in kept if w.get("window_key") in HEADLINE_QUOTA_KEYS.get(p, ())]
+                return headline or kept
 
             def _is_acct_current(aid: str) -> bool:
                 if aid in reg_map:
@@ -3130,6 +3136,9 @@ class BusStore:
                     "peer_id": p,
                     "active_account_id": active_acct_id or "",
                     "active_account_alias": active_alias,
+                    "active_plan_type": next(
+                        (e.get("plan_type") or "" for e in pool_entries if e["account_id"] == (active_acct_id or "")), ""
+                    ),
                     "current_account_unknown": current_account_unknown,
                     "account_switch_suspected": account_switch_suspected,
                     "min_remaining_percent": min_rem,

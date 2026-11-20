@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import time
 import sqlite3
 import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
@@ -66,7 +67,8 @@ def _load_cockpit_codex_registry(cockpit_dir: str) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         return empty
 
-    current_raw = "" if json_index_stale else str(raw.get("current_account_id") or "").strip()
+    pointer_raw = str(raw.get("current_account_id") or "").strip()
+    current_raw = "" if json_index_stale else pointer_raw
     items = raw.get("accounts")
     if not isinstance(items, list):
         return empty
@@ -81,6 +83,7 @@ def _load_cockpit_codex_registry(cockpit_dir: str) -> Dict[str, Any]:
     lookup: Dict[str, Dict[str, Any]] = {}
     entries: List[Dict[str, Any]] = []
     current_canon = ""
+    pointer_canon = ""
     for idx, entry in enumerate(items):
         if not isinstance(entry, dict):
             continue
@@ -100,6 +103,11 @@ def _load_cockpit_codex_registry(cockpit_dir: str) -> Dict[str, Any]:
         )
         if is_current:
             current_canon = canon_id
+        if pointer_raw and (
+            (raw_id and raw_id == pointer_raw)
+            or (not raw_id and raw_email and raw_email.lower() == pointer_raw.lower())
+        ):
+            pointer_canon = canon_id
         meta = {
             "account_id": canon_id,
             "account_alias": _account_alias(idx),
@@ -120,7 +128,137 @@ def _load_cockpit_codex_registry(cockpit_dir: str) -> Dict[str, Any]:
         "lookup": lookup,
         "entries": entries,
         "json_index_stale": json_index_stale,
+        "pointer_id": pointer_canon,
     }
+
+
+CURRENT_FRESH_SECONDS = 1800
+
+
+def _load_cockpit_claude_accounts(cockpit_dir: str) -> List[Dict[str, Any]]:
+    """Claude accounts known to Cockpit (id and plan only; Cockpit keeps no Claude quota history)."""
+    try:
+        with open(os.path.join(cockpit_dir, "claude_accounts.json"), "r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+        items = raw.get("accounts") if isinstance(raw, dict) else None
+    except (OSError, ValueError):
+        return []
+    if not isinstance(items, list):
+        return []
+    current_raw = ""
+    try:
+        with open(os.path.join(cockpit_dir, "provider_current_accounts.json"), "r", encoding="utf-8") as handle:
+            cur = json.load(handle)
+        current_raw = str(((cur or {}).get("current_accounts") or {}).get("claude_desktop_account") or "").strip()
+    except (OSError, ValueError, AttributeError):
+        current_raw = ""
+    out: List[Dict[str, Any]] = []
+    for idx, entry in enumerate(items):
+        if not isinstance(entry, dict):
+            continue
+        raw_id = str(entry.get("id") or "").strip()
+        if not raw_id:
+            continue
+        out.append(
+            {
+                "account_id": _hash_account_ref(raw_id, always_hash=True),
+                "account_alias": _account_alias(idx),
+                "plan_type": str(entry.get("plan_type") or "").strip(),
+                "is_current": (raw_id == current_raw) or (len(items) == 1),
+            }
+        )
+    return out
+
+
+def _iso_to_epoch(value: str) -> Optional[float]:
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _latest_by_account(records: List[Dict[str, Any]], peer: str) -> Dict[str, float]:
+    latest: Dict[str, float] = {}
+    for r in records:
+        if r.get("peer_id") != peer or r.get("is_historical"):
+            continue
+        ts = _iso_to_epoch(r.get("observed_at") or "")
+        if ts is not None and ts > latest.get(r["account_id"], 0.0):
+            latest[r["account_id"]] = ts
+    return latest
+
+
+def _read_codex_bind_id(cockpit_dir: str, registry: Dict[str, Any]) -> str:
+    """codex_instances.json → defaultSettings.bindAccountId (the account Cockpit launches Codex with)."""
+    try:
+        with open(os.path.join(cockpit_dir, "codex_instances.json"), "r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+        bind = str(((raw or {}).get("defaultSettings") or {}).get("bindAccountId") or "").strip()
+    except (OSError, ValueError, AttributeError):
+        return ""
+    hit = (registry.get("lookup") or {}).get(bind) if bind else None
+    return str(hit["account_id"]) if hit else ""
+
+
+def resolve_codex_current(
+    cockpit_dir: str, registry: Dict[str, Any], records: List[Dict[str, Any]], now: Optional[float] = None
+) -> str:
+    """Confirm Codex's current account when codex_accounts.json is older than Cockpit's SQLite index.
+
+    The JSON pointer alone may be stale, so it is only trusted with fresh corroboration: the same account
+    must be the one Cockpit binds Codex to, or be the most recently refreshed one, with a sample younger
+    than CURRENT_FRESH_SECONDS. With no pointer, a single freshly refreshed account is taken as current.
+    """
+    if not registry.get("present"):
+        return ""
+    if registry.get("current_id"):
+        return str(registry["current_id"])
+    now_ts = time.time() if now is None else now
+    latest = _latest_by_account(records, "chatgpt")
+    fresh = {a: t for a, t in latest.items() if now_ts - t <= CURRENT_FRESH_SECONDS}
+    pointer = str(registry.get("pointer_id") or "")
+    if pointer and pointer in fresh:
+        newest = max(latest, key=lambda a: latest[a])
+        if pointer == newest or pointer == _read_codex_bind_id(cockpit_dir, registry):
+            return pointer
+    if not pointer and len(fresh) == 1:
+        return next(iter(fresh))
+    return ""
+
+
+def resolve_antigravity_current(
+    cockpit_dir: str, records: List[Dict[str, Any]], tolerance_sec: float = 180.0
+) -> str:
+    """Map Cockpit's current Antigravity account (current_account.json email) to a quota account.
+
+    Cockpit keeps one quota cache file per account named sha256(email).json. Its modification time is
+    the moment that account's quota was last fetched, which matches exactly one account's newest
+    observation. Only the email pointer is read and the cache file is stat()ed, never opened.
+    """
+    try:
+        with open(os.path.join(cockpit_dir, "current_account.json"), "r", encoding="utf-8") as handle:
+            email = str((json.load(handle) or {}).get("email") or "").strip()
+    except (OSError, ValueError, AttributeError):
+        return ""
+    if not email:
+        return ""
+    cache = os.path.join(
+        cockpit_dir, "cache", "quota_api_v1_desktop", "authorized",
+        hashlib.sha256(email.encode("utf-8")).hexdigest() + ".json",
+    )
+    try:
+        mtime = os.stat(cache).st_mtime
+    except OSError:
+        return ""
+    latest = _latest_by_account(records, "antigravity")
+    close = [a for a, t in latest.items() if abs(t - mtime) <= tolerance_sec]
+    return close[0] if len(close) == 1 else ""
+
+
+def _mark_current(records: List[Dict[str, Any]], peer: str, account_id: str) -> None:
+    for r in records:
+        if r.get("peer_id") == peer and not r.get("is_historical"):
+            r["is_current"] = bool(account_id) and r["account_id"] == account_id
 
 
 def normalize_ts_to_iso(value: Any) -> str:
@@ -586,14 +724,23 @@ def sync_local_quotas(
     home = os.path.abspath(os.path.expanduser(effective_home))
     cockpit_dir = os.path.join(home, ".antigravity_cockpit")
     codex_registry = _load_cockpit_codex_registry(cockpit_dir)
-    if codex_registry.get("present"):
-        store.sync_peer_accounts("chatgpt", codex_registry.get("entries") or [])
-        if codex_registry.get("json_index_stale"):
-            store.clear_peer_cockpit_current("chatgpt")
-    else:
-        store.clear_peer_cockpit_current("chatgpt")
     discovered: List[Dict[str, Any]] = []
     cockpit_records = _collect_cockpit_sqlite(cockpit_dir, codex_registry=codex_registry)
+    if codex_registry.get("present"):
+        codex_current = resolve_codex_current(cockpit_dir, codex_registry, cockpit_records)
+        entries = [dict(e, is_current=bool(codex_current) and e["account_id"] == codex_current)
+                   for e in (codex_registry.get("entries") or [])]
+        store.sync_peer_accounts("chatgpt", entries)
+        _mark_current(cockpit_records, "chatgpt", codex_current)
+        if not codex_current:
+            store.clear_peer_cockpit_current("chatgpt")
+            store.sync_peer_accounts("chatgpt", entries)
+    else:
+        store.clear_peer_cockpit_current("chatgpt")
+    _mark_current(cockpit_records, "antigravity", resolve_antigravity_current(cockpit_dir, cockpit_records))
+    claude_accounts = _load_cockpit_claude_accounts(cockpit_dir)
+    if claude_accounts:
+        store.sync_peer_accounts("claude", claude_accounts)
     discovered.extend(cockpit_records)
     rollout_records = _collect_codex_rollouts(os.path.join(home, ".codex"))
     if codex_registry.get("present") and any(
