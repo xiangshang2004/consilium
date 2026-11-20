@@ -612,45 +612,8 @@ code.inline {
   font-size: 12px;
   color: var(--text-muted);
 }
-.side-board { padding: 10px 14px 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
-.side-board-title { font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between; }
-.board-bars { display: flex; flex-direction: column; gap: 5px; }
-.board-bar-row { display: grid; grid-template-columns: 64px 1fr 40px; align-items: center; gap: 6px; font-size: 11.5px; }
-.board-track { height: 6px; border-radius: 999px; background: var(--bg-subtle); overflow: hidden; }
-.board-fill { height: 100%; border-radius: 999px; }
-.board-fill.claude { background: var(--peer-claude); }
-.board-fill.chatgpt { background: var(--peer-chatgpt); }
-.board-fill.antigravity { background: var(--peer-antigravity); }
-.board-num { text-align: right; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.board-cols { display: flex; align-items: flex-end; gap: 14px; height: 54px; padding: 0 4px; }
-.board-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: var(--text-muted); }
-.board-col-bar { width: 100%; max-width: 26px; border-radius: 4px 4px 2px 2px; min-height: 2px; }
-.board-col-bar.claude { background: var(--peer-claude); }
-.board-col-bar.chatgpt { background: var(--peer-chatgpt); }
-.board-col-bar.antigravity { background: var(--peer-antigravity); }
-.peer-overview { padding: 4px 14px 10px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
-.peer-ov-row { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
-.peer-ov-top { display: flex; align-items: center; gap: 6px; }
-.peer-ov-top .grow { flex: 1; }
-.peer-ov-sub { font-size: 11.5px; color: var(--text-muted); padding-left: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mission-detail { margin: -2px 6px 8px; padding: 8px 10px 10px; border-left: 2px solid var(--border-strong); font-size: 12px; color: var(--text-secondary); display: flex; flex-direction: column; gap: 6px; }
-.mission-detail-label { color: var(--text-muted); font-size: 11px; }
-.mission-detail-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.mission-detail-row .grow { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ws-btn { border: none; background: transparent; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ws-btn:hover { text-decoration: underline; }
 .standby-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12.5px; color: var(--text-secondary); background: var(--bg-subtle); border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; }
 .standby-banner.hidden { display: none; }
-.sidebar-foot {
-  padding: 10px 14px;
-  border-top: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--text-muted);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
 
 /* Main Workspace */
 .main-col {
@@ -711,9 +674,6 @@ code.inline {
 /* Dedicated Compact Peer Sub-Bar (Always Unclipped Across 1440px & 390px) */
 /* Claude-like simplicity: peer status lives in the composer chips; the capsule strip is hidden. */
 .peer-subbar { display: none !important; }
-.chat-head { display: flex; align-items: center; gap: 10px; padding: 4px 0 14px; }
-.chat-head-title { font-size: 15px; font-weight: 650; min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-head-state { font-size: 12px; color: var(--text-muted); }
 .btn-link, .btn-link-danger { border: none; background: transparent; padding: 2px 4px; font-size: 12.5px; cursor: pointer; color: var(--text-muted); }
 .btn-link:hover { color: var(--text-primary); text-decoration: underline; }
 .btn-link-danger:hover { color: #dc2626; }
@@ -731,11 +691,6 @@ code.inline {
 .chat-pending { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-muted); margin: 4px 0 12px 44px; }
 .chat-pending .dot { animation: pulseDot 1.4s ease-in-out infinite; }
 @keyframes pulseDot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-.chat-empty { text-align: center; padding: 18vh 16px 24px; color: var(--text-muted); }
-.chat-empty-mark { display: inline-flex; margin-bottom: 14px; }
-.chat-empty-mark svg { width: 40px; height: 40px; }
-.chat-empty-title { font-size: 22px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
-.chat-empty-sub { font-size: 13.5px; }
 .target-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: transparent; border-radius: 999px; padding: 3px 10px; font-size: 12.5px; cursor: pointer; color: var(--text-secondary); }
 .target-chip.active { background: var(--text-primary); color: var(--bg-surface); border-color: var(--text-primary); }
 .compose-opts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; position: relative; }
@@ -749,16 +704,11 @@ code.inline {
 .folder-item:hover, .folder-item.current { background: var(--bg-subtle); }
 .folder-item .path { font-size: 11px; color: var(--text-muted); max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .folder-sep { height: 1px; background: var(--border); margin: 4px 2px; }
-.tier-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-.tier-seg button { border: none; background: transparent; padding: 3px 10px; font-size: 12px; cursor: pointer; color: var(--text-secondary); }
-.tier-seg button.active { background: var(--text-primary); color: var(--bg-surface); }
 .folder-group { margin-top: 6px; }
 .folder-group-head { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-muted); padding: 6px 8px 2px; }
 .folder-group-head .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .archived-toggle { border: none; background: transparent; font-size: 11.5px; color: var(--text-muted); padding: 8px; cursor: pointer; text-align: left; }
 .title-input { font: inherit; font-size: 15px; font-weight: 650; padding: 2px 6px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-surface); color: var(--text-primary); min-width: 0; flex: 1; }
-.head-folder { font-size: 12px; color: var(--text-muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
-.chat-head-title { cursor: text; }
 .opt-chip { display: inline-flex; align-items: center; gap: 4px; border: 1px dashed var(--border-strong); background: transparent; border-radius: 999px; padding: 2px 10px; font-size: 12px; cursor: pointer; color: var(--text-secondary); max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .opt-chip.on { border-style: solid; color: var(--text-primary); background: var(--bg-subtle); }
 .ws-compose-input { font: inherit; font-size: 12px; padding: 3px 8px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--bg-surface); color: var(--text-primary); width: 360px; }
@@ -1395,6 +1345,156 @@ __PEER_ICON_CSS__
   .chat-scroll { padding: 14px 12px 22px; }
   .composer-wrap { padding: 8px 12px 12px; }
 }
+
+/* ===== R019 "paper & ink" redesign: warm paper, serif titles, colour only for the three peers ===== */
+:root {
+  --bg-canvas: #F6F3EB; --bg-side: #EEEADF; --bg-surface: #FFFFFF; --bg-subtle: #EFEBE1; --bg-elevated: #FFFFFF;
+  --bg-hover: #E7E2D6; --bubble: #E9E4D7;
+  --border: rgba(30, 29, 26, 0.10); --border-strong: rgba(30, 29, 26, 0.17);
+  --text-primary: #1E1D1A; --text-secondary: #55524A; --text-muted: #8C887D;
+  --accent: #1E1D1A; --accent-fg: #FFFFFF; --bar-track: rgba(30, 29, 26, 0.10);
+  --status-standby: #2E9E5B; --status-working: #4763E4; --status-online: #2E9E5B; --status-offline: #B0AB9F;
+  --shadow-md: 0 1px 2px rgba(30, 29, 26, 0.05), 0 8px 28px rgba(30, 29, 26, 0.08);
+  --font-serif: ui-serif, "New York", "Songti SC", "STSong", Georgia, serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] {
+    --bg-canvas: #1F1E1B; --bg-side: #191816; --bg-surface: #2A2925; --bg-subtle: #2F2D29; --bg-elevated: #2F2E2A;
+    --bg-hover: #36342F; --bubble: #34322D;
+    --border: rgba(236, 232, 222, 0.09); --border-strong: rgba(236, 232, 222, 0.16);
+    --text-primary: #ECE8DE; --text-secondary: #B9B4A7; --text-muted: #8A8579;
+    --accent: #ECE8DE; --accent-fg: #1F1E1B; --bar-track: rgba(236, 232, 222, 0.12);
+    --peer-claude: #E08A62; --peer-chatgpt: #3CCB9E; --peer-antigravity: #8399FF;
+    --status-standby: #4CC47F; --status-working: #8399FF; --status-online: #4CC47F; --status-offline: #6F6B62;
+    --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 30px rgba(0, 0, 0, 0.35);
+  }
+}
+:root[data-theme="dark"] {
+  --bg-canvas: #1F1E1B; --bg-side: #191816; --bg-surface: #2A2925; --bg-subtle: #2F2D29; --bg-elevated: #2F2E2A;
+  --bg-hover: #36342F; --bubble: #34322D;
+  --border: rgba(236, 232, 222, 0.09); --border-strong: rgba(236, 232, 222, 0.16);
+  --text-primary: #ECE8DE; --text-secondary: #B9B4A7; --text-muted: #8A8579;
+  --accent: #ECE8DE; --accent-fg: #1F1E1B; --bar-track: rgba(236, 232, 222, 0.12);
+  --peer-claude: #E08A62; --peer-chatgpt: #3CCB9E; --peer-antigravity: #8399FF;
+  --status-standby: #4CC47F; --status-working: #8399FF; --status-online: #4CC47F; --status-offline: #6F6B62;
+  --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+
+/* sidebar */
+.sidebar { width: 264px; background: var(--bg-side); border-right: 1px solid var(--border); }
+.sidebar-head { height: auto; padding: 16px 16px 8px; border-bottom: none; }
+.brand-row { gap: 9px; }
+.brand-mark { width: 22px; height: 22px; }
+.brand-mark svg { width: 22px; height: 22px; }
+.brand-name { font-family: var(--font-serif); font-size: 17px; font-weight: 600; letter-spacing: 0.01em; }
+.new-row { margin: 2px 10px 4px; display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 9px; border: none; background: transparent; cursor: pointer; font-size: 13.5px; font-weight: 500; color: var(--text-primary); flex-shrink: 0; }
+.new-row:hover { background: var(--bg-hover); }
+.new-row .plus { width: 20px; height: 20px; border-radius: 999px; background: var(--text-primary); color: var(--bg-side); display: inline-flex; align-items: center; justify-content: center; font-size: 14px; line-height: 1; }
+.new-row kbd { margin-left: auto; font-family: var(--font-sans); font-size: 11px; color: var(--text-muted); }
+.sidebar-scroll { padding: 2px 10px 10px; }
+.folder-group { margin-top: 0; }
+.folder-group-head { font-size: 11.5px; color: var(--text-muted); padding: 12px 10px 4px; letter-spacing: 0.02em; }
+.mission-item { flex-direction: row; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; font-size: 13.5px; color: var(--text-secondary); }
+.mission-item:hover { background: var(--bg-hover); }
+.mission-item.active { background: var(--bg-hover); color: var(--text-primary); box-shadow: none; }
+.mi-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mi-live { width: 6px; height: 6px; border-radius: 999px; background: var(--status-working); animation: pulseDot 1.6s ease-in-out infinite; flex-shrink: 0; }
+.mi-who { display: inline-flex; flex-shrink: 0; }
+.mi-who .peer-icon { width: 14px; height: 14px; border-radius: 4px; margin-left: -3px; box-shadow: 0 0 0 1.5px var(--bg-side); }
+.archived-toggle { font-size: 12px; padding: 10px; }
+
+/* three-peer dock */
+.dock-wrap { position: relative; flex-shrink: 0; margin: 0 10px 10px; }
+.peer-dock { padding: 8px 8px 8px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 14px; }
+.dock-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 8px; }
+.dock-row + .dock-row { margin-top: 2px; }
+.dock-main { display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: center; column-gap: 9px; border: none; background: transparent; padding: 5px 4px; border-radius: 9px; cursor: pointer; text-align: left; color: inherit; min-width: 0; }
+.dock-main:hover { background: var(--bg-hover); }
+.dock-ic { position: relative; width: 26px; height: 26px; }
+.dock-ic .peer-icon { width: 26px; height: 26px; border-radius: 7px; display: block; }
+.dock-ic i { position: absolute; right: -2px; bottom: -2px; width: 9px; height: 9px; border-radius: 999px; border: 2px solid var(--bg-surface); background: var(--status-offline); }
+.dock-ic i.on { background: var(--status-standby); }
+.dock-ic i.busy { background: var(--status-working); }
+.dock-name { font-size: 13px; font-weight: 550; line-height: 1.25; display: block; }
+.dock-sub { font-size: 11.5px; color: var(--text-muted); line-height: 1.3; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dock-side { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; padding-right: 4px; }
+.dock-ring { width: 22px; height: 22px; transform: rotate(-90deg); }
+.dock-ring circle { fill: none; stroke-width: 3.2; }
+.dock-ring .bg { stroke: var(--border-strong); }
+.wake-btn { border: 1px solid var(--border-strong); background: transparent; border-radius: 999px; padding: 1px 9px; font-size: 11.5px; cursor: pointer; color: var(--text-secondary); }
+.wake-btn:hover { background: var(--bg-hover); }
+.dock-today { margin: 8px 4px 2px; padding-top: 8px; border-top: 1px solid var(--border); }
+.dock-today-lab { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); margin-bottom: 5px; }
+.dock-seg { display: flex; height: 6px; gap: 2px; }
+.dock-seg span { display: block; border-radius: 999px; min-width: 6px; }
+.dock-wrap .peer-popover { top: auto; bottom: calc(100% + 8px); left: 0; right: auto; transform: none; width: 320px; max-height: 60vh; overflow: auto; }
+
+/* top bar */
+.topbar { background: transparent; border-bottom: none; padding: 12px 18px 6px; min-height: 0; }
+.topbar-left { gap: 10px; }
+.top-title { font-family: var(--font-serif); font-size: 17px; font-weight: 600; letter-spacing: 0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46vw; cursor: text; }
+.top-title.plain { cursor: default; color: var(--text-muted); font-weight: 500; }
+.top-folder { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-secondary); border: 1px solid var(--border); border-radius: 999px; padding: 1px 9px; white-space: nowrap; }
+.title-input { font-family: var(--font-serif); font-size: 17px; font-weight: 600; flex: 0 1 420px; }
+.conn-badge.live { display: none; }
+.conv-actions { display: flex; flex-direction: column; gap: 2px; }
+.conv-actions:empty { display: none; }
+.menu-item { border: none; background: transparent; text-align: left; padding: 6px 8px; border-radius: 8px; font-size: 13px; cursor: pointer; color: var(--text-primary); }
+.menu-item:hover { background: var(--bg-hover); }
+.menu-item.muted { color: var(--text-muted); cursor: default; }
+.menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+
+/* conversation */
+.chat-scroll { padding: 10px 24px 30px; }
+.chat-container { max-width: 720px; gap: 0; }
+.chat-user { margin: 18px 0 14px; gap: 5px; }
+.chat-user-bubble { background: var(--bubble); border-radius: 18px 18px 6px 18px; padding: 9px 14px; font-size: 14.5px; }
+.chat-agent { display: grid; grid-template-columns: 26px minmax(0, 1fr); column-gap: 12px; margin: 14px 0 20px; }
+.chat-agent > .peer-icon { width: 26px; height: 26px; border-radius: 7px; margin-top: 2px; }
+.chat-agent-head { gap: 8px; margin-bottom: 2px; }
+.chat-agent-head .msg-author { font-size: 13.5px; font-weight: 600; }
+.chat-agent-head .msg-sub { font-size: 11.5px; color: var(--text-muted); }
+.chat-agent-text { font-size: 14.5px; line-height: 1.7; }
+.chat-note { display: flex; align-items: center; gap: 10px; margin: 6px 0 6px 38px; font-size: 12px; }
+.chat-note::before { content: ""; width: 14px; height: 1px; background: var(--border-strong); flex-shrink: 0; }
+.chat-pending { margin: 10px 0 0; gap: 12px; font-size: 13px; color: var(--text-secondary); }
+.chat-pending > .peer-icon { width: 26px; height: 26px; border-radius: 7px; }
+.pend-dots { display: inline-flex; gap: 3px; }
+.pend-dots i { width: 4px; height: 4px; border-radius: 999px; background: var(--text-muted); animation: pulseDot 1.2s ease-in-out infinite; }
+.pend-dots i:nth-child(2) { animation-delay: 0.2s; }
+.pend-dots i:nth-child(3) { animation-delay: 0.4s; }
+.chat-hero { display: flex; flex-direction: column; align-items: center; padding: 0 0 26px; }
+.chat-hero svg { width: 44px; height: 44px; margin-bottom: 18px; }
+.chat-hero h2 { margin: 0; font-family: var(--font-serif); font-weight: 500; font-size: 32px; letter-spacing: 0.01em; }
+
+/* composer */
+.composer-wrap { border-top: none; background: transparent; padding: 0 24px 16px; }
+.composer-inner { max-width: 720px; }
+.composer-box { background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: 20px; box-shadow: var(--shadow-md); padding: 12px 12px 10px 16px; gap: 8px; }
+.composer-input { font-size: 14.5px; min-height: 26px; max-height: 220px; }
+.composer-foot { display: flex; align-items: center; gap: 6px; position: relative; }
+.compose-opts { margin: 0; gap: 6px; position: static; }
+.compose-opts:not(:empty)::after { content: ""; width: 1px; height: 16px; background: var(--border-strong); margin: 0 4px; }
+.folder-btn, .tier-btn, .target-chip { height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--border); background: transparent; font-size: 12.5px; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.folder-btn:hover, .tier-btn:hover, .target-chip:hover { background: var(--bg-hover); }
+.target-chip.active { background: var(--text-primary); color: var(--bg-surface); border-color: var(--text-primary); }
+.target-chip .peer-icon { width: 15px; height: 15px; border-radius: 4px; }
+.caret { color: var(--text-muted); font-size: 10px; }
+.folder-menu, .tier-menu { position: absolute; left: 0; bottom: auto; top: calc(100% + 8px); z-index: 80; background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: 14px; box-shadow: var(--shadow-md); padding: 6px; display: flex; flex-direction: column; }
+.folder-menu { width: 320px; max-width: none; min-width: 0; }
+.tier-menu { width: 220px; left: 120px; }
+.folder-item { border-radius: 9px; }
+.folder-item.current { background: var(--bg-hover); }
+.send-btn { margin-left: auto; background: var(--text-primary); color: var(--bg-surface); flex-shrink: 0; }
+.standby-banner { background: transparent; justify-content: center; gap: 6px; font-size: 11.5px; color: var(--text-muted); padding: 8px 0 0; margin: 0; }
+.standby-banner .btn-link { font-size: 11.5px; text-decoration: underline; text-underline-offset: 2px; padding: 0 2px; }
+
+/* new conversation: greeting and composer centred */
+.chat-column.is-new { justify-content: center; padding-bottom: 20vh; }
+.chat-column.is-new .chat-scroll { flex: 0 0 auto; overflow: visible; padding-bottom: 0; }
+.chat-column.is-new .composer-inner { max-width: 680px; }
+.chat-column:not(.is-new) .folder-menu, .chat-column:not(.is-new) .tier-menu { top: auto; bottom: calc(100% + 8px); }
 </style>
 </head>
 <body>
@@ -1406,20 +1506,16 @@ __PEER_ICON_CSS__
         <span class="brand-mark"><svg viewBox="0 0 128 128" width="24" height="24" aria-hidden="true"><path d="M95.09 89.17A40 40 0 0 1 47.94 100.64" stroke="var(--peer-antigravity)" stroke-width="15.2" stroke-linecap="round" fill="none"/><path d="M32.20 88.26A40 40 0 0 1 32.20 39.74" stroke="var(--peer-chatgpt)" stroke-width="15.2" stroke-linecap="round" fill="none"/><path d="M47.94 27.36A40 40 0 0 1 95.09 38.83" stroke="var(--peer-claude)" stroke-width="15.2" stroke-linecap="round" fill="none"/><circle cx="67.2" cy="64" r="9.4" fill="var(--text-primary)"/></svg></span>
         <span class="brand-name">Consilium</span>
       </div>
-      <button id="new-chat-btn" type="button" class="new-chat-btn" title="新会诊">＋ 新会诊</button>
-      <span id="mission-count-pill" class="chip tabular-nums" style="display:none;">0</span>
     </div>
+    <button id="new-chat-btn" type="button" class="new-row" title="新会诊"><span class="plus">+</span>新会诊<kbd>⌘N</kbd></button>
     <div class="sidebar-scroll">
-      <div class="side-label"><span>三端</span><span></span></div>
-      <div id="peer-overview" class="peer-overview"></div>
-      <div class="side-label"><span>会诊列表</span><span>按最近更新</span></div>
       <div id="mission-list"></div>
     </div>
-    <div id="side-board" class="side-board"></div>
-    <div class="sidebar-foot">
-      <span class="tabular-nums">运行 <strong id="uptime-val">00:00:00</strong></span>
-      <span id="version-pill" class="mono">v__VERSION__</span>
+    <div class="dock-wrap">
+      <div id="peer-popover" class="peer-popover hidden" role="dialog" aria-label="原生端账号与接手详情"></div>
+      <div id="peer-dock" class="peer-dock" aria-label="三端状态、模型与当前账号余量"></div>
     </div>
+    <span hidden><span id="mission-count-pill">0</span><span id="uptime-val">00:00:00</span><span id="version-pill">v__VERSION__</span></span>
   </aside>
 
   <!-- Main Workspace -->
@@ -1428,8 +1524,9 @@ __PEER_ICON_CSS__
     <header class="topbar">
       <div class="topbar-left">
         <button id="sidebar-toggle-btn" type="button" class="icon-btn" title="展开/收起会诊列表" aria-label="展开或收起侧栏">☰</button>
-        <span id="active-mission-title" class="session-title-pill">新会诊</span>
-        <span id="active-mission-badge" class="chip">空闲</span>
+        <span id="top-title-wrap" style="display:contents;"><span id="active-mission-title" class="top-title plain">新会诊</span></span>
+        <span id="top-folder" class="top-folder" style="display:none;"></span>
+        <span id="active-mission-badge" class="chip" style="display:none;">空闲</span>
       </div>
 
       <!-- Right: Connection + Theme + Collapsible Right Drawer Tabs + Logout -->
@@ -1440,6 +1537,7 @@ __PEER_ICON_CSS__
         </div>
         <button id="more-btn" type="button" class="icon-btn" title="更多" aria-label="更多" aria-haspopup="true" aria-expanded="false">⋯</button>
         <div id="topbar-more" class="topbar-more">
+          <div id="conv-actions" class="conv-actions"></div>
           <div class="seg" role="group" aria-label="主题切换">
             <button type="button" class="seg-btn" data-set-theme="light">浅色</button>
             <button type="button" class="seg-btn" data-set-theme="dark">深色</button>
@@ -1454,7 +1552,6 @@ __PEER_ICON_CSS__
     <!-- Dedicated Compact 3-Peer Status & Quota Strip -->
     <div class="peer-subbar">
       <div id="top-peer-pills" class="peer-pills-bar" aria-label="三端原生状态与当前账号配额"></div>
-      <div id="peer-popover" class="peer-popover hidden" role="dialog" aria-label="原生端账号与接手详情"></div>
     </div>
 
     <div class="workspace-body">
@@ -1467,16 +1564,16 @@ __PEER_ICON_CSS__
         <!-- Bottom Pure-Frontend Bar -->
         <footer class="composer-wrap">
           <div class="composer-inner">
-            <div id="standby-banner" class="standby-banner hidden"></div>
             <div id="slash-palette" class="slash-palette hidden" role="menu"></div>
             <div class="composer-box">
-              <div id="compose-opts" class="compose-opts"></div>
-              <textarea id="composer-input" class="composer-input" rows="1" placeholder="给 Claude、Codex、Antigravity 发消息…（Enter 发送，Shift+Enter 换行）"></textarea>
+              <textarea id="composer-input" class="composer-input" rows="1" placeholder="说说要做的事…"></textarea>
               <div class="composer-foot">
+                <div id="compose-opts" class="compose-opts"></div>
                 <div id="handoff-targets" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"></div>
-                <button id="btn-send" type="button" class="send-btn" title="发送" aria-label="发送" disabled>↑</button>
+                <button id="btn-send" type="button" class="send-btn" title="发送（Enter）" aria-label="发送" disabled>↑</button>
               </div>
             </div>
+            <div id="standby-banner" class="standby-banner hidden"></div>
           </div>
         </footer>
       </section>
@@ -1574,6 +1671,7 @@ __PEER_ICON_CSS__
   let composingNew = false;
   let composeWorkspace = "";
   let folderMenuOpen = false;
+  let tierMenuOpen = false;
   let composeTier = "balanced";
   let renamingMission = null;
   let showArchived = false;
@@ -1715,7 +1813,7 @@ __PEER_ICON_CSS__
 
   function setConn(kind, text) {
     const pill = document.getElementById("conn-pill");
-    pill.className = "conn-badge hide-narrow" + (kind ? " " + kind : "");
+    pill.className = "conn-badge hide-narrow" + (kind ? " " + kind : "") + (text === "SSE 实时" ? " live" : "");
     document.getElementById("conn-text").textContent = text;
   }
 
@@ -1756,31 +1854,26 @@ __PEER_ICON_CSS__
   function renderSidebar(state) {
     const sidebar = document.getElementById("sidebar");
     sidebar.classList.toggle("collapsed", !isSidebarOpen());
-    renderPeerOverview(state);
-    renderSideBoard(state);
+    renderPeerDock(state);
     const missions = (state && state.missions) || [];
     document.getElementById("mission-count-pill").textContent = String(missions.length);
     const cur = getActiveMission(state);
     const listEl = document.getElementById("mission-list");
     if (!missions.length) {
-      listEl.innerHTML = '<div style="padding:12px;font-size:12.5px;color:var(--text-muted);">暂无会诊记录</div>';
+      listEl.innerHTML = "";
       return;
     }
     const itemHtml = m => {
       const tasks = m.tasks || [];
-      const doneCnt = tasks.filter(t => t.status === "done").length;
-      const dotCls = m.status === "completed" ? "standby" : (m.status === "active" ? "working" : "offline");
+      const closed = m.status === "completed" || m.status === "cancelled" || m.status === "failed";
+      const busy = !closed && tasks.some(t => t.status === "queued" || t.status === "claimed" || t.status === "running");
       const activeCls = cur && cur.mission_id === m.mission_id ? " active" : "";
-      return '<button type="button" class="mission-item' + activeCls + '" data-select-mission="' + esc(m.mission_id) + '">' +
-        '<div class="mission-item-top">' +
-          '<span class="mission-item-title">' + esc(m.title) + '</span>' +
-          '<span class="dot ' + dotCls + '"></span>' +
-        '</div>' +
-        '<div class="mission-item-sub">' +
-          '<span>' + esc(missionStatusText(m)) + '</span>' +
-          '<span class="tabular-nums" title="' + esc(m.mission_id + " · " + doneCnt + "/" + tasks.length) + '">' + esc(relativeAge(m.updated_at)) + '</span>' +
-        '</div>' +
-      '</button>' + (activeCls ? renderMissionDetails(m, state) : "");
+      const who = ["claude", "chatgpt", "antigravity"].filter(pid => tasks.some(t => t.assignee_peer === pid));
+      return '<button type="button" class="mission-item' + activeCls + '" data-select-mission="' + esc(m.mission_id) + '" title="' + esc(m.title + " · " + missionStatusText(m) + " · " + relativeAge(m.updated_at)) + '">' +
+        '<span class="mi-title">' + esc(m.title) + '</span>' +
+        (busy ? '<span class="mi-live"></span>' : "") +
+        '<span class="mi-who">' + who.map(pid => '<span class="peer-icon ' + pid + '" aria-hidden="true"></span>').join("") + '</span>' +
+      '</button>';
     };
     const live = missions.filter(m => !m.archived);
     const archived = missions.filter(m => m.archived);
@@ -1793,20 +1886,48 @@ __PEER_ICON_CSS__
     });
     listEl.innerHTML = groups.map(g =>
       '<div class="folder-group">' +
-        '<div class="folder-group-head" title="' + esc(g.key || "未选择文件夹的旧会诊") + '">📁 <span class="name">' + esc(g.key ? folderName(g.key) : "未选择文件夹") + '</span></div>' +
+        '<div class="folder-group-head" title="' + esc(g.key || "没有选文件夹的旧会诊") + '">' + esc(g.key ? folderName(g.key) : "其他") + '</div>' +
         g.items.map(itemHtml).join("") +
       '</div>'
     ).join("") +
     (archived.length
-      ? '<button type="button" class="archived-toggle" data-toggle-archived="1">' + (showArchived ? "▾" : "▸") + ' 已归档（' + archived.length + '）</button>' +
+      ? '<button type="button" class="archived-toggle" data-toggle-archived="1">已归档 ' + archived.length + '</button>' +
         (showArchived ? archived.map(itemHtml).join("") : "")
       : "");
   }
 
   function renderTopBar(state) {
     const cur = getActiveMission(state);
-    document.getElementById("active-mission-title").textContent = cur ? cur.title : "新会诊";
+    const titleWrap = document.getElementById("top-title-wrap");
+    if (!(cur && renamingMission === cur.mission_id && document.getElementById("title-input"))) {
+      titleWrap.innerHTML = !cur
+        ? '<span id="active-mission-title" class="top-title plain"></span>'
+        : (renamingMission === cur.mission_id
+            ? '<input id="title-input" class="title-input" maxlength="40" value="' + esc(cur.title) + '">'
+            : '<span id="active-mission-title" class="top-title" data-rename-mission="' + esc(cur.mission_id) + '" title="点击改名">' + esc(cur.title) + '</span>');
+    }
+    const folderEl = document.getElementById("top-folder");
+    if (cur && cur.workspace_path) {
+      folderEl.style.display = "";
+      folderEl.title = cur.workspace_path;
+      folderEl.textContent = "📁 " + folderName(cur.workspace_path);
+    } else {
+      folderEl.style.display = "none";
+    }
     document.getElementById("active-mission-badge").textContent = missionStatusText(cur);
+    const actEl = document.getElementById("conv-actions");
+    if (cur) {
+      const closedCur = cur.status === "completed" || cur.status === "cancelled" || cur.status === "failed";
+      actEl.innerHTML =
+        '<button type="button" class="menu-item" data-rename-mission="' + esc(cur.mission_id) + '">改名</button>' +
+        (closedCur ? "" : ((cur.native_sessions || {}).claude
+          ? '<span class="menu-item muted">Claude 专属会话已绑定</span>'
+          : '<button type="button" class="menu-item" data-dedicated-session="' + esc(cur.mission_id) + '" title="在这个文件夹里新开一个同名 Claude Code 会话，之后这个会诊的消息都交给它">在 Claude 里开专属会话</button>')) +
+        '<button type="button" class="menu-item" data-archive-mission="' + esc(cur.mission_id) + '"' + (cur.archived ? ' data-archive-undo="1">取消归档' : '>归档') + '</button>' +
+        '<div class="menu-sep"></div>';
+    } else {
+      actEl.innerHTML = "";
+    }
 
     const peers = (state && state.peers) || [];
     const quotas = {};
@@ -1979,102 +2100,52 @@ __PEER_ICON_CSS__
     return ({ active: "进行中", completed: "已完成", cancelled: "已结束", failed: "已结束" })[m.status] || m.status;
   }
 
-  function renderPeerOverview(state) {
-    const el = document.getElementById("peer-overview");
+  function renderPeerDock(state) {
+    const el = document.getElementById("peer-dock");
     if (!el) return;
+    const PIDS = ["claude", "chatgpt", "antigravity"];
     const waiters = (state && state.active_waiters) || {};
     const peers = (state && state.peers) || [];
     const models = (state && state.peer_models) || {};
     const quotas = {};
     ((state && state.quotas) || []).forEach(q => { quotas[q.peer_id] = q; });
-    el.innerHTML = ["claude", "chatgpt", "antigravity"].map(pid => {
-      const pr = peers.find(x => x.peer_id === pid) || { status: "offline" };
+    const busyPeers = {};
+    const doneToday = { claude: 0, chatgpt: 0, antigravity: 0 };
+    const today = new Date().toDateString();
+    ((state && state.missions) || []).forEach(m => (m.tasks || []).forEach(t => {
+      if (t.status === "claimed" || t.status === "running") busyPeers[t.assignee_peer] = true;
+      if (t.status === "done" && (t.assignee_peer in doneToday) && t.updated_at && new Date(t.updated_at).toDateString() === today) doneToday[t.assignee_peer] += 1;
+    }));
+    const rows = PIDS.map(pid => {
       const standby = Number(waiters[pid] || 0) > 0;
-      const st = standby ? "standby" : (STATUS_TEXT[pr.status] ? pr.status : "offline");
-      const neverSeen = !pr.last_seen_at;
-      const stTxt = standby ? "待命中" : (neverSeen ? "未接入" : (st === "offline" ? "未待命" : STATUS_TEXT[st]));
-      const q = quotas[pid] || {};
-      let acct;
-      if (q.account_switch_suspected) acct = "账号可能已切换";
-      else if (q.current_account_unknown || q.min_remaining_percent === null || q.min_remaining_percent === undefined) acct = "账号未知";
-      else acct = (q.active_account_alias || "当前账号") + " · 余量 " + Math.round(Number(q.min_remaining_percent)) + "%" + (q.earliest_reset_in_human ? " · " + q.earliest_reset_in_human + "后重置" : "");
-      const model = models[pid] || "模型未上报";
-      const action = standby ? "" : '<button type="button" class="btn-link" data-start-standby="' + pid + '">让它待命</button>';
-      return '<div class="peer-ov-row" title="' + esc(PEER_META[pid].appName + (q.switch_hint ? " · " + q.switch_hint : "")) + '">' +
-        '<div class="peer-ov-top"><span class="dot ' + st + '"></span><span class="peer-icon ' + pid + '" aria-hidden="true"></span><span>' + esc(PEER_META[pid].label) + '</span>' +
-          '<span class="grow" style="color:var(--text-muted);font-size:11.5px;">' + esc(stTxt) + '</span>' + action + '</div>' +
-        '<div class="peer-ov-sub">' + esc(acct) + '</div>' +
-        '<div class="peer-ov-sub">' + esc(model) + '</div>' +
-        (q.switch_hint ? '<div class="peer-ov-sub" style="color:var(--status-stale, #d97706);">' + esc(q.switch_hint) + '</div>' : "") +
-      '</div>';
-    }).join("");
-  }
-
-  function renderSideBoard(state) {
-    const el = document.getElementById("side-board");
-    if (!el) return;
-    const PIDS = ["claude", "chatgpt", "antigravity"];
-    const quotas = {};
-    ((state && state.quotas) || []).forEach(q => { quotas[q.peer_id] = q; });
-    const quotaRows = PIDS.map(pid => {
+      const busy = !!busyPeers[pid];
       const q = quotas[pid] || {};
       const known = !(q.current_account_unknown || q.account_switch_suspected) && q.min_remaining_percent !== null && q.min_remaining_percent !== undefined;
       const pct = known ? Math.max(0, Math.min(100, Number(q.min_remaining_percent))) : 0;
-      return '<div class="board-bar-row"><span>' + esc(PEER_META[pid].label) + '</span>' +
-        '<div class="board-track"><div class="board-fill ' + pid + '" style="width:' + pct + '%;"></div></div>' +
-        '<span class="board-num">' + (known ? Math.round(pct) + "%" : "—") + '</span></div>';
-    }).join("");
-    const done = { claude: 0, chatgpt: 0, antigravity: 0 };
-    const claim = { claude: [], chatgpt: [], antigravity: [] };
-    ((state && state.missions) || []).forEach(m => (m.tasks || []).forEach(t => {
-      if (!(t.assignee_peer in done)) return;
-      if (t.status === "done") done[t.assignee_peer] += 1;
-      if (typeof t.claim_latency_ms === "number") claim[t.assignee_peer].push(t.claim_latency_ms);
-    }));
-    const maxDone = Math.max(1, done.claude, done.chatgpt, done.antigravity);
-    const cols = PIDS.map(pid =>
-      '<div class="board-col" title="' + esc(PEER_META[pid].label + " 完成 " + done[pid] + " 个任务") + '">' +
-        '<span class="board-num">' + done[pid] + '</span>' +
-        '<div class="board-col-bar ' + pid + '" style="height:' + Math.round((done[pid] / maxDone) * 34) + 'px;"></div>' +
-        '<span>' + esc(PEER_META[pid].label) + '</span>' +
-      '</div>'
-    ).join("");
-    const latTxt = PIDS.map(pid => {
-      const arr = claim[pid];
-      if (!arr.length) return PEER_META[pid].label + " —";
-      const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
-      return PEER_META[pid].label + " " + (avg < 1000 ? Math.round(avg) + " ms" : (avg / 1000).toFixed(1) + " s");
-    }).join(" · ");
-    el.innerHTML =
-      '<div class="side-board-title"><span>当前账号余量</span></div><div class="board-bars">' + quotaRows + '</div>' +
-      '<div class="side-board-title"><span>完成的任务（最近会诊）</span></div><div class="board-cols">' + cols + '</div>' +
-      '<div class="side-board-title" title="从派出到被认领的平均用时"><span>平均认领用时</span></div>' +
-      '<div style="font-size:11.5px;color:var(--text-secondary);">' + esc(latTxt) + '</div>';
-  }
-
-  function renderMissionDetails(m, state) {
-    const waiters = (state && state.active_waiters) || {};
-    const byPeer = {};
-    (m.tasks || []).forEach(t => { byPeer[t.assignee_peer] = t; });
-    const ws = m.workspace_path || "";
-    const wsShort = ws ? ws.split("/").filter(Boolean).slice(-2).join("/") : "未选择";
-    const wsHtml = '<div class="mission-detail-row" title="' + esc(ws) + '"><span class="grow">📁 ' + esc(wsShort) + '</span></div>';
-    const peerRows = Object.keys(byPeer).map(pid => {
-      const t = byPeer[pid];
-      const st = t.status === "running" || t.status === "claimed" ? "working" : (Number(waiters[pid] || 0) > 0 ? "standby" : (t.status === "queued" ? "offline" : "online"));
-      const model = t.model_used || "模型未上报";
-      return '<div class="mission-detail-row" title="' + esc((PEER_META[pid] || {}).appName || pid) + " · 建议档位 " + esc(t.model_tier || "") + '">' +
-        '<span class="dot ' + st + '"></span>' +
-        '<span>' + esc(peerLabel(pid)) + '</span>' +
-        '<span class="grow" style="color:var(--text-muted);">' + esc(model) + '</span>' +
-        '<span style="color:var(--text-muted);">' + esc(TASK_STATUS_TEXT[t.status] || t.status) + '</span>' +
+      const stTxt = busy ? "处理中" : (standby ? "待命中" : "未待命");
+      const sub = [stTxt].concat(models[pid] ? [models[pid]] : []).concat(q.account_switch_suspected ? ["账号可能已切换"] : []).join(" · ");
+      const color = pid === "claude" ? "var(--peer-claude)" : (pid === "chatgpt" ? "var(--peer-chatgpt)" : "var(--peer-antigravity)");
+      const ring = known
+        ? '<svg class="dock-ring" viewBox="0 0 24 24" aria-hidden="true"><circle class="bg" cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="9" stroke="' + color + '" stroke-linecap="round" stroke-dasharray="' + (pct * 0.5655).toFixed(1) + ' 56.6"/></svg>' + Math.round(pct) + '%'
+        : "";
+      const wake = (!standby && !busy) ? '<button type="button" class="wake-btn" data-start-standby="' + pid + '" title="让它开始待命，之后发给它的消息会自动处理">叫醒</button>' : "";
+      const tip = PEER_META[pid].appName + (known ? " · " + (q.active_account_alias || "当前账号") + " 余量 " + Math.round(pct) + "%" + (q.earliest_reset_in_human ? "，" + q.earliest_reset_in_human + "后重置" : "") : " · 余量未知") + (q.switch_hint ? " · " + q.switch_hint : "");
+      return '<div class="dock-row">' +
+        '<button type="button" class="dock-main" data-peer-pill="' + pid + '" title="' + esc(tip) + '">' +
+          '<span class="dock-ic"><span class="peer-icon ' + pid + '" aria-hidden="true"></span><i class="' + (busy ? "busy" : (standby ? "on" : "")) + '"></i></span>' +
+          '<span style="min-width:0;"><span class="dock-name">' + esc(PEER_META[pid].label) + '</span><span class="dock-sub">' + esc(sub) + '</span></span>' +
+        '</button>' +
+        '<span class="dock-side">' + ring + wake + '</span>' +
       '</div>';
     }).join("");
-    return '<div class="mission-detail">' +
-      '<div class="mission-detail-label">文件夹</div>' + wsHtml +
-      '<div class="mission-detail-label">协调者 · ' + esc(peerLabel(m.coordinator_peer)) + '</div>' +
-      (peerRows ? '<div class="mission-detail-label">参与与模型</div>' + peerRows : "") +
-    '</div>';
+    const total = doneToday.claude + doneToday.chatgpt + doneToday.antigravity;
+    const todayHtml = total > 0
+      ? '<div class="dock-today" title="' + esc("今天完成的任务：Claude " + doneToday.claude + "，Codex " + doneToday.chatgpt + "，Antigravity " + doneToday.antigravity) + '">' +
+          '<div class="dock-today-lab"><span>今天完成的任务 ' + total + '</span><span class="tabular-nums">' + doneToday.claude + ' · ' + doneToday.chatgpt + ' · ' + doneToday.antigravity + '</span></div>' +
+          '<div class="dock-seg">' + PIDS.map(pid => doneToday[pid] > 0 ? '<span style="flex:' + doneToday[pid] + ';background:var(--peer-' + pid + ');"></span>' : "").join("") + '</div>' +
+        '</div>'
+      : "";
+    el.innerHTML = rows + todayHtml;
   }
 
   function peerLabel(pid) {
@@ -2088,7 +2159,7 @@ __PEER_ICON_CSS__
 
   function renderUserMsg(u) {
     const targets = (u.targets || []).map(peerLabel).join("、");
-    const meta = u.mode === "auto" ? "自动分配 · " + (u.reason || ("先交给 " + targets)) : "你点名交给 " + targets;
+    const meta = u.mode === "auto" ? "自动 · " + (u.reason || ("交给 " + targets)) : "交给 " + targets;
     return '<div class="chat-user">' +
       '<div class="chat-user-bubble">' + renderMarkdownBlock(u.text || "") + '</div>' +
       '<div class="chat-user-meta" title="' + esc(formatClock(u.created_at)) + '">' + esc(meta) + '</div>' +
@@ -2097,18 +2168,20 @@ __PEER_ICON_CSS__
 
   function renderAgentMsg(ev, task) {
     const p = ev.payload || {};
-    const meta = PEER_META[ev.from_peer] || { label: peerLabel(ev.from_peer), short: "S", cls: "system" };
+    const pid = ev.from_peer || "";
+    const meta = PEER_META[pid] || { label: peerLabel(pid), short: "S", cls: "system" };
     const st = p.status || (task && task.status) || "done";
     const tag = st === "failed" ? '<span class="chat-tag bad">失败</span>' : (st === "blocked" ? '<span class="chat-tag bad">受阻</span>' : "");
     const artifacts = Array.isArray(p.artifacts) ? p.artifacts : [];
     const chips = artifacts.slice(0, 6).map(a =>
       '<button type="button" class="chip-btn mono" data-open-tab="artifacts">📄 ' + esc(String(a).split("/").pop()) + '</button>'
     ).join("");
+    const sub = [task && task.model_used ? task.model_used : "", relativeAge(ev.created_at)].filter(Boolean).join(" · ");
     return '<article class="chat-agent">' +
-      '<div class="avatar ' + meta.cls + '">' + esc(meta.short) + '</div>' +
+      (PEER_META[pid] ? '<span class="peer-icon ' + pid + '" aria-hidden="true"></span>' : '<div class="avatar ' + meta.cls + '">' + esc(meta.short) + '</div>') +
       '<div class="chat-agent-body">' +
         '<div class="chat-agent-head"><span class="msg-author">' + esc(meta.label) + '</span>' + tag +
-          '<span class="msg-sub" title="' + esc(formatClock(ev.created_at)) + '">' + esc(relativeAge(ev.created_at)) + '</span></div>' +
+          '<span class="msg-sub" title="' + esc(formatClock(ev.created_at)) + '">' + esc(sub) + '</span></div>' +
         '<div class="chat-agent-text">' + renderMarkdownBlock(p.result_summary || "") + '</div>' +
         (chips ? '<div style="display:flex;flex-wrap:wrap;gap:6px;padding-top:6px;">' + chips + '</div>' : "") +
       '</div>' +
@@ -2122,28 +2195,26 @@ __PEER_ICON_CSS__
     const standby = Number(waiters[pid] || 0) > 0;
     let txt;
     if (t.status === "queued") {
-      txt = standby ? label + " 已收到，马上开始" : "等 " + label + " 接收 · 它现在没在待命，已发通知";
+      txt = standby ? label + " 已收到，马上开始" : "等 " + label + " 接收，它现在没在待命";
     } else {
-      txt = label + " 正在处理" + (t.progress_note ? "：" + t.progress_note : "…");
+      txt = label + " 正在处理" + (t.progress_note ? "：" + t.progress_note : "");
     }
-    const age = t.updated_at ? " · 最后上报于 " + relativeAge(t.updated_at) : "";
     const openBtn = (t.status === "queued" && !standby)
       ? '<button type="button" class="btn-link" data-open-native="' + esc(pid) + '">在 ' + esc(label) + ' 里打开</button>'
       : "";
-    return '<div class="chat-pending"><span class="dot ' + (t.status === "queued" ? "offline" : "working") + '"></span>' +
-      '<span>' + esc(txt + age) + '</span>' + openBtn + '</div>';
+    return '<div class="chat-pending" title="' + esc(t.updated_at ? "最后上报于 " + relativeAge(t.updated_at) : "") + '">' +
+      '<span class="peer-icon ' + esc(pid) + '" aria-hidden="true"></span>' +
+      '<span>' + esc(txt) + '</span>' +
+      (t.status === "queued" && !standby ? "" : '<span class="pend-dots"><i></i><i></i><i></i></span>') + openBtn + '</div>';
   }
 
   function renderConversation(state) {
     const container = document.getElementById("chat-container");
     const m = getActiveMission(state);
+    document.querySelector(".chat-column").classList.toggle("is-new", !m);
     if (!m) {
       const markEl = document.querySelector(".brand-mark");
-      container.innerHTML = '<div class="chat-empty">' +
-        '<div class="chat-empty-mark">' + (markEl ? markEl.innerHTML : "") + '</div>' +
-        '<div class="chat-empty-title">今天要三端一起做什么？</div>' +
-        '<div class="chat-empty-sub">直接输入就行。点名某一端就交给它；不点名，会交给待命中、额度充足的一端来分配。</div>' +
-      '</div>';
+      container.innerHTML = '<div class="chat-hero">' + (markEl ? markEl.innerHTML : "") + '<h2>今天会诊什么？</h2></div>';
       return;
     }
     const tasks = m.tasks || [];
@@ -2160,7 +2231,7 @@ __PEER_ICON_CSS__
       const p = ev.payload || {};
       let html = "";
       if (ev.kind === "task_done") html = renderAgentMsg(ev, taskById[p.task_id]);
-      else if (ev.kind === "task_assigned" && p.origin !== "user") html = renderNote(peerLabel(ev.from_peer) + " 把一部分工作交给了 " + peerLabel(ev.to_peer), p.prompt_preview || "");
+      else if (ev.kind === "task_assigned" && p.origin !== "user") html = renderNote((ev.from_peer === "user" ? "有一部分工作交给了 " : peerLabel(ev.from_peer) + " 把一部分工作交给了 ") + peerLabel(ev.to_peer), p.prompt_preview || "");
       else if (ev.kind === "task_handoff") html = renderNote(peerLabel(ev.from_peer) + " 把任务交给了 " + peerLabel(ev.to_peer) + (p.note ? "：" + p.note : ""));
       else if (ev.kind === "task_stale") html = renderNote(peerLabel(p.assignee_peer || ev.from_peer) + " 很久没有新进展了");
       else if (ev.kind === "task_requeued") html = renderNote("任务已重新排队" + (p.reason ? "（" + p.reason + "）" : ""));
@@ -2176,17 +2247,7 @@ __PEER_ICON_CSS__
     items.sort((a, b) => (a.ts < b.ts ? -1 : (a.ts > b.ts ? 1 : ((a.order - b.order) || (a.id - b.id)))));
     const closed = m.status === "completed" || m.status === "cancelled" || m.status === "failed";
     const pending = closed ? [] : tasks.filter(t => t.status === "queued" || t.status === "claimed" || t.status === "running");
-    const titleHtml = renamingMission === m.mission_id
-      ? '<input id="title-input" class="title-input" maxlength="40" value="' + esc(m.title) + '">'
-      : '<span class="chat-head-title" data-rename-mission="' + esc(m.mission_id) + '" title="点击改名">' + esc(m.title) + '</span>';
-    const head = '<div class="chat-head">' + titleHtml +
-      (m.workspace_path ? '<span class="head-folder" title="' + esc(m.workspace_path) + '">📁 ' + esc(folderName(m.workspace_path)) + '</span>' : "") +
-      (closed ? '<span class="chat-head-state">已结束</span>' : "") +
-      (closed ? "" : ((m.native_sessions || {}).claude
-        ? '<span class="chat-head-state" title="' + esc((m.native_sessions.claude || {}).ref || "") + '">Claude 专属会话已绑定</span>'
-        : '<button type="button" class="btn-link" data-dedicated-session="' + esc(m.mission_id) + '" title="在这个文件夹里新开一个同名 Claude Code 会话，之后这个会诊的消息都交给它">在 Claude 里开专属会话</button>')) +
-      '<button type="button" class="btn-link" data-archive-mission="' + esc(m.mission_id) + '"' + (m.archived ? ' data-archive-undo="1">取消归档' : '>归档') + '</button>' +
-      '</div>';
+    const head = "";
     container.innerHTML = head + items.map(i => i.html).join("") + pending.map(t => renderPending(t, state)).join("");
   }
 
@@ -2321,29 +2382,29 @@ __PEER_ICON_CSS__
 
   function renderComposerBar(state) {
     const waiters = (state && state.active_waiters) || {};
-    const peers = (state && state.peers) || [];
+    const curMission = getActiveMission(state);
+    const compact = !curMission;
     const chips = ['<button type="button" class="target-chip' + (sendTargets.length === 0 ? " active" : "") + '" data-send-target="auto" title="不点名：交给待命中、额度充足的一端，由它决定怎么分">自动</button>'];
     ["claude", "chatgpt", "antigravity"].forEach(pid => {
-      const pr = peers.find(x => x.peer_id === pid) || { status: "offline" };
-      const st = Number(waiters[pid] || 0) > 0 ? "standby" : (STATUS_TEXT[pr.status] ? pr.status : "offline");
-      chips.push('<button type="button" class="target-chip' + (sendTargets.indexOf(pid) >= 0 ? " active" : "") + '" data-send-target="' + pid + '" title="' + esc(PEER_META[pid].appName + " · " + STATUS_TEXT[st]) + '">' +
-        '<span class="dot ' + st + '"></span><span class="peer-icon ' + pid + '" aria-hidden="true"></span>' + esc(PEER_META[pid].label) + '</button>');
+      const standby = Number(waiters[pid] || 0) > 0;
+      chips.push('<button type="button" class="target-chip' + (sendTargets.indexOf(pid) >= 0 ? " active" : "") + '" data-send-target="' + pid + '" title="' + esc("交给 " + PEER_META[pid].label + (standby ? "（待命中）" : "（没在待命）")) + '">' +
+        '<span class="peer-icon ' + pid + '" aria-hidden="true"></span>' + (compact ? "" : esc(PEER_META[pid].label)) + '</button>');
     });
     document.getElementById("handoff-targets").innerHTML = chips.join("");
+    document.getElementById("composer-input").placeholder = compact ? "说说要做的事…" : "继续说…";
+
     const optsEl = document.getElementById("compose-opts");
-    const curMission = getActiveMission(state);
     if (optsEl) {
       if (curMission) {
         optsEl.innerHTML = "";
       } else {
         const recents = recentFolders(state);
         if (!composeWorkspace && recents.length) composeWorkspace = recents[0];
-        const tiers = [["fast", "快"], ["balanced", "均衡"], ["deep", "深度"]];
+        const TIERS = [["fast", "快", "轻量问题，回得快"], ["balanced", "均衡", "日常使用"], ["deep", "深度", "难题和架构，想得久"]];
+        const tierLabel = (TIERS.find(t => t[0] === composeTier) || TIERS[1])[1];
         optsEl.innerHTML =
-          '<button type="button" class="folder-btn' + (composeWorkspace ? "" : " missing") + '" data-folder-menu="1" title="' + esc(composeWorkspace || "这个会诊在哪个文件夹里工作") + '">📁 <span class="name">' + esc(composeWorkspace ? folderName(composeWorkspace) : "选择文件夹") + '</span> ▾</button>' +
-          '<span class="tier-seg" title="快：轻量问题；均衡：日常；深度：难题和架构">' +
-            tiers.map(t => '<button type="button" class="' + (composeTier === t[0] ? "active" : "") + '" data-tier="' + t[0] + '">' + t[1] + '</button>').join("") +
-          '</span>' +
+          '<button type="button" class="folder-btn' + (composeWorkspace ? "" : " missing") + '" data-folder-menu="1" title="' + esc(composeWorkspace || "这个会诊在哪个文件夹里工作") + '">📁 <span class="name">' + esc(composeWorkspace ? folderName(composeWorkspace) : "选择文件夹") + '</span> <span class="caret">▾</span></button>' +
+          '<button type="button" class="tier-btn" data-tier-menu="1" title="档位：决定用多强的模型和思考多久">' + esc(tierLabel) + ' <span class="caret">▾</span></button>' +
           (folderMenuOpen
             ? '<div class="folder-menu" role="menu">' +
                 (recents.length ? '<div class="folder-menu-label">最近用过</div>' + recents.map(f =>
@@ -2351,18 +2412,21 @@ __PEER_ICON_CSS__
                 ).join("") + '<div class="folder-sep"></div>' : "") +
                 '<button type="button" class="folder-item" data-open-folder-picker="1"><span>选择文件夹…</span></button>' +
               '</div>'
+            : "") +
+          (tierMenuOpen
+            ? '<div class="tier-menu" role="menu">' + TIERS.map(t =>
+                '<button type="button" class="folder-item' + (t[0] === composeTier ? " current" : "") + '" data-tier="' + t[0] + '"><span>' + t[1] + '</span><span class="path">' + t[2] + '</span></button>'
+              ).join("") + '</div>'
             : "");
       }
     }
     const anyStandby = ["claude", "chatgpt", "antigravity"].some(pid => Number(waiters[pid] || 0) > 0);
     const banner = document.getElementById("standby-banner");
     if (state && !anyStandby) {
-      banner.innerHTML = '<span>现在没有一端在待命，发出的消息要等它们上线才会被处理。让它们待命：</span>' +
-        '<span style="display:flex;gap:6px;">' +
-          '<button type="button" class="btn btn-sm" data-start-standby="claude">Claude</button>' +
-          '<button type="button" class="btn btn-sm" data-start-standby="chatgpt">Codex</button>' +
-          '<button type="button" class="btn btn-sm" data-start-standby="antigravity">Antigravity</button>' +
-        '</span>';
+      banner.innerHTML = '<span>现在没有一端在待命，消息要等它们上线才会处理。让它们待命：</span>' +
+        '<button type="button" class="btn-link" data-start-standby="claude">Claude</button>' +
+        '<button type="button" class="btn-link" data-start-standby="chatgpt">Codex</button>' +
+        '<button type="button" class="btn-link" data-start-standby="antigravity">Antigravity</button>';
       banner.classList.remove("hidden");
     } else {
       banner.classList.add("hidden");
@@ -2626,7 +2690,7 @@ __PEER_ICON_CSS__
   });
   document.addEventListener("keydown", async ev => {
     if (!ev.target || ev.target.id !== "title-input") return;
-    if (ev.key === "Escape") { renamingMission = null; if (appState) renderConversation(appState); return; }
+    if (ev.key === "Escape") { renamingMission = null; if (appState) renderTopBar(appState); return; }
     if (ev.key !== "Enter") return;
     ev.preventDefault();
     const mid = renamingMission;
@@ -2646,6 +2710,12 @@ __PEER_ICON_CSS__
     }
   });
 
+  document.addEventListener("keydown", ev => {
+    if ((ev.metaKey || ev.ctrlKey) && !ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === "n") {
+      ev.preventDefault();
+      document.getElementById("new-chat-btn").click();
+    }
+  });
   document.getElementById("new-chat-btn").addEventListener("click", () => {
     composingNew = true;
     selectedMissionId = null;
@@ -2743,6 +2813,13 @@ __PEER_ICON_CSS__
 
     if (ev.target.closest("[data-folder-menu]")) {
       folderMenuOpen = !folderMenuOpen;
+      tierMenuOpen = false;
+      renderComposerBar(appState);
+      return;
+    }
+    if (ev.target.closest("[data-tier-menu]")) {
+      tierMenuOpen = !tierMenuOpen;
+      folderMenuOpen = false;
       renderComposerBar(appState);
       return;
     }
@@ -2763,17 +2840,19 @@ __PEER_ICON_CSS__
     const tierBtn = ev.target.closest("[data-tier]");
     if (tierBtn) {
       composeTier = tierBtn.getAttribute("data-tier");
+      tierMenuOpen = false;
       renderComposerBar(appState);
       return;
     }
-    if (folderMenuOpen && !ev.target.closest(".folder-menu")) {
+    if ((folderMenuOpen && !ev.target.closest(".folder-menu")) || (tierMenuOpen && !ev.target.closest(".tier-menu"))) {
       folderMenuOpen = false;
+      tierMenuOpen = false;
       renderComposerBar(appState);
     }
     const renameBtn = ev.target.closest("[data-rename-mission]");
     if (renameBtn) {
       renamingMission = renameBtn.getAttribute("data-rename-mission");
-      if (appState) renderConversation(appState);
+      if (appState) renderTopBar(appState);
       const ti = document.getElementById("title-input");
       if (ti) { ti.focus(); ti.select(); }
       return;
