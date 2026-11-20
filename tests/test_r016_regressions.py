@@ -59,6 +59,29 @@ class R016RegressionsTests(unittest.TestCase):
         self.assertIn("NSApp.mainMenu = mainMenu", delegate)
         self.assertIn("var openOnLaunch = true", config)
 
+    def test_installer_detects_claude_app_when_pgrep_misses_it(self) -> None:
+        import subprocess
+        import sys
+
+        sys.path.insert(0, REPO_ROOT)
+        from scripts import install as inst
+
+        def fake_runner(cmd, **_kwargs):
+            if cmd[0] == "pgrep":
+                return subprocess.CompletedProcess(cmd, 1, "", "")
+            return subprocess.CompletedProcess(
+                cmd, 0, "/usr/sbin/cfprefsd\n" + inst.CLAUDE_DESKTOP_EXECUTABLE + "\n", ""
+            )
+
+        self.assertTrue(inst._is_claude_desktop_running(fake_runner))
+
+        def none_runner(cmd, **_kwargs):
+            if cmd[0] == "pgrep":
+                return subprocess.CompletedProcess(cmd, 1, "", "")
+            return subprocess.CompletedProcess(cmd, 0, "/usr/sbin/cfprefsd\n", "")
+
+        self.assertFalse(inst._is_claude_desktop_running(none_runner))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -210,14 +210,29 @@ def _claude_subprocess_env(home_dir: str) -> Dict[str, str]:
     return env
 
 
-def _is_claude_desktop_running() -> Optional[bool]:
+CLAUDE_DESKTOP_EXECUTABLE = "/Applications/Claude.app/Contents/MacOS/Claude"
+
+
+def _is_claude_desktop_running(runner: Any = subprocess.run) -> Optional[bool]:
+    """Detect Claude.app; `pgrep -x` can miss it in sandboxed shells, so fall back to `ps`."""
+    pgrep_ok = False
     try:
-        res = subprocess.run(
-            ["pgrep", "-x", "Claude"], capture_output=True, text=True, check=False
-        )
-        return res.returncode == 0
+        res = runner(["pgrep", "-x", "Claude"], capture_output=True, text=True, check=False)
+        if res.returncode == 0:
+            return True
+        pgrep_ok = res.returncode == 1
     except OSError:
-        return None
+        pass
+    try:
+        res = runner(["ps", "-axo", "comm="], capture_output=True, text=True, check=False)
+        if res.returncode == 0:
+            for line in (res.stdout or "").splitlines():
+                if line.strip() == CLAUDE_DESKTOP_EXECUTABLE:
+                    return True
+            return False
+    except OSError:
+        pass
+    return False if pgrep_ok else None
 
 
 def _plan_json_mcp(

@@ -61,7 +61,7 @@
 - [x] 3.1a Trial plan and scripts ready (`13_Consilium/04_B级试跑/试跑方案.md`); Codex project-local MCP requires project trust in `~/.codex/config.toml`, deferred to a separate user consent (B2).
 - [x] 3.2a 2026-11-20 Level-B1 trial passed: live Claude Code session in Claude.app coordinated mission `M-0736813C` with stand-in Codex/Antigravity workers (hot-wake claims 14–22 ms, 2/2 done, summary + close in 43 s); record in `13_Consilium/04_B级试跑/试跑记录_2026-11-20.md`. Consilium.app switched to a regular Dock app that opens its window on launch (menu-bar icons can hide behind the MacBook notch).
 - [ ] 3.2 Run live Claude Code (+ Codex if trusted) coordinator walkthrough with dashboard open; enable Q2 (composer live dispatch write API) and structured `report_progress(subagents=[...])` reporting after Gate 2 approval.
-- [ ] ★ **Gate 3**: User confirms workflow smoothness.
+- [x] ★ **Gate 3**: User confirms workflow smoothness. (Passed 2026-11-20: user said “通过” after the Level-B1 trial and seeing the Consilium.app window.)
 
 ## Stage 4: Level-C Live Installation (Blocked on ★ Gate 3 & User Consent)
 - [ ] 4.1 Implement `consilium doctor`.
