@@ -332,7 +332,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
         }
     }
 
-    // MARK: - Native bridge (folder picker)
+    // MARK: - Native bridge (folder picker, reveal in Finder)
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == "consilium",
@@ -342,7 +342,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
         guard let host = webView.url?.host, host == "127.0.0.1" else { return }
         if action == "pickFolder" {
             presentFolderPicker()
+        } else if action == "revealPath" {
+            revealInFinder(body["path"] as? String ?? "")
         }
+    }
+
+    /// Show a file the peers reported in Finder. Nothing is opened or executed: the path must be
+    /// absolute and exist, and Finder only selects it.
+    private func revealInFinder(_ rawPath: String) {
+        let path = (rawPath as NSString).standardizingPath
+        let ok = path.hasPrefix("/") && FileManager.default.fileExists(atPath: path)
+        if ok {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        }
+        webView.evaluateJavaScript("window.__consiliumRevealResult && window.__consiliumRevealResult(\(ok ? "true" : "false"))", completionHandler: nil)
     }
 
     private func presentFolderPicker() {

@@ -430,7 +430,6 @@ class R011RegressionsTests(unittest.TestCase):
             "只读账号池",
             "模型与账号",
             "\"文件\"",
-            "该端未上报",
             "/mission",
             "/files",
             "/export",

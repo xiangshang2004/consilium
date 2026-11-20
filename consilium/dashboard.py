@@ -1430,6 +1430,78 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 /* Model and effort get their own full-width line so a long name is never hidden behind the ring or button. */
 .dock-model { grid-column: 1 / -1; padding: 0 6px 4px 39px; margin-top: -3px; font-size: 11.5px; line-height: 1.35; color: var(--text-muted); overflow-wrap: break-word; cursor: pointer; }
 .dock-ring.stale { opacity: 0.5; }
+
+/* ===== R022 right panel, after Claude Code's side panes: icon buttons in the top bar,
+   a resizable panel beside the chat with one tab per kind of content ===== */
+.panel-tools { display: flex; align-items: center; gap: 2px; margin-right: 2px; }
+.panel-tools:empty { display: none; }
+.panel-tool { position: relative; width: 30px; height: 30px; border-radius: 8px; border: none; background: transparent; color: var(--text-secondary); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.panel-tool:hover { background: var(--bg-hover); color: var(--text-primary); }
+.panel-tool.on { background: var(--bg-hover); color: var(--text-primary); }
+.panel-tool .n { position: absolute; top: 1px; right: 0; min-width: 13px; height: 13px; padding: 0 3px; border-radius: 999px; background: var(--status-working); color: #fff; font-size: 9px; line-height: 13px; text-align: center; font-weight: 600; }
+.panel-sep { width: 1px; height: 16px; background: var(--border-strong); margin: 0 6px; }
+.right-drawer { width: 372px; min-width: 280px; max-width: 50vw; background: var(--bg-canvas); border-left: 1px solid var(--border); position: relative; }
+.drawer-grip { position: absolute; left: -3px; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 2; }
+.drawer-grip::after { content: ""; position: absolute; left: 2px; top: 50%; width: 2px; height: 34px; margin-top: -17px; border-radius: 2px; background: var(--border-strong); opacity: 0; transition: opacity .15s; }
+.drawer-grip:hover::after, .right-drawer.resizing .drawer-grip::after { opacity: 1; }
+.right-drawer.resizing, .right-drawer.resizing * { user-select: none; -webkit-user-select: none; }
+.drawer-head { padding: 9px 10px 0 16px; gap: 2px; justify-content: flex-start; align-items: center; }
+.panel-tabs { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.panel-tab { border: none; background: transparent; padding: 7px 10px 9px; font-size: 13px; color: var(--text-muted); border-bottom: 2px solid transparent; margin-bottom: -1px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; }
+.panel-tab:hover { color: var(--text-primary); }
+.panel-tab.on { color: var(--text-primary); border-bottom-color: var(--text-primary); font-weight: 550; }
+.panel-tab small { font-size: 11px; color: var(--text-muted); font-weight: 400; }
+.panel-x { margin-left: auto; width: 26px; height: 26px; border: none; background: transparent; color: var(--text-muted); border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 5px; cursor: pointer; flex-shrink: 0; }
+.panel-x:hover { background: var(--bg-hover); color: var(--text-primary); }
+.drawer-body { padding: 14px 14px 18px 16px; gap: 0; display: block; font-size: 13px; }
+.panel-empty { color: var(--text-muted); font-size: 12.5px; padding: 6px 2px; }
+.pt-sum { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-muted); margin: 0 2px 12px; }
+.pt-bar { flex: 1; height: 4px; border-radius: 4px; background: var(--border-strong); display: flex; overflow: hidden; gap: 2px; }
+.pt-bar i { display: block; height: 100%; flex: 1; }
+.pt-bar i.wait { background: transparent; }
+.pt-bar i.run { opacity: 0.45; }
+.pt-row { display: grid; grid-template-columns: 18px minmax(0, 1fr); column-gap: 10px; padding: 10px 8px; border-radius: 10px; }
+.pt-row.open { background: var(--bg-surface); box-shadow: 0 0 0 1px var(--border); }
+.pt-row + .pt-row { margin-top: 2px; }
+.pt-st { margin-top: 1px; display: inline-flex; }
+.pt-st.done { color: var(--status-done, #2f7d57); }
+.pt-st.run { color: var(--status-working); }
+.pt-st.wait { color: var(--text-muted); }
+.pt-st.bad { color: var(--status-failed, #c2410c); }
+.pt-st.run svg { animation: ptSpin 1.1s linear infinite; }
+@keyframes ptSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .pt-st.run svg { animation: none; } }
+.pt-title { width: 100%; border: none; background: transparent; padding: 0; text-align: left; color: var(--text-primary); font-size: 13.5px; line-height: 1.4; display: flex; gap: 6px; align-items: flex-start; cursor: pointer; }
+.pt-title .peer-icon { width: 15px; height: 15px; border-radius: 4px; flex-shrink: 0; margin-top: 2px; }
+.pt-title .t { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.pt-title .c { color: var(--text-muted); margin-top: 3px; display: inline-flex; transition: transform .15s; }
+.pt-row.open .pt-title .c { transform: rotate(90deg); }
+.pt-meta { font-size: 11.5px; color: var(--text-muted); margin-top: 3px; }
+.pt-note { margin-top: 8px; font-size: 12.5px; line-height: 1.55; color: var(--text-secondary); overflow-wrap: anywhere; }
+.pt-note > :first-child { margin-top: 0; }
+.pt-act { margin-top: 9px; display: flex; gap: 6px; flex-wrap: wrap; }
+.pt-btn { border: 1px solid var(--border-strong); background: transparent; border-radius: 999px; padding: 2px 10px; font-size: 11.5px; color: var(--text-secondary); cursor: pointer; white-space: nowrap; }
+.pt-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.pf-group { font-size: 11.5px; color: var(--text-muted); margin: 14px 2px 4px; letter-spacing: .02em; }
+.pf-group:first-child { margin-top: 0; }
+.pf-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; column-gap: 10px; align-items: center; padding: 9px 8px; border-radius: 10px; }
+.pf-row:hover, .pf-row:focus-within { background: var(--bg-surface); box-shadow: 0 0 0 1px var(--border); }
+.pf-row .ic { color: var(--text-muted); display: inline-flex; }
+.pf-row .nm { font-family: var(--font-mono); font-size: 12.5px; color: var(--text-primary); overflow-wrap: anywhere; }
+.pf-row .dir { font-size: 11.5px; color: var(--text-muted); margin-top: 1px; overflow-wrap: anywhere; }
+.pf-row .peer-icon { width: 15px; height: 15px; border-radius: 4px; }
+.pf-row .pf-act { display: none; gap: 6px; }
+.pf-row:hover .pf-act, .pf-row:focus-within .pf-act { display: inline-flex; }
+.pf-row:hover .pf-who, .pf-row:focus-within .pf-who { display: none; }
+.settings-sheet { width: min(720px, 94vw); height: min(560px, 86vh); background: var(--bg-canvas); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.25); display: grid; grid-template-columns: 168px minmax(0, 1fr); overflow: hidden; }
+.settings-nav { background: var(--bg-side); border-right: 1px solid var(--border); padding: 16px 10px; display: flex; flex-direction: column; gap: 2px; }
+.settings-nav button { border: none; background: transparent; text-align: left; padding: 7px 10px; border-radius: 8px; font-size: 13.5px; color: var(--text-secondary); cursor: pointer; }
+.settings-nav button:hover { background: var(--bg-hover); }
+.settings-nav button.on { background: var(--bg-hover); color: var(--text-primary); font-weight: 550; }
+.settings-main { display: flex; flex-direction: column; min-height: 0; }
+.settings-head { display: flex; align-items: center; padding: 14px 14px 6px 20px; }
+.settings-title { font-family: ui-serif, "New York", "Songti SC", serif; font-size: 18px; }
+.settings-body { flex: 1; overflow-y: auto; padding: 8px 20px 20px; display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; }
 .dock-side { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; padding-right: 4px; }
 .dock-ring { width: 22px; height: 22px; transform: rotate(-90deg); }
 .dock-ring circle { fill: none; stroke-width: 3.2; }
@@ -1543,6 +1615,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
           <span class="conn-dot"></span>
           <span id="conn-text">连接中</span>
         </div>
+        <div id="panel-tools" class="panel-tools" role="group" aria-label="右侧面板"></div>
         <button id="more-btn" type="button" class="icon-btn" title="更多" aria-label="更多" aria-haspopup="true" aria-expanded="false">⋯</button>
         <div id="topbar-more" class="topbar-more">
           <div id="conv-actions" class="conv-actions"></div>
@@ -1551,7 +1624,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
             <button type="button" class="seg-btn" data-set-theme="dark">深色</button>
             <button type="button" class="seg-btn" data-set-theme="system">系统</button>
           </div>
-          <div id="top-drawer-tabs" class="tab-group" role="group" aria-label="右侧详情面板"></div>
+          <div id="top-drawer-tabs" class="conv-actions" role="group" aria-label="设置"></div>
           <button id="logout-btn" type="button" class="btn-quiet">退出</button>
         </div>
       </div>
@@ -1587,13 +1660,28 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       </section>
 
       <!-- Collapsible Right Tabbed Inspector (Closed by Default) -->
-      <aside id="right-drawer" class="right-drawer closed" aria-label="右侧详情抽屉">
+      <aside id="right-drawer" class="right-drawer closed" aria-label="这个会诊的任务、文件和分支">
+        <div id="drawer-grip" class="drawer-grip" title="拖动调整宽度"></div>
         <div class="drawer-head">
-          <div id="drawer-tabs-inner" class="tab-group"></div>
-          <button id="btn-close-drawer" type="button" class="icon-btn" title="收起右侧面板">✕</button>
+          <div id="drawer-tabs-inner" class="panel-tabs" role="tablist"></div>
+          <button id="btn-close-drawer" type="button" class="panel-x" title="关闭（⌘\）" aria-label="关闭右侧面板"></button>
         </div>
         <div id="drawer-body" class="drawer-body"></div>
       </aside>
+    </div>
+  </div>
+</div>
+
+<!-- Settings: things that are not about one conversation -->
+<div id="settings-overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-label="设置">
+  <div class="settings-sheet">
+    <nav id="settings-nav" class="settings-nav"></nav>
+    <div class="settings-main">
+      <div class="settings-head">
+        <span id="settings-title" class="settings-title"></span>
+        <button id="btn-close-settings" type="button" class="panel-x" title="关闭" aria-label="关闭设置"></button>
+      </div>
+      <div id="settings-body" class="settings-body"></div>
     </div>
   </div>
 </div>
@@ -1649,23 +1737,37 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     task_stale: "进度超时陈旧",
     task_handoff: "任务交接"
   };
-  const DRAWER_TABS = [
+  // The right panel holds what belongs to one conversation; everything else lives in settings.
+  const PANEL_TABS = [
     { key: "tasks", label: "任务" },
-    { key: "worktrees", label: "工作树" },
+    { key: "files", label: "文件" },
+    { key: "branches", label: "分支" }
+  ];
+  const SETTINGS_TABS = [
     { key: "accounts", label: "模型与账号" },
-    { key: "subagents", label: "子 Agent" },
-    { key: "artifacts", label: "文件" },
     { key: "prefs", label: "偏好" }
   ];
+  const PANEL_ALIASES = { artifacts: "files", worktrees: "branches" };
+  const ICONS = {
+    tasks: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.2l1.2 1.2 2-2.2M2.5 9.2l1.2 1.2 2-2.2M8.2 4.5h5.3M8.2 9.5h5.3M8.2 13h3"/></svg>',
+    files: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2H4.5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V5.5L9 2z"/><path d="M9 2v3.5h3.5M6 9h4M6 11.5h2.5"/></svg>',
+    branches: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="5.5" r="1.5"/><path d="M4.5 5v6M11.5 7c0 2.5-3 2.2-5.2 3.2"/></svg>',
+    panel: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.6"/><path d="M10 3v10"/></svg>',
+    close: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
+    done: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="currentColor" stroke="none" opacity=".14"/><path d="M5.2 8.2l1.9 1.9 3.7-4"/></svg>',
+    bad: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="currentColor" stroke="none" opacity=".14"/><path d="M8 4.8v3.8M8 11v.2"/></svg>',
+    wait: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-dasharray="2 2.2" aria-hidden="true"><circle cx="8" cy="8" r="5.6"/></svg>',
+    run: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="5.6" opacity=".22"/><path d="M8 2.4a5.6 5.6 0 0 1 5.6 5.6"/></svg>',
+    chev: '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>'
+  };
   const SLASH_COMMANDS = [
     { cmd: "/mission", desc: "打开或定位左侧会诊列表面板", action: "focus_mission" },
-    { cmd: "/files", desc: "查看本次会诊汇总的文件路径列表", action: "tab:artifacts" },
+    { cmd: "/files", desc: "打开右侧“文件”：各端改动或产出的文件", action: "tab:files" },
     { cmd: "/export", desc: "合成当前会诊 Markdown 并复制到剪贴板", action: "export_md" },
-    { cmd: "/tasks", desc: "打开右侧「任务」面板查看认领状态与控制", action: "tab:tasks" },
-    { cmd: "/worktrees", desc: "查看各任务的隔离工作树分支清单", action: "tab:worktrees" },
-    { cmd: "/accounts", desc: "查看各端模型列表、当前激活账号与只读账号池", action: "tab:accounts" },
-    { cmd: "/subagents", desc: "查看子 Agent 上报占位说明（阶段 3 启用）", action: "tab:subagents" },
-    { cmd: "/prefs", desc: "查看和删除三端学到的使用偏好", action: "tab:prefs" },
+    { cmd: "/tasks", desc: "打开右侧“任务”：这个会诊拆出的每项任务", action: "tab:tasks" },
+    { cmd: "/branches", desc: "打开右侧“分支”：各端用的分支", action: "tab:branches" },
+    { cmd: "/accounts", desc: "设置：各端的账号和余量", action: "tab:accounts" },
+    { cmd: "/prefs", desc: "设置：查看和删除三端学到的使用偏好", action: "tab:prefs" },
     { cmd: "/new", desc: "开始一个新会诊", action: "new_chat" }
   ];
 
@@ -1674,6 +1776,15 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   let lastStateVersion = 0;
   let selectedMissionId = null;
   let rightTab = null; // Closed by default per minimalist chat spec
+  let settingsTab = null;
+  let taskRowOpen = {}; // task_id -> true/false once the user has toggled it
+  function storedPref(key, fallback) {
+    try { const v = window.localStorage.getItem(key); return v === null ? fallback : v; } catch (e) { return fallback; }
+  }
+  function storePref(key, value) {
+    try { window.localStorage.setItem(key, String(value)); } catch (e) { /* private window: just not remembered */ }
+  }
+  let panelWidth = Math.max(280, Math.min(640, Number(storedPref("consilium.panelWidth", 372)) || 372));
   let openPopoverPeer = null;
   let handoffTarget = "claude";
   let composingNew = false;
@@ -1971,9 +2082,10 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       '</button>';
     }).join("");
 
-    document.getElementById("top-drawer-tabs").innerHTML = DRAWER_TABS.map(tb => (
-      '<button type="button" class="tab-chip' + (rightTab === tb.key ? " active" : "") + '" data-open-tab="' + tb.key + '">' + esc(tb.label) + '</button>'
-    )).join("");
+    document.getElementById("top-drawer-tabs").innerHTML = SETTINGS_TABS.map(tb => (
+      '<button type="button" class="menu-item" data-open-settings="' + tb.key + '">' + esc(tb.label) + '</button>'
+    )).join("") + '<div class="menu-sep"></div>';
+    renderPanelTools(state);
 
     renderPeerPopover(state);
   }
@@ -2289,79 +2401,206 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     lastShownCount = count;
   }
 
+  function durText(seconds) {
+    const s = Math.max(0, Math.round(Number(seconds) || 0));
+    if (s < 60) return s + " 秒";
+    if (s < 3600) return Math.floor(s / 60) + " 分" + (s % 60 ? " " + (s % 60) + " 秒" : "");
+    return Math.floor(s / 3600) + " 小时" + (Math.floor((s % 3600) / 60) ? " " + Math.floor((s % 3600) / 60) + " 分" : "");
+  }
+
+  // What a task is about, in one line: the user's own words without the routing boilerplate.
+  function taskTitle(t) {
+    let text = String(t.prompt || "");
+    const cut = text.indexOf("————");
+    if (cut > 0) text = text.slice(0, cut);
+    text = text.replace(/^【[^】]*】\s*/, "").trim();
+    const line = (text.split("\n").find(l => l.trim()) || "").trim();
+    return line.length > 64 ? line.slice(0, 63) + "…" : (line || "（没有说明）");
+  }
+
+  function taskKind(t) {
+    if (t.status === "done") return "done";
+    if (t.status === "failed" || t.status === "blocked" || t.status === "cancelled") return "bad";
+    if (t.status === "claimed" || t.status === "running") return "run";
+    return "wait";
+  }
+
+  function panelContent(m) {
+    // Finished work first, then what is running, then what is still waiting to be picked up.
+    const rank = { done: 0, bad: 1, run: 2, wait: 3 };
+    const tasks = (m ? (m.tasks || []) : []).map((t, i) => ({ t: t, i: i }))
+      .sort((a, b) => (rank[taskKind(a.t)] - rank[taskKind(b.t)]) || (a.i - b.i)).map(x => x.t);
+    const files = [];
+    const seen = {};
+    tasks.forEach(t => (t.artifacts || []).forEach(a => {
+      const path = String(a || "").trim();
+      const key = t.assignee_peer + "\n" + path;
+      if (!path || seen[key]) return;
+      seen[key] = true;
+      files.push({ peer: t.assignee_peer, path: path });
+    }));
+    const branches = [];
+    tasks.forEach(t => {
+      const br = String(t.worktree_branch || "").trim();
+      if (!br) return;
+      let row = branches.find(x => x.branch === br && x.peer === t.assignee_peer);
+      if (!row) { row = { branch: br, peer: t.assignee_peer, files: 0 }; branches.push(row); }
+      row.files += (t.artifacts || []).length;
+    });
+    return { tasks: tasks, files: files, branches: branches };
+  }
+
+  function availablePanelTabs(content) {
+    return PANEL_TABS.filter(tb => content[tb.key].length > 0);
+  }
+
+  function openPanel(key, toggle) {
+    const k = PANEL_ALIASES[key] || key;
+    if (SETTINGS_TABS.some(tb => tb.key === k)) {
+      settingsTab = k;
+    } else if (PANEL_TABS.some(tb => tb.key === k)) {
+      rightTab = (toggle && rightTab === k) ? null : k;
+      if (rightTab) storePref("consilium.panelTab", rightTab);
+    }
+    if (appState) { renderTopBar(appState); renderRightDrawer(appState); renderSettings(appState); }
+  }
+
+  function renderPanelTools(state) {
+    const el = document.getElementById("panel-tools");
+    if (!el) return;
+    const m = getActiveMission(state);
+    const content = panelContent(m);
+    const avail = availablePanelTabs(content);
+    if (!m || !avail.length) { el.innerHTML = ""; return; }
+    const active = content.tasks.filter(t => taskKind(t) === "run" || taskKind(t) === "wait").length;
+    el.innerHTML = avail.map(tb =>
+      '<button type="button" class="panel-tool' + (rightTab === tb.key ? " on" : "") + '" data-open-tab="' + tb.key + '" title="' + esc(tb.label) + '" aria-label="' + esc(tb.label) + '" aria-pressed="' + (rightTab === tb.key ? "true" : "false") + '">' +
+        ICONS[tb.key] + (tb.key === "tasks" && active ? '<span class="n">' + active + '</span>' : "") +
+      '</button>'
+    ).join("") +
+    '<span class="panel-sep"></span>' +
+    '<button type="button" class="panel-tool" data-toggle-panel="1" title="' + (rightTab ? "隐藏侧栏" : "显示侧栏") + '" aria-label="' + (rightTab ? "隐藏侧栏" : "显示侧栏") + '">' + ICONS.panel + '</button>';
+  }
+
+  function renderTasksTab(m, content, state) {
+    const waiters = (state && state.active_waiters) || {};
+    const closed = m.status === "completed" || m.status === "cancelled" || m.status === "failed";
+    const doneCount = content.tasks.filter(t => t.status === "done").length;
+    const bar = content.tasks.map(t => {
+      const kind = taskKind(t);
+      const color = t.assignee_peer === "claude" ? "var(--peer-claude)" : (t.assignee_peer === "chatgpt" ? "var(--peer-chatgpt)" : "var(--peer-antigravity)");
+      return '<i class="' + kind + '"' + (kind === "wait" ? "" : ' style="background:' + color + '"') + '></i>';
+    }).join("");
+    const rows = content.tasks.map(t => {
+      const kind = taskKind(t);
+      const pid = t.assignee_peer;
+      const label = peerLabel(pid);
+      const standby = Number(waiters[pid] || 0) > 0;
+      const startMs = Date.parse(t.claimed_at || t.created_at || "");
+      const endMs = Date.parse(t.updated_at || "");
+      let timeTxt = "";
+      if (kind === "run" && !Number.isNaN(startMs)) timeTxt = "已进行 " + durText((Date.now() - startMs) / 1000);
+      else if (kind === "done" && !Number.isNaN(startMs) && !Number.isNaN(endMs)) timeTxt = "用时 " + durText((endMs - startMs) / 1000);
+      else if (kind === "bad") timeTxt = TASK_STATUS_TEXT[t.status] || t.status;
+      const waitTxt = kind === "wait" ? (standby ? "已送到，马上开始" : "等它接收 · 它现在没在待命，已发通知") : "";
+      const meta = [t.model_used || "", t.effort_used || "", timeTxt, waitTxt, t.stale_at ? "很久没有新进展" : ""].filter(Boolean).join(" · ");
+      const isOpen = Object.prototype.hasOwnProperty.call(taskRowOpen, t.task_id) ? taskRowOpen[t.task_id] : kind === "run";
+      const note = kind === "done" || kind === "bad" ? (t.result_summary || t.progress_note || "") : (t.progress_note || "");
+      const canRequeue = !closed && (t.status === "claimed" || t.status === "running" || t.status === "failed" || t.status === "blocked");
+      const canOpen = !closed && kind === "wait" && !standby;
+      const acts = (canOpen ? '<button type="button" class="pt-btn" data-open-native="' + esc(pid) + '">在 ' + esc(label) + ' 里打开</button>' : "") +
+        (canRequeue ? '<button type="button" class="pt-btn" data-requeue-task="' + esc(t.task_id) + '" title="收回这次处理，让它重新排队">重新入队</button>' : "");
+      return '<div class="pt-row' + (isOpen ? " open" : "") + '">' +
+        '<span class="pt-st ' + kind + '">' + ICONS[kind] + '</span>' +
+        '<div>' +
+          '<button type="button" class="pt-title" data-toggle-task="' + esc(t.task_id) + '" aria-expanded="' + (isOpen ? "true" : "false") + '" title="' + esc(t.task_id) + '">' +
+            '<span class="peer-icon ' + esc(pid) + '" aria-hidden="true"></span><span class="t">' + esc(taskTitle(t)) + '</span><span class="c">' + ICONS.chev + '</span>' +
+          '</button>' +
+          (meta ? '<div class="pt-meta">' + esc(meta) + '</div>' : "") +
+          (isOpen ? (note ? '<div class="pt-note">' + renderMarkdownBlock(note) + '</div>' : "") + (acts ? '<div class="pt-act">' + acts + '</div>' : "") : "") +
+        '</div>' +
+      '</div>';
+    }).join("");
+    return '<div class="pt-sum"><span>' + content.tasks.length + ' 项任务 · ' + doneCount + ' 项完成</span><span class="pt-bar">' + bar + '</span></div>' + rows;
+  }
+
+  function renderFilesTab(m, content) {
+    const canReveal = canPickNativeFolder();
+    return ["claude", "chatgpt", "antigravity"].map(pid => {
+      const mine = content.files.filter(f => f.peer === pid);
+      if (!mine.length) return "";
+      return '<div class="pf-group">' + esc(peerLabel(pid)) + ' 改动或产出的</div>' + mine.map(f => {
+        const full = f.path.startsWith("/") || !m.workspace_path ? f.path : m.workspace_path.replace(/\/+$/, "") + "/" + f.path;
+        const cut = f.path.lastIndexOf("/");
+        const name = cut >= 0 ? f.path.slice(cut + 1) : f.path;
+        const dir = cut >= 0 ? f.path.slice(0, cut + 1) : "";
+        return '<div class="pf-row" title="' + esc(full) + '">' +
+          '<span class="ic">' + ICONS.files + '</span>' +
+          '<div><div class="nm">' + esc(name || f.path) + '</div>' + (dir ? '<div class="dir">' + esc(dir) + '</div>' : "") + '</div>' +
+          '<span class="pf-who"><span class="peer-icon ' + esc(pid) + '" aria-hidden="true"></span></span>' +
+          '<span class="pf-act"><button type="button" class="pt-btn" data-copy-text="' + esc(full) + '">复制路径</button>' +
+            (canReveal ? '<button type="button" class="pt-btn" data-reveal-path="' + esc(full) + '">在访达中显示</button>' : "") + '</span>' +
+        '</div>';
+      }).join("");
+    }).join("");
+  }
+
+  function renderBranchesTab(content) {
+    return content.branches.map(b =>
+      '<div class="pf-row">' +
+        '<span class="ic">' + ICONS.branches + '</span>' +
+        '<div><div class="nm">' + esc(b.branch) + '</div><div class="dir">' + esc(peerLabel(b.peer) + (b.files ? " · " + b.files + " 个文件" : "")) + '</div></div>' +
+        '<span class="pf-who"><span class="peer-icon ' + esc(b.peer) + '" aria-hidden="true"></span></span>' +
+        '<span class="pf-act"><button type="button" class="pt-btn" data-copy-text="' + esc(b.branch) + '">复制</button></span>' +
+      '</div>'
+    ).join("");
+  }
+
   function renderRightDrawer(state) {
     const drawer = document.getElementById("right-drawer");
-    if (!rightTab || !state) {
+    const m = getActiveMission(state);
+    const content = panelContent(m);
+    const avail = availablePanelTabs(content);
+    // Like Claude Code's panes, a tab exists only while it has something to show.
+    if (rightTab && !avail.some(tb => tb.key === rightTab)) rightTab = avail.length ? avail[0].key : null;
+    if (!rightTab || !state || !m) {
       drawer.classList.add("closed");
       return;
     }
     drawer.classList.remove("closed");
-
-    document.getElementById("drawer-tabs-inner").innerHTML = DRAWER_TABS.map(tb => (
-      '<button type="button" class="tab-chip' + (rightTab === tb.key ? " active" : "") + '" data-open-tab="' + tb.key + '">' + esc(tb.label) + '</button>'
+    drawer.style.width = panelWidth + "px";
+    document.getElementById("btn-close-drawer").innerHTML = ICONS.close;
+    document.getElementById("drawer-tabs-inner").innerHTML = avail.map(tb => (
+      '<button type="button" role="tab" class="panel-tab' + (rightTab === tb.key ? " on" : "") + '" aria-selected="' + (rightTab === tb.key ? "true" : "false") + '" data-open-tab="' + tb.key + '" data-keep-open="1">' + esc(tb.label) + ' <small>' + content[tb.key].length + '</small></button>'
     )).join("");
-
     const body = document.getElementById("drawer-body");
-    const m = getActiveMission(state);
+    const keepScroll = body.getAttribute("data-tab") === rightTab + ":" + m.mission_id ? body.scrollTop : 0;
+    body.innerHTML = rightTab === "tasks" ? renderTasksTab(m, content, state)
+      : (rightTab === "files" ? renderFilesTab(m, content) : renderBranchesTab(content));
+    body.setAttribute("data-tab", rightTab + ":" + m.mission_id);
+    body.scrollTop = keepScroll;
+  }
 
-    if (rightTab === "tasks") {
-      if (!m || !(m.tasks || []).length) {
-        body.innerHTML = '<div style="color:var(--text-muted);">当前会诊暂无子任务。</div>';
-        return;
-      }
-      body.innerHTML = (m.tasks || []).map(t => {
-        const meta = PEER_META[t.assignee_peer] || { label: t.assignee_peer, appName: t.assignee_peer, branchPrefix: "" };
-        const stTxt = TASK_STATUS_TEXT[t.status] || t.status;
-        const canRequeue = t.status === "claimed" || t.status === "running" || t.status === "failed" || t.status === "blocked";
-        const noteClip = t.progress_note || t.result_summary || t.prompt || "";
-        return '<div class="panel-card">' +
-          '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">' +
-            '<span style="font-weight:600;" title="' + esc("分支前缀：" + meta.branchPrefix) + '">' + esc(meta.appName) + '</span>' +
-            '<span class="chip">' + esc(stTxt) + (t.stale_at ? " · 超时" : "") + '</span>' +
-          '</div>' +
-          '<div>' + renderInline(noteClip) + '</div>' +
-          '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;color:var(--text-muted);" class="mono">' +
-            '<span>' + esc(t.task_id) + (t.attempt_id ? " · " + esc(t.attempt_id) : "") + '</span>' +
-            (canRequeue && m.status !== "completed" && m.status !== "cancelled" && m.status !== "failed"
-              ? '<button type="button" class="btn btn-sm" data-requeue-task="' + esc(t.task_id) + '">重新入队</button>'
-              : "") +
-          '</div>' +
-        '</div>';
-      }).join("");
-      return;
-    }
-
-    if (rightTab === "worktrees") {
-      const tasks = m ? (m.tasks || []) : [];
-      if (!tasks.length) {
-        body.innerHTML = '<div style="color:var(--text-muted);">暂无工作树记录。</div>';
-        return;
-      }
-      body.innerHTML = '<div style="color:var(--text-muted);">只读展示各任务登记的隔离策略与分支名称（阶段 5 开放 git diff 预览）：</div>' +
-        tasks.map(t => {
-          const meta = PEER_META[t.assignee_peer] || { appName: t.assignee_peer };
-          return '<div class="panel-card">' +
-            '<div style="display:flex;align-items:center;justify-content:space-between;">' +
-              '<span style="font-weight:600;">' + esc(meta.appName) + '</span>' +
-              '<span class="chip">' + esc(t.isolation_policy || "worktree") + '</span>' +
-            '</div>' +
-            '<div class="mono">' + esc(t.worktree_branch || "（只读/未创建独立分支）") + '</div>' +
-          '</div>';
-        }).join("");
-      return;
-    }
-
-    if (rightTab === "accounts") {
+  function renderSettings(state) {
+    const overlay = document.getElementById("settings-overlay");
+    if (!settingsTab || !state) { overlay.classList.add("hidden"); return; }
+    overlay.classList.remove("hidden");
+    document.getElementById("btn-close-settings").innerHTML = ICONS.close;
+    document.getElementById("settings-nav").innerHTML = SETTINGS_TABS.map(tb =>
+      '<button type="button" class="' + (settingsTab === tb.key ? "on" : "") + '" data-open-settings="' + tb.key + '">' + esc(tb.label) + '</button>'
+    ).join("");
+    document.getElementById("settings-title").textContent = (SETTINGS_TABS.find(tb => tb.key === settingsTab) || {}).label || "";
+    const body = document.getElementById("settings-body");
+    if (settingsTab === "accounts") {
       const quotas = state.quotas || [];
       const peersMap = {};
       (state.peers || []).forEach(pr => { peersMap[pr.peer_id] = pr; });
       body.innerHTML =
-        '<div style="color:var(--text-muted);">只读展示各端已上报模型列表、当前激活账号主配额及账号池切换提示（绝不读取 Cockpit 密文凭证）。</div>' +
         quotas.map(q => {
           const meta = PEER_META[q.peer_id] || { appName: q.peer_id };
           const peer = peersMap[q.peer_id] || {};
           const models = Array.isArray(peer.supported_models) ? peer.supported_models : [];
-          const modelStr = models.length ? models.join(", ") : "暂未上报模型列表";
+          const modelStr = models.join(", ");
           const hasQ = q.min_remaining_percent !== null && q.min_remaining_percent !== undefined;
           const isDemo = (q.windows || []).some(w => w.source === "demo");
           const statusTxt = q.account_switch_suspected ? "账号可能已切换" : (q.current_account_unknown || !hasQ ? "账号未知" : Math.round(q.min_remaining_percent) + "%");
@@ -2371,7 +2610,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
               '<span style="font-weight:600;">' + esc(meta.appName) + '</span>' +
               '<span class="tabular-nums">' + esc(statusTxt) + (isDemo ? " · 演示数据" : "") + '</span>' +
             '</div>' +
-            '<div style="font-size:12px;color:var(--text-muted);">已上报模型：<span class="mono">' + esc(modelStr) + '</span></div>' +
+            (modelStr ? '<div style="font-size:12px;color:var(--text-muted);">可用模型：<span class="mono">' + esc(modelStr) + '</span></div>' : "") +
             (q.account_switch_suspected ? '<div style="color:var(--status-stale);font-size:12px;">最近样本超过 30 分钟，账号可能已在客户端内切换</div>' : "") +
             (q.switch_hint ? '<div style="color:var(--status-standby);">' + esc(q.switch_hint) + '</div>' : "") +
             (allAcctRows.map(a => '<div style="display:flex;justify-content:space-between;color:var(--text-muted);"><span>' + esc(a.alias) + (a.is_current ? " [当前]" : (a.is_historical ? " [历史账号]" : "")) + '</span><span class="tabular-nums">' + (a.remaining_percent == null ? "未知" : Math.round(a.remaining_percent) + "%") + '</span></div>').join("") || '<div style="color:var(--text-muted);">暂无本地账号样本</div>') +
@@ -2379,21 +2618,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
         }).join("");
       return;
     }
-
-    if (rightTab === "artifacts") {
-      const tasks = m ? (m.tasks || []) : [];
-      const items = [];
-      tasks.forEach(t => {
-        (t.artifacts || []).forEach(a => items.push({ task: t.task_id, peer: t.assignee_peer, path: a }));
-      });
-      body.innerHTML = (m && m.workspace_path ? '<div class="panel-card"><div style="color:var(--text-muted);">会诊工作区</div><div class="mono">' + esc(m.workspace_path) + '</div></div>' : "") +
-        (items.length
-          ? items.map(it => '<div class="panel-card"><div class="mono">' + esc(it.path) + '</div><div style="color:var(--text-muted);">来自 ' + esc(it.peer) + ' · ' + esc(it.task) + '</div></div>').join("")
-          : '<div style="color:var(--text-muted);">当前会诊暂未上报文件路径（阶段 5 开放文件树与源码只读预览）。</div>');
-      return;
-    }
-
-    if (rightTab === "prefs") {
+    if (settingsTab === "prefs") {
       const prefs = (state && state.preferences) || [];
       body.innerHTML = '<div style="font-size:12.5px;color:var(--text-muted);margin-bottom:8px;">三端从你的使用中学到的习惯。自动分配时会交给协调者参考；不对的直接删掉。</div>' +
         (prefs.length ? prefs.map(pf =>
@@ -2402,19 +2627,6 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
             '<button type="button" class="btn-link-danger" data-del-pref="' + esc(pf.pref_id) + '">删除</button>' +
           '</div><div style="font-size:11.5px;color:var(--text-muted);">' + esc(peerLabel(pf.source) + " 记录 · " + relativeAge(pf.created_at)) + '</div></div>'
         ).join("") : '<div class="panel-card" style="font-size:12.5px;color:var(--text-muted);">还没有学到偏好。</div>');
-    }
-    if (rightTab === "subagents") {
-      body.innerHTML =
-        ["claude", "chatgpt", "antigravity"].map(pid => {
-          const meta = PEER_META[pid];
-          return '<div class="panel-card">' +
-            '<div style="display:flex;align-items:center;justify-content:space-between;">' +
-              '<span style="font-weight:600;">' + esc(meta.appName) + '</span>' +
-              '<span class="chip">该端未上报</span>' +
-            '</div>' +
-            '<div style="font-size:12px;color:var(--text-muted);">阶段 3 起由该端通过结构化进度字段主动上报摘要，不读取本地对话全量日志。</div>' +
-          '</div>';
-        }).join("");
     }
   }
 
@@ -2501,6 +2713,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     renderTopBar(state);
     renderConversation(state);
     renderRightDrawer(state);
+    renderSettings(state);
     renderComposerBar(state);
   }
 
@@ -2648,6 +2861,36 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     rightTab = null;
     if (appState) { renderTopBar(appState); renderRightDrawer(appState); }
   });
+  // ⌘\ closes the panel, Escape closes settings.
+  document.addEventListener("keydown", ev => {
+    if ((ev.metaKey || ev.ctrlKey) && ev.key === "\\" && rightTab) {
+      ev.preventDefault();
+      rightTab = null;
+      if (appState) { renderTopBar(appState); renderRightDrawer(appState); }
+    } else if (ev.key === "Escape" && settingsTab) {
+      settingsTab = null;
+      if (appState) renderSettings(appState);
+    }
+  });
+  // Drag the panel's left edge to resize it; the width is remembered.
+  (function () {
+    const grip = document.getElementById("drawer-grip");
+    const drawer = document.getElementById("right-drawer");
+    let dragging = false;
+    grip.addEventListener("mousedown", ev => { dragging = true; drawer.classList.add("resizing"); ev.preventDefault(); });
+    document.addEventListener("mousemove", ev => {
+      if (!dragging) return;
+      panelWidth = Math.round(Math.max(280, Math.min(Math.min(640, window.innerWidth * 0.5), window.innerWidth - ev.clientX)));
+      drawer.style.width = panelWidth + "px";
+    });
+    document.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false;
+      drawer.classList.remove("resizing");
+      storePref("consilium.panelWidth", panelWidth);
+    });
+  })();
+  window.__consiliumRevealResult = function (ok) { if (!ok) showToast("找不到这个文件，可能已被移动或还没生成"); };
 
   document.getElementById("composer-input").addEventListener("input", () => renderComposerBar(appState));
   document.addEventListener("keydown", ev => {
@@ -2831,9 +3074,34 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 
     const openTabBtn = ev.target.closest("[data-open-tab]");
     if (openTabBtn) {
-      const tb = openTabBtn.getAttribute("data-open-tab");
-      rightTab = rightTab === tb ? null : tb;
-      if (appState) { renderTopBar(appState); renderRightDrawer(appState); }
+      // Top-bar icons toggle; the panel's own tabs and chips in the chat just switch to that tab.
+      openPanel(openTabBtn.getAttribute("data-open-tab"), openTabBtn.classList.contains("panel-tool"));
+      return;
+    }
+    if (ev.target.closest("[data-toggle-panel]")) {
+      if (rightTab) { rightTab = null; if (appState) { renderTopBar(appState); renderRightDrawer(appState); } }
+      else openPanel(storedPref("consilium.panelTab", "tasks"), false);
+      return;
+    }
+    const settingsBtn = ev.target.closest("[data-open-settings]");
+    if (settingsBtn) { openPanel(settingsBtn.getAttribute("data-open-settings"), false); return; }
+    if (ev.target.closest("#btn-close-settings") || ev.target.id === "settings-overlay") {
+      settingsTab = null;
+      if (appState) renderSettings(appState);
+      return;
+    }
+    const taskToggle = ev.target.closest("[data-toggle-task]");
+    if (taskToggle) {
+      const tid = taskToggle.getAttribute("data-toggle-task");
+      taskRowOpen[tid] = taskToggle.getAttribute("aria-expanded") !== "true";
+      if (appState) renderRightDrawer(appState);
+      return;
+    }
+    const copyBtn = ev.target.closest("[data-copy-text]");
+    if (copyBtn) { copyTextSafe(copyBtn.getAttribute("data-copy-text"), "已复制"); return; }
+    const revealBtn = ev.target.closest("[data-reveal-path]");
+    if (revealBtn) {
+      if (canPickNativeFolder()) window.webkit.messageHandlers.consilium.postMessage({ action: "revealPath", path: revealBtn.getAttribute("data-reveal-path") });
       return;
     }
 
@@ -2850,8 +3118,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
         document.getElementById("mission-list").scrollIntoView({ block: "nearest" });
         showToast("已定位会诊列表");
       } else if (act.startsWith("tab:")) {
-        rightTab = act.slice(4);
-        if (appState) { renderTopBar(appState); renderRightDrawer(appState); }
+        openPanel(act.slice(4), false);
       } else if (act === "export_md") {
         exportMissionMarkdown();
       } else if (act === "new_chat") {

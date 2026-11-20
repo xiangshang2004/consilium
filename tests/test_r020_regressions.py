@@ -182,6 +182,29 @@ class R020RegressionsTests(unittest.TestCase):
         prompt = build_auto_coordinator_prompt("x", "claude", [], [], [])
         self.assertIn("effort_used", prompt)
         self.assertIn("不要让各端自己查询或汇报余量", prompt)
+    def test_right_panel_follows_claude_code_side_panes(self) -> None:
+        html = render_dashboard_html("0.2.0")
+        # Icon buttons in the top bar open a panel beside the chat; one tab per kind of content.
+        self.assertIn('id="panel-tools"', html)
+        for key in ('{ key: "tasks", label: "任务" }', '{ key: "files", label: "文件" }', '{ key: "branches", label: "分支" }'):
+            self.assertIn(key, html)
+        self.assertIn("a tab exists only while it has something to show", html)
+        self.assertIn('data-toggle-panel="1"', html)
+        self.assertIn('id="drawer-grip"', html)
+        self.assertIn('storePref("consilium.panelWidth", panelWidth)', html)
+        self.assertIn('ev.key === "\\\\" && rightTab', html, "Cmd+Backslash closes the panel")
+        # Old chips and slash commands still land on the right tab.
+        self.assertIn('const PANEL_ALIASES = { artifacts: "files", worktrees: "branches" };', html)
+        # Things that are not about one conversation moved to settings; the empty placeholder tab is gone.
+        self.assertIn('id="settings-overlay"', html)
+        self.assertIn('data-open-settings="', html)
+        for gone in ("DRAWER_TABS", "子 Agent", "该端未上报", "阶段 5 开放"):
+            self.assertNotIn(gone, html)
+        # Revealing a file is delegated to the app and never typed as a URL.
+        self.assertIn('postMessage({ action: "revealPath"', html)
+        self.assertNotIn("file://", html)
+        self.assertNotIn("http://", html)
+        self.assertNotIn("https://", html)
 
 if __name__ == "__main__":
     unittest.main()
