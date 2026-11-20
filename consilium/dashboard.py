@@ -1539,6 +1539,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 /* conversation */
 .chat-scroll { padding: 10px 24px 30px; }
 .chat-container { max-width: 720px; gap: 0; }
+.chat-entry { display:flex; flex-direction:column; min-width:0; }
+.chat-scroll { overflow-anchor:none; }
 .chat-user { margin: 18px 0 14px; gap: 5px; }
 .chat-user-bubble { background: var(--bubble); border-radius: 18px 18px 6px 18px; padding: 9px 14px; font-size: 14.5px; }
 .chat-agent { display: grid; grid-template-columns: 26px minmax(0, 1fr); column-gap: 12px; margin: 14px 0 20px; }
@@ -2581,11 +2583,11 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     userMsgs.forEach(u => {
       const linked = pending.filter(task => task.user_message_id === u.message_id);
       linked.forEach(task => attached.add(task.task_id));
-      items.push({ts:u.created_at || "", order:0, id:Number(u.message_id),
+      items.push({key:"message-" + u.message_id, ts:u.created_at || "", order:0, id:Number(u.message_id),
         html:renderUserMsg(u) + linked.map(task => renderPending(task,state,m)).join("")});
     });
     if (!userMsgs.length) {
-      items.push({ ts: m.created_at || "", order: -1, id: 0, html: renderNote(peerLabel(m.coordinator_peer) + " 发起了会诊：" + (m.goal || m.title)) });
+      items.push({ key:"conversation", ts: m.created_at || "", order: -1, id: 0, html: renderNote(peerLabel(m.coordinator_peer) + " 发起了会诊：" + (m.goal || m.title)) });
     }
     const evs = (m.events || []).slice().sort((a, b) => Number(a.event_id) - Number(b.event_id));
     evs.forEach(ev => {
@@ -2599,25 +2601,48 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       else if (ev.kind === "task_superseded") html = renderNote("重复任务已收尾", p.reason || "");
       else if (ev.kind === "review_request") html = renderNote(peerLabel(ev.from_peer) + " 请 " + peerLabel(ev.to_peer) + " 复核", p.question || p.summary || p.reason || "");
       else if (ev.kind === "loop_guard_reached") html = renderNote("复核到了轮次上限，交回协调者处理");
-      if (html) items.push({ ts: ev.created_at || "", order: 1, id: Number(ev.event_id), html: html });
+      if (html) items.push({ key:"event-" + ev.event_id, ts: ev.created_at || "", order: 1, id: Number(ev.event_id), html });
     });
     if (m.final_summary && m.coordinator_peer !== "user") {
-      items.push({ ts: m.updated_at || "", order: 2, id: 1e12, html: renderAgentMsg(
+      items.push({ key:"summary", ts: m.updated_at || "", order: 3, id: 1e12, html: renderAgentMsg(
         { from_peer: m.coordinator_peer, created_at: m.updated_at, payload: { result_summary: m.final_summary, status: "done" } }, null
       ).replace('<span class="msg-sub"', '<span class="chat-tag">汇总</span><button type="button" class="btn-link" data-export-md="1">复制</button><span class="msg-sub"') });
     }
+    for (const task of pending) {
+      if (attached.has(task.task_id)) continue;
+      const assignment = deliveryFacts(m, task);
+      items.push({
+        key:"task-" + task.task_id,
+        ts:(assignment && assignment.created_at) || task.created_at || "",
+        order:2,
+        id:assignment ? Number(assignment.event_id) : 0,
+        html:renderPending(task,state,m)
+      });
+    }
     items.sort((a, b) => (a.ts < b.ts ? -1 : (a.ts > b.ts ? 1 : ((a.order - b.order) || (a.id - b.id)))));
-    const wasAtBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
+    const wasAtBottom = Math.ceil(scroller.scrollTop + scroller.clientHeight) >= scroller.scrollHeight;
     const switched = lastShownMission !== m.mission_id;
-    const markup = items.map(item => item.html).join("") +
-      pending.filter(task => !attached.has(task.task_id)).map(task => renderPending(task,state,m)).join("");
+    const markup = items.map(item => '<div class="chat-entry" data-chat-entry="' +
+      esc(item.key) + '">' + item.html + '</div>').join("");
     if (switched || lastThreadHTML !== markup) {
+      const viewportTop = scroller.getBoundingClientRect().top;
+      const anchor = !scrollToLatest && !switched && !wasAtBottom
+        ? Array.from(container.children).find(entry => entry.getBoundingClientRect().bottom > viewportTop)
+        : null;
+      const offset = anchor ? anchor.getBoundingClientRect().top : 0;
+      const key = anchor ? anchor.dataset.chatEntry : "";
       container.innerHTML = markup;
       lastThreadHTML = markup;
       if (scrollToLatest || switched || wasAtBottom) {
         scroller.scrollTop = scroller.scrollHeight;
-        requestAnimationFrame(() => { scroller.scrollTop = scroller.scrollHeight; });
+        const followedTop = scroller.scrollTop;
+        requestAnimationFrame(() => {
+          if (scroller.scrollTop === followedTop) scroller.scrollTop = scroller.scrollHeight;
+        });
         scrollToLatest = false;
+      } else if (key) {
+        const matched = Array.from(container.children).find(entry => entry.dataset.chatEntry === key);
+        if (matched) scroller.scrollTop += matched.getBoundingClientRect().top - offset;
       }
     }
     lastShownMission = m.mission_id;
@@ -2868,11 +2893,17 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     return messageDrafts.get(currentDraftKey);
   }
 
-  function selectComposerDraft(mission) {
+  function selectComposerDraft(mission, hasState) {
+    if (!hasState && currentDraftKey === null) return;
     const next = mission ? mission.mission_id : "new";
     if (currentDraftKey === next) return;
     const input = document.getElementById("composer-input");
-    if (currentDraftKey !== null) activeDraft().text = input.value;
+    const previousDraft = activeDraft();
+    previousDraft.text = input.value;
+    if (currentDraftKey === null) {
+      if (!messageDrafts.has(next)) messageDrafts.set(next, previousDraft);
+      messageDrafts.delete(null);
+    }
     currentDraftKey = next;
     input.value = activeDraft().text;
     slashOpen = false;
@@ -2945,7 +2976,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   function renderComposerBar(state) {
     const waiters = (state && state.active_waiters) || {};
     const curMission = getActiveMission(state);
-    selectComposerDraft(curMission);
+    selectComposerDraft(curMission, !!state);
     renderDraftAttachments();
     renderAccountNotices(state);
     const compact = !curMission;
