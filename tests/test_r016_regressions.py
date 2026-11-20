@@ -45,6 +45,20 @@ class R016RegressionsTests(unittest.TestCase):
         self.assertIn('scheme == "codex" && host == "new"', src)
         self.assertTrue(re.search(r"if allowed \{\s*NSWorkspace\.shared\.open\(url\)", src))
 
+    def test_app_is_a_regular_dock_app_that_opens_its_window(self) -> None:
+        with open(os.path.join(REPO_ROOT, "app", "macos", "Info.plist"), "r", encoding="utf-8") as handle:
+            self.assertNotIn("LSUIElement", handle.read())
+        src_dir = os.path.join(REPO_ROOT, "app", "macos", "Sources")
+        with open(os.path.join(src_dir, "AppDelegate.swift"), "r", encoding="utf-8") as handle:
+            delegate = handle.read()
+        with open(os.path.join(src_dir, "Config.swift"), "r", encoding="utf-8") as handle:
+            config = handle.read()
+        self.assertIn("NSApp.setActivationPolicy(.regular)", delegate)
+        self.assertNotIn(".accessory", delegate)
+        self.assertIn("applicationShouldHandleReopen", delegate)
+        self.assertIn("NSApp.mainMenu = mainMenu", delegate)
+        self.assertIn("var openOnLaunch = true", config)
+
 
 if __name__ == "__main__":
     unittest.main()
