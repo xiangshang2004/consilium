@@ -2057,7 +2057,6 @@ class R010RegressionsTests(unittest.TestCase):
             'w.source === "demo"',
             "演示数据",
             'const barCls = !hasQuota ? "unknown" : (pct <= 0 ? "empty" : (pct < 20 ? "low" : ""));',
-            "doneOnlyCnt === totalCnt",
             "var(--status-standby)",
             "btn-subtle-danger",
             'class="btn btn-danger" id="confirm-ok"',
@@ -2065,9 +2064,13 @@ class R010RegressionsTests(unittest.TestCase):
             "chat-container",
             "right-drawer closed",
             "renderInline(noteClip)",
-            "const LIMIT = 6;",
             "timeline-fade",
             "p.question || p.summary || p.reason",
+            # 2026-11-20 Claude-like chat (R017): replies, user bubbles and pending lines replace the
+            # old progress bar and the fixed six-event window.
+            "chat-user-bubble",
+            "renderAgentMsg",
+            "renderPending",
         ):
             self.assertIn(needle, html)
 

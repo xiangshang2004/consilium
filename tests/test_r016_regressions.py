@@ -33,9 +33,9 @@ class R016RegressionsTests(unittest.TestCase):
         block = self.html[start:end]
         for marker in ('data-set-theme="light"', 'id="top-drawer-tabs"', 'id="logout-btn"'):
             self.assertIn(marker, block)
-        narrow = self.html[self.html.index("@media (max-width: 860px)"):]
-        self.assertRegex(narrow, r"\.topbar-more\.open\s*\{\s*display:\s*flex;")
-        self.assertRegex(narrow, r"\.peer-pills-bar\s*\{[^}]*flex-wrap:\s*nowrap")
+        # R017: the ⋯ menu is the only top-bar menu at every width (desktop-only product).
+        self.assertRegex(self.html, r"\.topbar-more\.open\s*\{\s*display:\s*flex;")
+        self.assertNotIn('class="icon-btn show-narrow"', self.html)
 
     def test_app_only_opens_verified_deep_links(self) -> None:
         path = os.path.join(REPO_ROOT, "app", "macos", "Sources", "MainWindowController.swift")
