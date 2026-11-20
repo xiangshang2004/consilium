@@ -16,7 +16,7 @@
 - [x] 1.7 Refactor `scripts/install.py` to two-phase validate-then-write with running Claude.app refusal, expanded Codex duplicate checks, Claude MCP rollback, `--rendezvous-dir`, and `CLAUDE_CONFIG_DIR` isolation (R005 3.7).
 - [x] 1.8 Fix R005 P2 items (closed-mission `request_review` guard, quota `null`/expired/`window_minutes`/`limit_id`/isolation) + A-level demo findings (`CONSILIUM_RENDEZVOUS_DIR` precedence, `peers` activity tracking).
 - [x] 1.9 Add regression tests for all 7 P1s + P2s, verify full test suite & `13_Consilium` Level-A demo pass, commit cleanly (author `2084413277`), and write `reviews/R006-antigravity-r005-fixes.md`.
-- [ ] ★ **Gate 1**: Submit R006 for Claude and Codex review approval.
+- [x] ★ **Gate 1**: Submit R006 for Claude and Codex review approval. (Passed 2026-11-20 per [R014](../../../reviews/R014-claude-r013-review.md) and Codex independent review up to `6e308aa`.)
 
 ## Stage 2: Consilium Live Dashboard (Separate Commit)
 - [x] 2.1 Implement `consilium/dashboard.py` and mount `/ui`, `/api/login`, `/api/logout`, `/api/state`, `/api/stream` (SSE), `/api/missions/<id>/close`, `/api/tasks/<id>/requeue` in `ConsiliumDaemon`.
@@ -43,7 +43,13 @@
 - [x] 2.7.3 Tighten Q4 multi-account rules & zero-write RO SQLite: use upstream `accounts[].id` as primary join key in `_load_cockpit_codex_registry` (keeping separate workspaces sharing an email distinct), hash ALL Cockpit & local-Claude IDs/emails (`_hash_account_ref(..., always_hash=True)`), `mode=ro&immutable=1` / `PRAGMA query_only=ON` Cockpit queries, `clear_peer_cockpit_current` when `codex_accounts.json` is absent/corrupt, keep unconfirmed single Cockpit candidates as `current_account_unknown=True`, apply 30-min staleness across all active Cockpit rows + exclude `>30m` backups, and expose `historical_accounts` labeled `"历史账号 N"`.
 - [x] 2.7.4 Align minimalist chat `/ui` tabs (`模型与账号`, `子 Agent` showing `"该端未上报"`, `文件`), slash commands (`/mission`, `/files`, `/export`), relative `"最后上报于"` timing, `"账号未知"`/`"可能已切换"`/`"历史账号"` labels, and failure-aware `copyTextSafe`; expand `tests/test_r011_regressions.py` + `tests/test_r012_regressions.py`, verify dual-mode test suite, re-capture `2026-11-20` screenshots (screenshots only per 2026-11-20 user rule), sync OpenSpec/R013/READMEs, and stop at ★ Gates 1 & 2.
 
-## Stage 3: Level-B Real App Trial (Blocked on ★ Gates 1 & 2)
+## Stage 2.8: Gate 1 Supplemental Fixes & R014 Deferred Items (R015)
+- [x] 2.8.1 Fix HTTP/1.1 GET framing in `consilium/mcp_server.py`: `do_GET` invokes `_consume_optional_body()` instead of unconditionally setting `_body_consumed = True`, and `_send_json`/`_send_html` close keep-alive connections whenever unconsumed request bodies exist on any method (`tests/test_r015_regressions.py`).
+- [x] 2.8.2 Distrust Cockpit `codex_accounts.json` `current_account_id` in `consilium/quota.py` when `codex_accounts.sqlite` exists with a newer `st_mtime` (comparing `os.stat` mtime ONLY, never opening `codex_accounts.sqlite`), clearing prior Cockpit current flags so the active account reports `未知`.
+- [x] 2.8.3 Pulse `.seq` waiters in `rebuild_all_peer_seqs` on daemon startup when `unacked > 0` or `queued_tasks > 0` (`pulse_if_backlog=True` in `consilium/wakeup.py` & `consilium/store.py`), and surface redacted per-target status (`InstallApplyError` & `target_results`) on installer Phase 2 partial failures in `scripts/install.py`.
+- [x] 2.8.4 Polish `WKWebView` theme switching in `consilium/dashboard.py` (suppress frozen CSS transitions across `data-theme` switches via `no-theme-transition` class and explicit `color-scheme`).
+
+## Stage 3: Level-B Real App Trial (Blocked on ★ Gate 2)
 - [ ] 3.1 Add project-scoped `.mcp.json` / `.gitignore` and B-level worker script in `13_Consilium/`.
 - [ ] 3.2 Run live Claude Code (+ Codex if trusted) coordinator walkthrough with dashboard open; enable Q2 (composer live dispatch write API) and structured `report_progress(subagents=[...])` reporting after Gate 2 approval.
 - [ ] ★ **Gate 3**: User confirms workflow smoothness.
@@ -52,8 +58,9 @@
 - [ ] 4.1 Implement `consilium doctor`.
 - [ ] 4.2 Present `--dry-run` plan → ★ User consent → `--apply` → `consilium doctor` → per-app smoke tests → `--uninstall` drill.
 
-## Stage 4.5: Menu Bar Native Wrapper (Planned After Stage 4)
-- [ ] 4.5.1 Package optional macOS menu bar wrapper app (`Consilium.app`) once CLI/MCP installation is verified.
+## Stage 4.5: Menu Bar Native Wrapper (`Consilium.app` Built Ahead in R015; Live Deployment Gated on Stage 4)
+- [x] 4.5.1 Build native macOS menu bar app `Consilium.app` (`app/macos/Sources/*.swift`, `app/macos/Info.plist`, `scripts/build_app.sh` using Xcode CLT `swiftc` + system `iconutil`/`codesign -s -`, `docs/brand/consilium-mark-template.svg`, committed `AppIcon.iconset` & `StatusIconTemplate*.png`, bundled stdlib `consilium` package, `NSAllowsLocalNetworking` + `WKWebsiteDataStore.nonPersistent()`, direct `POST /api/login` cookie injection, reuse-or-manage daemon lifecycle, and `UNUserNotificationCenter` R003 click deep links) and verify via `scripts/smoke_test_app.sh` + dated `2026-11-20` Light/Dark/menubar screenshots.
+- [ ] 4.5.2 Optional `/Applications` copy, login item, and `launchd` wiring deferred until Stage 4 user consent.
 
 ## Stage 5: Daily-Use Polish (Blocked on Stage 4)
 - [ ] 5.1 Mission templates, Q5 user-selectable auto-dispatch hints, workspace file tree / read-only diff & source preview (respecting R012 §6 Git read-only isolation rules: `ls-tree -z`, `cat-file blob`, disallow `.gitattributes` filters/submodule traversal/untrusted `.git/config`), Markdown export enhancements, and refined per-app skills.
