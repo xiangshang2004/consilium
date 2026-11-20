@@ -15,3 +15,6 @@ consilium = "consilium.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["consilium*"]
+
+[tool.setuptools.package-data]
+consilium = ["assets/peer_icons/*.png"]
