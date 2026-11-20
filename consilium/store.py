@@ -131,7 +131,8 @@ CREATE TABLE IF NOT EXISTS user_messages (
     targets_json TEXT NOT NULL DEFAULT '[]',
     mode TEXT NOT NULL DEFAULT 'direct',
     reason TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    created_ms REAL NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS preferences (
@@ -262,6 +263,7 @@ class BusStore:
                 "ALTER TABLE missions ADD COLUMN title_locked INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE missions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE missions ADD COLUMN tier TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE user_messages ADD COLUMN created_ms REAL NOT NULL DEFAULT 0",
                 "ALTER TABLE quota_windows ADD COLUMN is_current INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE quota_windows ADD COLUMN is_historical INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE quota_windows ADD COLUMN account_alias TEXT NOT NULL DEFAULT ''",
@@ -1267,6 +1269,7 @@ class BusStore:
                                 except ValueError:
                                     bindings = {}
                                 claimed["native_session"] = (bindings.get(peer) or {}).get("ref", "")
+                            claimed["conversation"] = self._conversation_context_locked(conn, claimed["mission_id"], claimed["task_id"])
                             claimed_tasks.append(claimed)
                         # Annotate the triggering assignment/requeue event with claim_latency_ms + attempt_id.
                         src_ev = conn.execute(
@@ -2273,9 +2276,9 @@ class BusStore:
             return
         targets = [str(t) for t in (message.get("targets") or [])]
         conn.execute(
-            "INSERT INTO user_messages (mission_id, text, targets_json, mode, reason, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO user_messages (mission_id, text, targets_json, mode, reason, created_at, created_ms) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (mission_id, text[:20000], json.dumps(targets, ensure_ascii=False), str(message.get("mode") or "direct"),
-             str(message.get("reason") or "")[:300], now),
+             str(message.get("reason") or "")[:300], now, round(time.time() * 1000.0, 2)),
         )
 
     def set_mission_title(self, mission_id: str, title: str, actor: str) -> Dict[str, Any]:
@@ -2308,6 +2311,41 @@ class BusStore:
                     (clean, 1 if who == USER_PEER else int(mission["title_locked"] or 0), now, mission_id),
                 )
         return {"mission_id": mission_id, "title": clean, "set_by": who}
+
+    def _conversation_context_locked(
+        self, conn: sqlite3.Connection, mission_id: str, current_task_id: str, limit: int = 12
+    ) -> List[Dict[str, Any]]:
+        """Earlier turns of this conversation (user messages and peers' replies), oldest first.
+
+        Standby sessions answer many conversations, so each task carries its own history instead of
+        relying on one native session per conversation (Claude Desktop does not let an automatically
+        woken turn start new sessions).
+        """
+        items: List[Dict[str, Any]] = []
+        for r in conn.execute(
+            "SELECT text, created_at, created_ms, message_id FROM user_messages WHERE mission_id = ? ORDER BY message_id ASC",
+            (mission_id,),
+        ).fetchall():
+            items.append({"at": r["created_at"], "_ms": float(r["created_ms"] or 0), "_seq": int(r["message_id"]),
+                          "from": USER_PEER, "text": r["text"][:1500]})
+        for r in conn.execute(
+            "SELECT event_id, from_peer, task_id, payload_json, created_at FROM events "
+            "WHERE mission_id = ? AND kind = 'task_done' AND task_id != ? ORDER BY event_id ASC",
+            (mission_id, current_task_id),
+        ).fetchall():
+            try:
+                payload = json.loads(r["payload_json"] or "{}")
+            except ValueError:
+                payload = {}
+            text = str(payload.get("result_summary") or "")
+            if text:
+                items.append({"at": r["created_at"], "_ms": float(payload.get("ring_sent_at_ms") or 0),
+                              "_seq": int(r["event_id"]), "from": r["from_peer"], "text": text[:1500]})
+        items.sort(key=lambda x: (x["_ms"] or 0, x["at"], x["_seq"]))
+        for it in items:
+            it.pop("_ms", None)
+            it.pop("_seq", None)
+        return items[-max(1, int(limit)):]
 
     def bind_native_session(self, mission_id: str, peer_id: str, session_ref: str) -> Dict[str, Any]:
         """Remember which native session (e.g. a Claude Code session id) handles this conversation for a peer."""
