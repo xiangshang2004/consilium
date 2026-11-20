@@ -23,7 +23,7 @@
 - [x] 2.2 Record delivery/wakeup metadata on events so dashboard displays hot/cold badges and ms wakeup latency.
 - [x] 2.3 Write unit/wire tests for dashboard API shape, cookie auth, Host/Origin checks, write actions, and ordered SSE streaming.
 - [x] 2.4 Drive dashboard live with Level-A demo script, capture Light & Dark mode screenshots (and live progression evidence) into `13_Consilium/03_演示记录/`, commit cleanly (author `2084413277`), and write `reviews/R007-antigravity-dashboard.md`.
-- [x] ★ **Gate 2**: User reviews Light & Dark screenshots and confirms dashboard appearance. (2026-11-20: approved `2026-11-20` minimalist chat `/ui` screenshots; user requested keeping Claude informed to review/guide subsequent UI optimizations.)
+- [ ] ★ **Gate 2**: User reviews Light & Dark screenshots and confirms dashboard appearance. (2026-11-20: awaiting Claude/Codex R013 re-check and final user sign-off on updated 2026-11-20 screenshots after R012 + drawer/command alignment; prior R011/chat draft approved at `fd89018` with direction to keep Claude looped in for subsequent optimizations.)
 
 ## Stage 2.5: R008/R009 Remediation & Closed-Loop Sync (R010, Before Crossing Gates 1 & 2)
 - [x] 2.5.1 Harden truth & wakeup layers: move `.seq` lock to `<rendezvous_dir>/.<peer>.seq.lock`, single-snapshot `query_peer_seq_counts`, `OSError(ENOENT|EINVAL)` retries, atomic `.lease`, strictly read-only `wait`, `attempt_id` fencing + `attempt_history`, `task_stale` for expired `running` tasks on background `_reaper_thread`, scoped `idempotency_keys` (`ConflictError`/409), `consilium_requeue_task`, and `delivery.warnings` post-commit fault isolation.
@@ -37,17 +37,26 @@
 - [x] 2.6.3 Redesign `/ui` (`consilium/dashboard.py`) as minimalist conversation stream (R011 Gate 2 direction + 6 prototype fixes + Q1 read-only scope): retractable `会诊列表` sidebar (responsive closed on `<= 860px`), unclipped `.peer-subbar` 3-peer capsules + popover, centered conversation turns + `.timeline-fade`, read-only handoff composer + `/` palette (`--bg-elevated`, `Esc` close, `claude://code/new?q=` / `codex://new?prompt=` links only, zero stale hardcoded models), closed-by-default 5-tab right drawer (`任务`, `工作树`, `账号池`, `产物`, `子 Agent`), and full desktop `1440px` + mobile `390px` responsive polish.
 - [x] 2.6.4 Add `tests/test_r011_regressions.py` and update `tests/test_r010_regressions.py`, pass full `unittest` suite both with and without `CONSILIUM_DRY_RUN=1 CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC=1`, re-capture & visually/`ffprobe` verify `2026-11-20` Light/Dark `1440px`/`390px` PNGs + live SSE MP4, sync OpenSpec/READMEs, write `reviews/R013-antigravity-chat-ui-and-q4.md` (reserving `R012` for Codex), and commit topically (keeping `★ Gate 1` & `★ Gate 2` unchecked).
 
+## Stage 2.7: Codex R012 Blocker Remediation & Claude Checklist Alignment (R013)
+- [x] 2.7.1 Resolve R012 P1 #1 & Skill param: enforce `0o700`/`0o600` backup permissions in `_backup_file`, scrub all old/new Bearer tokens & `Authorization` headers in `TokenRotationError`/CLI stderr via `_redact_secrets` (no inline `cc_prev` JSON), run verified rollback when `claude mcp add-json` raises exceptions, report `failed_target_may_be_modified` & `codex_scope="managed_block_only"`, and fix `SKILL.md` `note=` -> `progress_note=`.
+- [x] 2.7.2 Resolve R012 P1 #2, HTTP/1.1 framing/P3-2, zero-write `consilium_wait`, SSE ordering & P2 delivery replay/migration: pin `auth_token_ver` on `/api/ui-ticket` & `/api/stream` (pre-header + pre-snapshot auth re-checks, `try/finally unsubscribe`), strict `_parse_strict_content_length` (reject `Transfer-Encoding` 501, duplicate/invalid `Content-Length` 400, incomplete short reads 400, drain optional POST bodies via `_consume_optional_body`, `close_connection=True` on error/unconsumed body), SSE idle `_publish_lock` re-snapshot & ticking-field fingerprint strip, zero SQLite writes in `consilium_wait`, `on_escalate` hot-to-cold delivery persistence, `idempotency_keys.delivery_json` faithful replay, and `_init_schema` legacy `A-1-legacy-...` backfill + `@` scrubbing.
+- [x] 2.7.3 Tighten Q4 multi-account rules & zero-write RO SQLite: use upstream `accounts[].id` as primary join key in `_load_cockpit_codex_registry` (keeping separate workspaces sharing an email distinct), hash ALL Cockpit & local-Claude IDs/emails (`_hash_account_ref(..., always_hash=True)`), `mode=ro&immutable=1` / `PRAGMA query_only=ON` Cockpit queries, `clear_peer_cockpit_current` when `codex_accounts.json` is absent/corrupt, keep unconfirmed single Cockpit candidates as `current_account_unknown=True`, apply 30-min staleness across all active Cockpit rows + exclude `>30m` backups, and expose `historical_accounts` labeled `"历史账号 N"`.
+- [x] 2.7.4 Align minimalist chat `/ui` tabs (`模型与账号`, `子 Agent` showing `"该端未上报"`, `文件`), slash commands (`/mission`, `/files`, `/export`), relative `"最后上报于"` timing, `"账号未知"`/`"可能已切换"`/`"历史账号"` labels, and failure-aware `copyTextSafe`; expand `tests/test_r011_regressions.py` + `tests/test_r012_regressions.py`, verify dual-mode test suite, re-capture `2026-11-20` screenshots & MP4, sync OpenSpec/R013/READMEs, and stop at ★ Gates 1 & 2.
+
 ## Stage 3: Level-B Real App Trial (Blocked on ★ Gates 1 & 2)
 - [ ] 3.1 Add project-scoped `.mcp.json` / `.gitignore` and B-level worker script in `13_Consilium/`.
-- [ ] 3.2 Run live Claude Code (+ Codex if trusted) coordinator walkthrough with dashboard open; validate Q2 (live composer dispatch) and Q3 (read-only local log mirror) readiness after Gate 2 approval.
+- [ ] 3.2 Run live Claude Code (+ Codex if trusted) coordinator walkthrough with dashboard open; enable Q2 (composer live dispatch write API) and structured `report_progress(subagents=[...])` reporting after Gate 2 approval.
 - [ ] ★ **Gate 3**: User confirms workflow smoothness.
 
 ## Stage 4: Level-C Live Installation (Blocked on ★ Gate 3 & User Consent)
 - [ ] 4.1 Implement `consilium doctor`.
 - [ ] 4.2 Present `--dry-run` plan → ★ User consent → `--apply` → `consilium doctor` → per-app smoke tests → `--uninstall` drill.
 
-## Stage 5: Daily-Use Polish (Blocked on Stage 4)
-- [ ] 5.1 Mission templates, Q5 auto-dispatch hints (user-selectable), workspace/git diff tab, Markdown export, refined per-app skills.
+## Stage 4.5: Menu Bar Native Wrapper (Planned After Stage 4)
+- [ ] 4.5.1 Package optional macOS menu bar wrapper app (`Consilium.app`) once CLI/MCP installation is verified.
 
-## Stage 6: Operations (Blocked on Stage 5)
-- [ ] 6.1 Log rotation, daily `bus.db` 7-day backup, daemon/client version mismatch indicator on dashboard.
+## Stage 5: Daily-Use Polish (Blocked on Stage 4)
+- [ ] 5.1 Mission templates, Q5 user-selectable auto-dispatch hints, workspace file tree / read-only diff & source preview (respecting R012 §6 Git read-only isolation rules: `ls-tree -z`, `cat-file blob`, disallow `.gitattributes` filters/submodule traversal/untrusted `.git/config`), Markdown export enhancements, and refined per-app skills.
+
+## Stage 6: Operations & Log Mirror (Blocked on Stage 5)
+- [ ] 6.1 Log rotation, daily `bus.db` 7-day backup, daemon/client version mismatch indicator, and Q3 one-way read-only local session JSONL mirror.

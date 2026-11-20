@@ -1,83 +1,102 @@
-# R013：Antigravity 对 R011 意见的极简对话流 `/ui`、Q4 多账号配额池与 P3 加固验证报告
+# R013: Consilium 极简对话流 `/ui`、Q4 多账号隔离与 R012 闭环整改交付报告
 
-- **作者**：Antigravity（Gemini）
-- **日期**：2026-11-20
-- **编号说明**：`R012` 按 [R011](./R011-claude-r010-review-and-chat-ui.md) 约定**预留给 Codex 独立复核**，本回复编号为 `R013`。
-- **范围**：逐项落地 [R011（Claude 对 R010 关口 1 与对话流方向复核）](./R011-claude-r010-review-and-chat-ui.md) 提出的：
-  1. **P3-1..P3-4** 残余加固（`Origin` 端口非数字 `ValueError` 拦截、`400+` 早退关闭 keep-alive、`CONSILIUM_SOCKET_FALLBACK_DIR` 隔离、登录页与文档明确提示 `127.0.0.1` 与 `localhost` 同主机异源约束）；
-  2. **Q4 多账号配额池与 Cockpit 只读白名单**：严格只读白名单、邮箱/ID SHA-256 脱敏、`quota_accounts` 持久化、仅按当前激活账号计算 `min_remaining_percent` 与 `dispatch_recommended`，并向前端只读展示多号池、历史样本标注及切换建议；
-  3. **R011 §4 原型 6 处问题与 Q1 本轮只读对话流 `/ui` 重设计**：离线零 CDN、浅/深/系统三主题、`会诊列表` 可收起侧栏、防裁剪 `.peer-subbar` 三端胶囊与悬浮详情、居中对话流（`renderSingleEventMessage` 真名文案、`最后上报于` 真实时态、6 条渐隐折叠、`.btn-subtle-danger`）、只读底部交接栏 + `/` 命令面板（实心 `--bg-elevated`、`Esc` 关闭、无过期硬编码模型、仅使用经过验证的 `claude://code/new?q=` 与 `codex://new?prompt=` 深链、无 `codex://threads/`）以及默认收起的右侧 5 标签详情抽屉（`任务`、`工作树`、`账号池`、`产物`、`子 Agent`）。
-- **隔离核验**：未修改 `~/.claude.json`、`~/.claude/`、`~/.codex/config.toml`、`~/.gemini/config/mcp_config.json`、`~/Library/LaunchAgents/`、`~/Library/Application Support/consilium/`、`~/Library/Logs/consilium/`、`~/.antigravity_cockpit/` 或 `~/.gitconfig`；未安装 `launchd`；未在后台启动 `codex exec`；未执行 `git push`；未打开任何 Cockpit 加密库或凭据目录。
-- **关口状态**：**★ 关口 1（待 Codex 出 `R012` 复核）与 ★ 关口 2（待用户确认新版 2026-11-20 对话流 `1440px`/`390px` 截图与录屏）均保持未越过（`openspec/changes/consilium-v1/tasks.md` 中仍维持 `- [ ]`）。**
+2026-11-20 · Antigravity 交付（待合入前本地分主题提交）· 基线 `a192f9f`（含 Codex `R012` [9f7f6d5 / 991396c](./R012-codex-review.md)）
+
+> **文件命名说明**：用户指令提及交付路径 `reviews/R013-antigravity-chat-ui.md`；由于 Codex 已先在 `main` 提交 [R012-codex-review.md](./R012-codex-review.md) 与 [R012-codex-r010-review.md](./R012-codex-r010-review.md) 并链向 `./R013-antigravity-chat-ui-and-q4.md`，本轮选择**原地更新 `reviews/R013-antigravity-chat-ui-and-q4.md`** 以保持已有审计链接不断裂，并在本文及 [reviews/README.md](./README.md) 中集中记录 R011/R013 全部原始交付与 R012 全量复核闭环。
 
 ---
 
-## 1. P3-1 .. P3-4 加固落地详情
+## 1. 结论与关口状态
 
-| R011 条目 | 修改位置 | 实现内容与验证 |
+- **R012 阻塞项与 P2 全量闭环**：全部处理 [R012-codex-review.md](./R012-codex-review.md) §1 两个 P1（令牌轮换失败诊断脱敏与 `claude mcp add-json` 异常回滚；Bearer `auth_token_ver` 跨 `/api/ui-ticket` 与 `/api/stream` 贯通及初始快照二次鉴权）、§2 六个 P2（旧库升级 `A-1-legacy-<task_id>` 与 `@` 邮箱清洗、`SKILL.md` `progress_note` 示例、幂等原 `delivery_json` 回放、热转冷持久化回调、`consilium_wait` 真实热唤醒零写库、SSE `queue.Empty` 锁内重采样与 `try/finally` 退订包络）、§3 Q4/对话流细节（Cockpit `accounts[].id` 主联结键、禁止单候选无主权指针误设 `is_current`、30 分钟阈值覆盖所有现用与备用号、历史账号过滤、全量 Cockpit/Claude ID 哈希、RO/immutable SQLite 防护、`compute_state_fingerprint` 剥离配额与认领动态计时字段、`模型与账号`/`子 Agent` 文案收敛、`copyTextSafe` 失败显错），以及 [R012-codex-r010-review.md](./R012-codex-r010-review.md) §4（HTTP/1.1 严格 `Content-Length` / `501 Transfer-Encoding` / 短读 `400` / POST `/api/ui-ticket` & `/api/logout` 体消费与 `close_connection` 隔离）。
+- **验证结果（最近一次全量复测）**：
+  - `tests/` **10 个测试模块共 75 项单元测试全绿（0 失败 / 0 跳过）**，涵盖原 `59` 项、`R013` 新增 `6` 项及本次 `tests/test_r012_regressions.py` 新增 `10` 项回归；
+  - 隔离环境变量模式（`-u CLAUDE_CONFIG_DIR CONSILIUM_DRY_RUN=1 CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC=1`）：`Ran 75 tests in 17.785s — OK`；
+  - 默认未设环境变量模式（`-u CLAUDE_CONFIG_DIR -u CONSILIUM_DRY_RUN -u CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC`）：`Ran 75 tests in 23.164s — OK`；
+  - `openspec validate consilium-v1 --strict`：`Change 'consilium-v1' is valid`。
+- **视觉与媒体复录（`2026-11-20`）**：[run_demo_a.py](../../../13_Consilium/01_%E6%BC%94%E7%A4%BA%E8%84%9A%E6%9C%AC/run_demo_a.py) 重跑截图与 SSE 实时录屏，浅色/深色 `1440×960 @2x` 双方顶部均稳定显示 `● SSE 实时`，`390×844 @2x` 双方均实现 `scrollWidth === innerWidth === 390` 零横向溢出，MP4 为 `1440×960`、`10 fps`、`350` 帧、`35.0s`。
+- **边界与约束遵守**：未触碰真实 `~/.claude`、`~/.codex`、`~/.gemini`、`~/.antigravity_cockpit`、`~/Library`，未安装 `launchd`，未启动后台 `codex exec`，测试全部剥离 `CLAUDE_CONFIG_DIR` 并使用临时目录，未执行 `git push`。
+- **当前停在关口**：**★ 关口 1（待 Claude 与 Codex 复核本 R013 及 R012 整改）** 与 **★ 关口 2（待用户确认最新 2026-11-20 Light/Dark `1440px`/`390px` 截图与 35.0s 录屏外观）**。
+
+---
+
+## 2. R012 逐项整改对照（R012-codex-review & R012-codex-r010-review）
+
+| 来源条目 | 问题描述与要求 | 本轮改动实现 | 对应文件 / 回归测试 |
+|---|---|---|---|
+| `R012 §1 #1` (P1) | 轮换失败时 `rollback_instructions` 带出 `cc_prev` 明文 Bearer、`claude` 子进程抛异常绕过回滚、CLI 诊断未脱敏、Codex 仅限托管块 | `_backup_file` 强制 `0o700`/`0o600`；新增 `_redact_secrets` 脱敏 `Bearer ...`、JSON/TOML `Authorization` 及显式新旧令牌；`_apply_claude_code_mcp` 用 `try/except` 包裹 `runner(...)` 使进程异常也执行回滚与校验；移除 `cc_prev` 原文，增设 `failed_target_may_be_modified=True` 与 `codex_scope="managed_block_only"` | [scripts/install.py](../scripts/install.py) · `test_r012_p1_1_rotation_failure_redacts_tokens_and_rollbacks_on_exception` |
+| `R012 §1 #2` (P1) | `_authenticate_request` 仅返回认证模式，并发轮换时旧 Bearer 通过后可能在 `/api/ui-ticket` 与 `/api/stream` 绑定到新 `token_version`；Cookie 流首帧前未复检会话 | `_authenticate_request` 与 `_check_security` 返回并传递经过核验的 `auth_token_ver`；`POST /api/ui-ticket` 传入该版本给 `LoginTicketStore.issue`；`_handle_sse_stream` 将 `auth_token_ver` 绑定入 `sub`，并强制执行 `_stream_still_authorized()` 二次校验（发响应头前及首帧 `snapshot_with_version` 后） | [consilium/mcp_server.py](../consilium/mcp_server.py) · `test_r012_p1_2_concurrent_rotation_blocks_ticket_and_sse_initial_frame` |
+| `R012 §2` · 认领代次与 Skill (P2) | 旧库升级时 `claimed`/`running` 行缺少 `attempt_id` 导致续报/完成死锁；`SKILL.md` 首条进度示例误写 `note` | `BusStore._init_schema` 自动为无 `attempt_id` 的旧库 `claimed`/`running` 行补全 `A-1-legacy-<task_id>` 并保证可续报/重排；`SKILL.md` 第 53 行示例修正为 `progress_note` | [consilium/store.py](../consilium/store.py) · [adapters/skill/consilium-collab/SKILL.md](../adapters/skill/consilium-collab/SKILL.md) · `test_r012_p2_legacy_db_backfill_attempt_id_and_email_scrub` |
+| `R012 §2` · 幂等重放与热转冷 (P2) | 幂等重放自造 `delivery: replayed` 丢失原回执与 `warnings`；热转冷回调未落回 `record_event_delivery` 持久层 | `idempotency_keys` 迁移新增 `delivery_json`，新增 `save_idempotency_delivery` 与 `_check_idempotency_locked` 中的 `_cached_delivery` 恢复，经 `_safe_save_idempotency_delivery` / `_replay_delivery_payload` 原样返回首次交付回执；`on_escalate` 经 `_safe_ring_peer` 接入持久层 | [consilium/store.py](../consilium/store.py) · [consilium/mcp_server.py](../consilium/mcp_server.py) · `test_r012_p2_idempotent_replay_returns_original_delivery_receipt` |
+| `R012 §2` · 只读 `consilium_wait` (P2) | `consilium_wait` 真实热唤醒分支调用 `record_peer_wakeup_latency` / `_emit_mutation("wait_woke")` 写入 `bus.db` | 移除热唤醒后的写库与广播调用，`consilium_wait` 全路径保持零 SQLite 写入 | [consilium/mcp_server.py](../consilium/mcp_server.py) · `test_r012_p2_wait_real_kqueue_hot_wakeup_zero_sqlite_writes` |
+| `R012 §2` · SSE 锁序与清理 (P2) | `queue.Empty` 空闲分支在锁外取快照后再在锁内取新版本号导致乱序；`subscribe` 后、`finally unsubscribe` 前发响应头抛异常可占住订阅名额 | 进入 `subscribe` 后立即接入 `try/finally unsubscribe(sub)`；`queue.Empty` 触发 `external_change` 时改为通过 `snapshot_with_version` 在发布锁内原子重建并配对版本号 | [consilium/mcp_server.py](../consilium/mcp_server.py) · `test_r012_p2_sse_idle_external_change_re_snapshots_inside_publish_lock` |
+| `R012-codex-r010 §4` & `P3-2` | `Transfer-Encoding`、重复/畸形 `Content-Length`、短读被解析为 `{}`；成功早退 `/api/ui-ticket` 与 `/api/logout` 未消费体并复用连接 | 新增 `_parse_strict_content_length`（`Transfer-Encoding` 返回 `501`，重复或非 ASCII 数字长度与短读返回 `400 Incomplete request body`）与 `_consume_optional_body`，`400+` 与未完整消费体响应统一置 `close_connection = True` | [consilium/mcp_server.py](../consilium/mcp_server.py) · `test_r012_p3_2_keepalive_post_early_return_and_logout_no_desync` · `test_r012_http_framing_rejects_te_dup_cl_and_short_body` |
+| `R012 §3 & §5.2` (Q4) | 单候选无 `current` 标记误设 `is_current`；30 分钟判断未覆盖全账号及备用号筛选；历史账号仅给计数；含无 `@` ID 未哈希；RO WAL 可能建侧文件；`quota_samples` 主键未优先 `accounts[].id` | `_hash_account_ref(..., always_hash=True)` 哈希全部 Cockpit/Claude ID 及旧库 `@` 邮箱；`_load_cockpit_codex_registry` 以 `accounts[].id` 为主联结键，邮箱仅在唯一时作展示映射（同邮箱双 workspace 保持独立），缺注册表时 `clear_peer_cockpit_current("chatgpt")`；SQLite 无 `-wal` 时用 `mode=ro&immutable=1`，有 WAL 时用 `mode=ro` + `PRAGMA query_only=ON`；`list_quota_windows` 对未确认单候选保留 `current_account_unknown=True`、`>30m` 一律置 `account_switch_suspected=True` 并移出 `backups_with_cap`，同时输出 `historical_accounts` 与 `"历史账号 N"` | [consilium/quota.py](../consilium/quota.py) · [consilium/store.py](../consilium/store.py) · `test_r011_q4_*` · `test_r012_p2_fingerprint_ignores_ticking_quota_fields_and_q4_stale_backup` · `test_r012_q4_same_email_two_workspaces_stay_distinct_by_account_id` |
+| `R012 §3` · `/ui` 与指纹 (P2) | 配额样本年龄与倒计时随秒跳变导致 `external_change` 误刷新整页；抽屉文案与剪贴板失败仍弹成功 | `_VOLATILE_TICK_KEYS` 统一在 `compute_state_fingerprint` 中剥离 `age_seconds`、`claim_age_seconds`、`sample_age_seconds`、`reset_in_seconds`、`reset_in_human`、`earliest_reset_in_human`、`updated_at`；统一 `DRAWER_TABS` 与 `SLASH_COMMANDS`，补 `supported_models`、`该端未上报`、`"账号未知"`/`"可能已切换"`/`"历史账号"` 与 `"最后上报于 "`，新增失败感知 `copyTextSafe` | [consilium/dashboard.py](../consilium/dashboard.py) · `test_r011_ui_minimalist_conversation_contract` · `test_r012_p2_fingerprint_ignores_ticking_quota_fields_and_q4_stale_backup` |
+
+> **说明（R012 §6 Git 只读边界）**：`R012-codex-r010-review.md` §6 对 `git diff` / `cat-file` / `.gitattributes` 过滤器与不可信仓库的进程级隔离约束属于**阶段 5（文件树、Diff 与源码读取接口）**设计范围；本轮按范围冻结完全未新增 Git 读取接口，已将 §6 全项并入 [openspec/changes/consilium-v1/tasks.md](../openspec/changes/consilium-v1/tasks.md) 阶段 5 阻塞前置。
+
+---
+
+## 3. R011 / R013 原始需求逐项对照
+
+| 用户 / R011 要求 | 实施与偏离说明 | 状态 |
 |---|---|---|
-| **P3-1**（`Origin` 端口非数字 `ValueError`） | `consilium/mcp_server.py` (`_is_valid_origin`、`_is_exact_daemon_origin`) | 对 `urlparse` 与 `parsed.port` 读取包裹 `try ... except ValueError: return False`，`http://127.0.0.1:notaport` 返回 `403` 而非抛未捕获异常断连；回归测试 `test_r011_p3_1_malformed_origin_port_returns_403_without_drop` 通过 |
-| **P3-2**（早退响应污染 keep-alive） | `consilium/mcp_server.py` (`_Handler._send_json`) | 对 `status >= 400` 响应设置 `self.close_connection = True`，避免 `Content-Length` 错误、非 JSON `415` 或权限失败残余字节破坏同条 HTTP 长连接；回归测试 `test_r011_p3_2_early_error_closes_keepalive_no_desync` 通过 |
-| **P3-3**（单测在真实 `/tmp` 留空目录） | `consilium/wakeup.py` (`resolve_socket_path`)、`tests/test_wakeup_and_cold_fallback.py` | 新增 `CONSILIUM_SOCKET_FALLBACK_DIR` 环境变量覆盖，单测不再在真实 `/tmp/consilium-<uid>/sock` 建目录；清理此前遗留空目录 `/tmp/consilium-501`；`test_r011_p3_3_socket_fallback_env_honored` 与 `test_long_home_path_shortens_unix_socket_inside_private_subdir` 通过 |
-| **P3-4**（`127.0.0.1` 与 `localhost` 同主机异源提示） | `consilium/dashboard.py` 登录蒙层、`README.md` | 登录引导明确提示「请使用 `127.0.0.1:<port>/ui` 访问，勿混用 `localhost`（同主机异源会拦截 Cookie 写请求）」 |
+| **1. `list_quota_windows()` 主配额按当前激活账号隔离** | 已实现：仅按 `is_current=1`（非历史、非未知、未超 30 分钟）计算 `exhausted`、`min_remaining_percent` 与 `dispatch_recommended`；同账号池历史旧号配额归零但当前号余量充足时，不再误判整端耗尽。 | 完成 |
+| **1. `pool` / `pool_has_capacity` / `switch_hint` 与 ID 映射** | 已实现：Cockpit 样本通过 `accounts[].id` 主键联结 `accounts`（邮箱仅唯一映射）；无记录历史样本标 `is_historical=True`（UI 显示 `"历史账号 N"` 并排除出主配额与可切换备用池）；当前号超过 30 分钟标 `account_switch_suspected=True`、主配额归“未知”；Antigravity 未核实当前账号标 `current_account_unknown=True`（`"账号未知"`）。 | 完成 |
+| **1. Cockpit 严格只读白名单与零明文邮箱入库** | 已实现：仅读取 `~/.antigravity_cockpit/codex_accounts.json`（白名单字段 `current_account_id`、`id`、`email`、`plan_type`）、`codex-quota-history-v1.sqlite`、`platform-quota-history-v1.sqlite`；单测通过 `builtins.open`、`sqlite3.connect` 与 `os.stat` 间谍断言绝不打开 `secure-account-storage.key`、`*_accounts.sqlite`、`accounts/*.json` 或 `codex_accounts/`；所有邮箱/账户 ID 全量 SHA-256 脱敏入库与输出。 | 完成 |
+| **2. `/ui` 极简对话流重设计（R011 §5 Q1）** | 已实现：左侧收敛式会诊列表 + 中间单会话事件流（仅按事件时间线展示，不新增后台写接口） + 顶部单行三端胶囊（`Claude`、`Codex`、`Antigravity` 原生 App 五态灯 + 当前账号配额 + 点击弹层看 `pool`） + 右侧默认折叠 5 标签抽屉（`任务` 复用重排/关闭、`工作树` 只读列 `worktree_branch`、`模型与账号` 含 `supported_models`、`子 Agent` 显示 `"该端未上报"` 占位、`文件` 只列 `artifacts` 路径） + 纯前端 `/` 面板（`/mission`、`/files`、`/export`、`任务`/`工作树`/`账号`/`子 Agent` 跳转） + 只读交接提示词拼装区。 | 完成 |
+| **3. 修复 R011 §4 原型 6 处问题** | 1) 去除 CDN Tailwind，全内联离线 CSS，保持原严格 CSP；2) `/` 菜单实底浮层 + `Esc` 关闭；3) 浅色 / 深色 / 跟随系统三态切换；4) 移除写死模型名，改为动态读取 `supported_models`；5) `打开原生对话` 改为 `新开原生会话接手`，禁用未验证 `codex://threads/<id>`；6) 进度统一文案为 `"最后上报于 X 秒/分钟前"`。 | 完成 |
+| **4. P3-1..4 加固与回归** | P3-1 畸形 `Origin` 非数字端口返 `403`；P3-2 错误 `400+` 与未消费体 POST 关闭连接 + `ui-ticket`/`logout` 消费可选体 + 严格分帧校验；P3-3 `CONSILIUM_SOCKET_FALLBACK_DIR` 隔离真实 `/tmp` 残留；P3-4 登录区明确区分 `127.0.0.1` 与 `localhost`。 | 完成 |
+| **5. 后续阶段待办同步 OpenSpec** | 已将文件树/Diff/Git §6 隔离接口（阶段 5）、界面直接发消息（阶段 3 后）、本地 JSONL 只读镜像（阶段 6）、自动分配（阶段 5）、子 Agent 结构化字段（阶段 3）与菜单栏 App（阶段 4.5）悉数登记进 [tasks.md](../openspec/changes/consilium-v1/tasks.md)。 | 完成 |
 
----
-
-## 2. Q4 多账号配额池与 Cockpit 只读白名单（本地只读勘察结论 + 代码落地）
-
-对本机 `~/.antigravity_cockpit/` 仅做只读键名与表结构核查：
-- `accounts/`、`codex_accounts/` 下均为加密文件，`claude_accounts/` 无激活文件；`codex_accounts.json` 含 `['version', 'detail_schema_version', 'accounts', 'current_account_id']`；`codex-quota-history-v1.sqlite` 的 `quota_samples` 表包含 3 个不同 `account_id` 的历史样本。
-- 基于上述实情，在 `consilium/quota.py` 与 `consilium/store.py` 落地以下规则：
-  1. **严格只读白名单**：`sync_local_quotas` 仅读取 `codex_accounts.json` 中的 `id`、`email`、`plan_type`、`current_account_id` 元数据及 `codex-quota-history-v1.sqlite`、`platform-quota-history-v1.sqlite`，移除泛化扫描（不碰加密库、token、认证目录或 `current_account.json`）。
-  2. **去标识化与去重**：使用 `_hash_account_ref` 对邮箱/ID 做 SHA-256 前缀哈希，`codex_accounts.json` 与历史 SQLite 按账号 ID/邮箱映射合并去重，生成 `_account_alias`（`账号 A`、`账号 B` 等），区分 `is_current` 与仅出自历史表的 `is_historical`。
-  3. **当前激活账号隔离聚合**：`bus.db` 新增 `quota_accounts` 表与 `quota_windows` 扩展列（`is_current`、`is_historical`、`account_alias`、`plan_type`），`BusStore.sync_peer_accounts` 同步账号池。`BusStore.list_quota_windows` **仅用当前激活账号窗口** 计算 `min_remaining_percent` 与 `dispatch_recommended`（当当前号未知、30 分钟以上疑切号或当前号无有效窗口时，`dispatch_recommended` 保持 `None`），绝不因备用号还有余量而虚高报数。
-  4. **只读切换建议（不做静默切号）**：返回 `active_account_id`、`active_account_alias`、`current_account_unknown`、`account_switch_suspected`、`pool`、`pool_has_capacity`、`best_backup` 与 `switch_hint`（例如「可在 Cockpit 切到 账号 B（91%）」），由用户在原生客户端手动切换。
-
----
-
-## 3. R011 §4 对话流 `/ui` 重设计与自查视觉修复
-
-- **满足 Q1 只读契约**：`/ui`（`consilium/dashboard.py`，`77,191` 字节，`node --check` 语法零错）保持**只读观察 + 剪贴板/深链交接**：
-  - `/` 命令面板（`.slash-palette`）采用不透明 `--bg-elevated` 表面、`z-index` 置于输入框之上，支持 `Esc` 关闭；
-  - 仅保留实测支持的深链 `claude://code/new?q=...` 与 `codex://new?prompt=...`，彻底移除未实测 `codex://threads/`；
-  - 删除硬编码过期模型（`Claude Opus 4.1`、`Claude Sonnet 4`、`GPT-5.1`），改为绑定真实已上报 `supported_models`；
-  - 删除「执行输出中」伪流式占位，事件副标题改为「最后上报于 HH:MM:SS」；
-  - 默认收起右侧 5 标签详情抽屉（`任务`、`工作树`、`账号池`、`产物`、`子 Agent`），不挤压主对话流；
-  - 登录与 `README.md` 明示 `127.0.0.1` 与 `localhost` 的 Cookie/Origin 约束。
-- **2026-11-20 首次截屏视觉自检与二轮修复**：
-  - 初次审阅 1440px/390px 截图发现 3 处版式瑕疵：顶栏单行挤压导致 `进行中` 竖排折行且 `Antigravity` 胶囊被横滚裁剪、窄屏 `390px` 下 SSE 刷新重开左侧栏、部分演练事件仅显示追踪徽章未回填任务 prompt 正文；
-  - 已在同轮收口：独立 `.peer-subbar` 全宽三端状态条（`1440px`/`390px` 均完整展示三端与 `演示数据` / `2号`）、`.chip` `white-space: nowrap`、拆分桌面与移动端侧栏状态（`sidebarDesktopOpen` / `sidebarMobileOpen` + `resize` 响应）、`renderSingleEventMessage` 对缺少摘要的 `task_assigned` / `progress` 回退展示关联任务 `prompt` 与 `progress_note`，随后重跑截屏并视觉逐张验收通过。
+> **与用户原要求相比的设计微调记录（供审阅）**：原指令要求输入 `reviews/R013-antigravity-chat-ui.md` 并建议右侧五个标签名及 `/` 指令集合。本实现保留仓库既有文件名 `reviews/R013-antigravity-chat-ui-and-q4.md` 以维持 `R012` 与索引既有相对链接；抽屉标签按 R012 §3 对齐定为 `任务 / 工作树 / 模型与账号 / 子 Agent / 文件`；`/` 面板保留 `/mission`、`/files`、`/export` 并将其余标签快捷跳转统一纳入前端状态切换，无新增后端路由。
 
 ---
 
 ## 4. 全量验证与媒体产物证据
 
-### 4.1 OpenSpec 与单元测试（双环境模式）
+### 4.1 `openspec validate consilium-v1 --strict`
 
-1. **OpenSpec 严格校验**：
-   ```text
-   $ cd /Users/up/code/github/consilium && openspec validate consilium-v1 --strict
-   Change 'consilium-v1' is valid
-   ```
-2. **显式隔离环境全量测试**（`env -u CLAUDE_CONFIG_DIR CONSILIUM_DRY_RUN=1 CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC=1 /usr/bin/python3 -B -W default -m unittest discover -s tests -v`）：
-   - **`Ran 65 tests in 10.758s — OK`**（零失败、零跳过）。
-3. **默认不设隔离变量全量测试**（`env -u CLAUDE_CONFIG_DIR -u CONSILIUM_DRY_RUN -u CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC /usr/bin/python3 -B -W default -m unittest discover -s tests`）：
-   - **`Ran 65 tests in 10.050s — OK`**（证明测试套件在无外部 env 开关时同样完全自隔离）。
+```text
+Change 'consilium-v1' is valid
+```
 
-### 4.2 2026-11-20 对话流截图与实时 SSE 录屏（保留全部既有历史媒体）
+### 4.2 双环境变量模式完整单测（`10` 模块 `75` 项）
 
-位置：`/Users/up/code/13_Consilium/03_演示记录/`
-- [dashboard_chat_light_1440_2026-11-20.png](file:///Users/up/code/13_Consilium/03_演示记录/dashboard_chat_light_1440_2026-11-20.png)（`1440×960 @2x`，`428,110` 字节）
-- [dashboard_chat_dark_1440_2026-11-20.png](file:///Users/up/code/13_Consilium/03_演示记录/dashboard_chat_dark_1440_2026-11-20.png)（`1440×960 @2x`，`434,463` 字节）
-- [dashboard_chat_light_390_2026-11-20.png](file:///Users/up/code/13_Consilium/03_演示记录/dashboard_chat_light_390_2026-11-20.png)（`390×844 @2x`，`240,665` 字节，实测 `scrollWidth=390, innerWidth=390`，零水平溢出）
-- [dashboard_chat_dark_390_2026-11-20.png](file:///Users/up/code/13_Consilium/03_演示记录/dashboard_chat_dark_390_2026-11-20.png)（`390×844 @2x`，`247,311` 字节，实测 `scrollWidth=390, innerWidth=390`，侧栏默认收起，零水平溢出）
-- [dashboard_chat_live_demo_2026-11-20.mp4](file:///Users/up/code/13_Consilium/03_演示记录/dashboard_chat_live_demo_2026-11-20.mp4)（`581,180` 字节）：
-  - `ffprobe` 实测：`width=1440`、`height=960`、`r_frame_rate=10/1`、`avg_frame_rate=10/1`、`nb_frames=373`、`duration=37.300000`；
-  - `capture_dashboard.mjs` DOM 实测：`conn="SSE 实时"`、`states={"claude":"standby","chatgpt":"online","antigravity":"working"}`、含 `"演示数据"` 与 `"2号"` 标签、`认领 1522.16 ms`、`冷通知 · dry-run` 与 `对方已确认`。
+测试模块：`test_dashboard_and_sse.py`、`test_installer_dry_run.py`、`test_mcp_transports.py`、`test_quota_extraction.py`、`test_r006_regressions.py`、`test_r010_regressions.py`、`test_r011_regressions.py`、`test_r012_regressions.py`、`test_store_and_loop_guard.py`、`test_wakeup_and_cold_fallback.py`。
+
+```text
+# 模式 A：隔离环境变量（剥离 CLAUDE_CONFIG_DIR + CONSILIUM_DRY_RUN=1 + CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC=1）
+...........................................................................
+----------------------------------------------------------------------
+Ran 75 tests in 17.785s
+
+OK
+
+# 模式 B：默认未设环境变量（剥离 CLAUDE_CONFIG_DIR、CONSILIUM_DRY_RUN、CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC）
+...........................................................................
+----------------------------------------------------------------------
+Ran 75 tests in 23.164s
+
+OK
+```
+
+### 4.3 `2026-11-20` 演示媒体清单（均在 daemon 存活期内采集）
+
+- DOM 与浏览器校验：无 JS 异常、无控制台报错、登录后无 HTTP 错误；Light 与 Dark `1440×960` 顶部均稳定显示 `conn === "SSE 实时"`、`Claude standby`、`ChatGPT/Codex online`、`Antigravity working`；`390×844` 浅/深双方实测 `scrollWidth=390, innerWidth=390`。
+- MP4 实测参数（`ffprobe`）：`width=1440`, `height=960`, `r_frame_rate=10/1`, `avg_frame_rate=10/1`, `nb_frames=350`, `duration=35.000000`, `size=602915`（`589K`）。
+- 产物路径（保留 `2026-11-19` 与首版历史媒体）：
+  - [dashboard_chat_light_1440_2026-11-20.png](../../../13_Consilium/03_%E6%BC%94%E7%A4%BA%E8%AE%B0%E5%BD%95/dashboard_chat_light_1440_2026-11-20.png) (`425K`)
+  - [dashboard_chat_dark_1440_2026-11-20.png](../../../13_Consilium/03_%E6%BC%94%E7%A4%BA%E8%AE%B0%E5%BD%95/dashboard_chat_dark_1440_2026-11-20.png) (`431K`)
+  - [dashboard_chat_light_390_2026-11-20.png](../../../13_Consilium/03_%E6%BC%94%E7%A4%BA%E8%AE%B0%E5%BD%95/dashboard_chat_light_390_2026-11-20.png) (`239K`)
+  - [dashboard_chat_dark_390_2026-11-20.png](../../../13_Consilium/03_%E6%BC%94%E7%A4%BA%E8%AE%B0%E5%BD%95/dashboard_chat_dark_390_2026-11-20.png) (`246K`)
+  - [dashboard_chat_live_demo_2026-11-20.mp4](../../../13_Consilium/03_%E6%BC%94%E7%A4%BA%E8%AE%B0%E5%BD%95/dashboard_chat_live_demo_2026-11-20.mp4) (`589K`, `35.0s @ 10fps`)
 
 ---
 
-## 5. 下一步（严格停在 ★ 关口 1 与 ★ 关口 2）
+## 5. 改动文件清单
 
-1. **★ 关口 1**：请 Codex 基于当前提交进行独立复核，并将审核意见写入预留编号 [`reviews/R012-codex-review.md`](./R012-codex-review.md)。
-2. **★ 关口 2**：请用户审阅 2026-11-20 版 Light/Dark 1440px 与 390px 截图及 10fps 37.3s 实时录屏，确认新版极简对话流视觉与产品方向（Q2 页面直接派活与 Q3 本地日志单向只读镜像仍按计划留到关口 2 确认后的阶段 3 再开启）。
+- 核心代码：[scripts/install.py](../scripts/install.py)、[consilium/mcp_server.py](../consilium/mcp_server.py)、[consilium/store.py](../consilium/store.py)、[consilium/quota.py](../consilium/quota.py)、[consilium/dashboard.py](../consilium/dashboard.py)、[adapters/skill/consilium-collab/SKILL.md](../adapters/skill/consilium-collab/SKILL.md)
+- 测试套件：[tests/test_quota_extraction.py](../tests/test_quota_extraction.py)、[tests/test_r011_regressions.py](../tests/test_r011_regressions.py)、[tests/test_r012_regressions.py](../tests/test_r012_regressions.py)
+- 规范与文档：[openspec/changes/consilium-v1/design.md](../openspec/changes/consilium-v1/design.md)、[openspec/changes/consilium-v1/tasks.md](../openspec/changes/consilium-v1/tasks.md)、[openspec/changes/consilium-v1/specs/bus/spec.md](../openspec/changes/consilium-v1/specs/bus/spec.md)、[openspec/changes/consilium-v1/specs/dashboard/spec.md](../openspec/changes/consilium-v1/specs/dashboard/spec.md)、[reviews/README.md](./README.md)、[README.md](../README.md)、[docs/architecture.md](../docs/architecture.md)、[13_Consilium/README.md](../../../13_Consilium/README.md)
