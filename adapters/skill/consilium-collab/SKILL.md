@@ -55,20 +55,25 @@ Whenever the user gives an instruction here that asks to coordinate across model
 4. Never enter an unguarded ping-pong loop: cross-peer checks MUST go through `consilium_request_review(...)`, and if `allowed == false`, stop and hand control back to the coordinator.
 5. Finish by calling `consilium_complete_task(task_id, peer_id=<self>, attempt_id=<attempt_id>, result_summary=..., artifacts=[...])`, then re-arm your standby waiter silently if continuing standby duty.
 
-## 3. Messages From the Consilium App (Added 2026-11-20)
+## 3. Messages From the Consilium App (2026-11-20)
 
-The user can now type directly in the Consilium window. Each message arrives as an ordinary task (`origin = "user"`) and is picked up exactly like any other task.
+The Consilium window works like the Claude Code desktop app: **the user picks a folder when starting a conversation, and each conversation has its own native session per app.** The user never types paths; never guess a folder from message text.
 
-- **Addressed to you (`@` you)**: the task prompt is the user's words verbatim. Do the work and answer with `consilium_complete_task`; write `result_summary` as a reply to the user, in their language. The mission's coordinator is `user`, so your reply is shown in the window instead of going to another peer.
-- **Auto-routed (no `@`)**: the prompt starts with the user's words, then says you are the coordinator. Before deciding:
-  1. Call `consilium_preferences` to read the user's learned preferences, their recent explicit routing, and each peer's standby state and current-account quota.
-  2. Do it yourself, or split it with `consilium_dispatch_task`. Prefer peers that are on standby and have quota; unknown quota is fine; never dispatch to an exhausted peer.
-  3. Finish with `consilium_complete_task` on your own task. Its `result_summary` is the final answer the user reads.
-- **Learning the user's intent**: when a choice the user made is clearly a stable habit (for example "code review always goes to Codex", or "answer briefly in Chinese"), record it in one short sentence with `consilium_learn_preference`. Don't record guesses or one-off details. The user can see and delete every preference in the window.
-- **Handing off on low quota**: if your own quota is nearly used up, call `consilium_handoff_task(task_id, peer_id, attempt_id, to_peer, note)`. The note must say what is already done and why you are handing off. Your old `attempt_id` stops working at once. Account switching is always manual: if every peer is low, tell the user which account to switch to in Cockpit.
-- **Workspace**: if the conversation is about a project folder and has no workspace yet (the user's sidebar shows "未定"), record it with `consilium_set_workspace(mission_id, peer_id, path)` using an absolute path; work inside that folder and mention it when you dispatch subtasks. A message that names an existing path gets its folder as the workspace automatically.
-- **Model**: pass `model_used` (the model you are actually running on, e.g. "Claude Opus 5.5") to `consilium_report_progress` or `consilium_complete_task`; the user's sidebar shows it next to your name.
-- **Standby for automatic replies**: messages are answered automatically only while a session is on standby. In a Claude Code session, run `PYTHONPATH=/Applications/Consilium.app/Contents/Resources/python /usr/bin/python3 -B -m consilium.cli wait --peer claude --session-label claude-standby --timeout 86400` with `run_in_background: true`, end the turn, and when it exits pick up, answer, and re-arm. Never poll.
-- **Conversation name and workspace stay in sync**: picked-up tasks carry `mission_title` and `workspace_path`. As coordinator, give the conversation a short title with `consilium_set_title` (max 20 Chinese characters) and set the workspace if it is empty. Work inside `workspace_path`. If you are not a long-running standby session, name your own native session after `mission_title` (Claude Code: set the session title; Codex / Antigravity: rename the thread if the app allows) so the user can find it from either side.
-- **Standby for Codex and Antigravity**: these apps have no background-notification mechanism, so stay on standby by calling `consilium_wait(peer_id=<self>, timeout_sec=300)` in a loop; on `woke: true`, pick up and answer, then keep waiting. Keep each iteration terse.
-- **"New session" requests**: a task with `new_session: true` means the user wants a dedicated session for it. In Claude Code (including the standby session), start a new local session with `cwd` = `workspace_path` (or the folder you create for a pending workspace) and title = `mission_title`, pass it the `task_id`, `attempt_id`, `peer_id` and the task prompt, and let it do the work and call `consilium_complete_task` itself; you keep standing by. Codex and Antigravity: handle it in a fresh thread if you can; the Consilium window already opened a new Codex thread for the user when they sent it.
+**What a picked-up task carries**: `mission_title`, `workspace_path` (the folder the user chose), `mission_tier` (`fast` / `balanced` / `pro_reasoning`), `native_session` (the session already bound to this conversation for you, or empty), and `new_session` (1 for the first message to you in this conversation).
+
+**Routing (standby sessions)**:
+1. `native_session` is set: forward the task to that session (Claude Code: `SendMessage` to that session id with `task_id`, `attempt_id`, `peer_id` and the prompt) and keep standing by. If the session no longer exists, handle it as in step 2.
+2. No session yet: start one for this conversation.
+   - Claude Code: `start_session` with `cwd` = `workspace_path`, title = `mission_title`, and model / effort chosen from `mission_tier` (fast → low effort, balanced → default, pro_reasoning → high effort). Its brief must contain `task_id`, `attempt_id`, `peer_id`, the prompt, and these rules. Then call `consilium_bind_session(mission_id, peer_id, <new session id>)`.
+   - Codex and Antigravity cannot start sessions for you: the Consilium window opens a new Codex thread in the folder for the user when Codex is not on standby. If you are the one that picked it up, handle it in your own thread, and call `consilium_bind_session` with your thread's reference if you have one.
+3. The session doing the work reports progress with `model_used`, answers with `consilium_complete_task` (the `result_summary` is what the user reads, in their language), and stays in the conversation's folder.
+
+**Coordinating auto-routed messages** (the prompt says you are the coordinator): call `consilium_preferences` first; do it yourself or split it with `consilium_dispatch_task` (prefer peers on standby with quota; never an exhausted one); give the conversation a short title with `consilium_set_title` (at most 20 Chinese characters; ignored if the user renamed it); deliver the final answer with `consilium_complete_task`.
+
+**Learning**: record a clearly stable habit of the user in one sentence with `consilium_learn_preference`; never record guesses. The user can delete any preference.
+
+**Low quota**: hand the task off with `consilium_handoff_task(task_id, peer_id, attempt_id, to_peer, note)`; the note says what is done and why. Account switching is always manual; tell the user which account to switch to when every peer is low.
+
+**Standing by**:
+- Claude Code: run `PYTHONPATH=/Applications/Consilium.app/Contents/Resources/python /usr/bin/python3 -B -m consilium.cli wait --peer claude --session-label claude-standby --timeout 86400` with `run_in_background: true`, end the turn, and when it exits pick up, route, and re-arm. Never poll.
+- Codex / Antigravity: call `consilium_wait(peer_id=<self>, timeout_sec=300)` in a loop; on `woke: true` pick up and handle; keep each iteration terse.
