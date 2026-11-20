@@ -67,7 +67,12 @@ echo "release: building and smoke-testing the app"
 
 echo "release: packaging ${ZIP}"
 rm -f "${ZIP}" "${ZIP}.sha256"
-/usr/bin/ditto -c -k --keepParent build/Consilium.app "${ZIP}"
+# No resource forks or extended attributes: they only add ._ files to the archive.
+/usr/bin/ditto -c -k --norsrc --noextattr --noqtn --keepParent build/Consilium.app "${ZIP}"
+VERIFY_DIR="$(mktemp -d /tmp/consilium-release-verify.XXXXXX)"
+/usr/bin/ditto -x -k "${ZIP}" "${VERIFY_DIR}"
+/usr/bin/codesign --verify --deep --strict "${VERIFY_DIR}/Consilium.app" || fail "the packaged app does not pass codesign verification"
+rm -rf "${VERIFY_DIR}"
 ( cd "${DIST}" && /usr/bin/shasum -a 256 "$(basename "${ZIP}")" > "$(basename "${ZIP}").sha256" )
 
 if [[ "${DRY_RUN}" == "1" ]]; then
