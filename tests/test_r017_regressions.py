@@ -245,6 +245,10 @@ class R017RegressionsTests(unittest.TestCase):
         t2 = self.store.pickup_inbox("claude")["claimed_tasks"][0]
         self.assertEqual(t2["new_session"], 0)
         self.assertEqual(t2["native_session"], "local_abc")
+        convo = t2["conversation"]
+        self.assertEqual([c["from"] for c in convo], ["user", "claude", "user"])
+        self.assertEqual(convo[0]["text"], "整理一下日志")
+        self.assertEqual(convo[1]["text"], "好")
         self.assertEqual(t2["model_tier"], "pro_reasoning")
 
         self.daemon.dispatcher._dispatch_tool("consilium_set_title", {"mission_id": mid, "peer_id": "claude", "title": "日志整理"})
@@ -296,7 +300,7 @@ class R017RegressionsTests(unittest.TestCase):
 
         html = render_dashboard_html("0.1.0")
         for needle in ("data-folder-menu", "data-open-folder-picker", "选择文件夹…", "pickFolder", "__consiliumFolderPicked",
-                       "data-tier", "data-rename-mission", "data-archive-mission", "folder-group", "已归档",
+                       "data-tier", "data-rename-mission", "data-archive-mission", "data-dedicated-session", "在 Claude 里开专属会话", "folder-group", "已归档",
                        "data-start-standby", "让它们待命", "renderMissionDetails", "参与与模型", "模型未上报"):
             self.assertIn(needle, html)
         for gone in ("compose-ws-input", "data-edit-workspace", "新开会话处理", "工作区绝对路径", "/Users/…/项目文件夹"):
