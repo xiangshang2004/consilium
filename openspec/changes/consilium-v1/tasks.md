@@ -49,8 +49,16 @@
 - [x] 2.8.3 Pulse `.seq` waiters in `rebuild_all_peer_seqs` on daemon startup when `unacked > 0` or `queued_tasks > 0` (`pulse_if_backlog=True` in `consilium/wakeup.py` & `consilium/store.py`), and surface redacted per-target status (`InstallApplyError` & `target_results`) on installer Phase 2 partial failures in `scripts/install.py`.
 - [x] 2.8.4 Polish `WKWebView` theme switching in `consilium/dashboard.py` (suppress frozen CSS transitions across `data-theme` switches via `no-theme-transition` class and explicit `color-scheme`).
 
+## Stage 2.9: Claude Takeover Polish (R016)
+
+- [x] 2.9.1 Review R015 (79 tests, build, two-case app smoke, screenshots) and tighten `Consilium.app` deep links to the verified `claude://code/new` and `codex://new` only.
+- [x] 2.9.2 Replace user-facing “Mission” with “会诊”, embed the brand mark (inline SVG) and an offline data-URI favicon in `/ui`.
+- [x] 2.9.3 Narrow-screen (≤ 860px) layout: single-row top bar with a “⋯” menu for theme, drawer tabs and logout; single-row scrollable peer capsules; slimmer composer. Add `tests/test_r016_regressions.py` and capture 2026-11-20 “b” screenshots.
+- [x] 2.9.4 Prepare Stage 3 in `13_Consilium/04_B级试跑/` (trial plan, `.mcp.json` generator/cleaner, stand-in worker), self-tested on an isolated daemon; nothing executed against live apps.
+
 ## Stage 3: Level-B Real App Trial (Blocked on ★ Gate 2)
 - [ ] 3.1 Add project-scoped `.mcp.json` / `.gitignore` and B-level worker script in `13_Consilium/`.
+- [x] 3.1a Trial plan and scripts ready (`13_Consilium/04_B级试跑/试跑方案.md`); Codex project-local MCP requires project trust in `~/.codex/config.toml`, deferred to a separate user consent (B2).
 - [ ] 3.2 Run live Claude Code (+ Codex if trusted) coordinator walkthrough with dashboard open; enable Q2 (composer live dispatch write API) and structured `report_progress(subagents=[...])` reporting after Gate 2 approval.
 - [ ] ★ **Gate 3**: User confirms workflow smoothness.
 
