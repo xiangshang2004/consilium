@@ -994,7 +994,7 @@ class ConsiliumMCPDispatcher:
             rec_warnings = []
             if res.get("idempotent_replay"):
                 delivery = _replay_delivery_payload(res)
-            elif res.get("event") and res.get("coordinator_peer"):
+            elif notify_coord and res.get("event") and res.get("coordinator_peer"):
                 evt_id = int(res["event"]["event_id"])
                 ring_ms = time.time() * 1000.0
                 delivery = _safe_ring_peer(
@@ -1631,14 +1631,22 @@ class ConsiliumDaemon:
         attachments: Any = None,
         client_request_id: str = "",
         intent: str = "",
+        parallel_fanout: int = 1,
+        report_process: bool = False,
     ) -> Dict[str, Any]:
         """Commit a user message once even when the client retries after disconnection."""
         request_id = str(client_request_id or "").strip()
         if intent not in ("", "plan", "goal"):
             raise ValueError("不支持的消息模式")
+        if type(parallel_fanout) is not int or not 1 <= parallel_fanout <= (1 << 53) - 1:
+            raise ValueError("子代理数量须为可精确表示的正整数")
+        if type(report_process) is not bool:
+            raise ValueError("过程摘要选项必须为布尔值")
         request_fields = [text, targets, mission_id, workspace_hint, new_session, tier, attachments]
         if intent:
             request_fields.append(intent)
+        if parallel_fanout > 1 or report_process:
+            request_fields.append({"parallel_fanout": parallel_fanout, "report_process": report_process})
         request = json.dumps(request_fields, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         request_hash = hashlib.sha256(request.encode("utf-8")).hexdigest() if request_id else ""
         with self._ui_send_lock:
@@ -1646,11 +1654,12 @@ class ConsiliumDaemon:
             if cached is not None:
                 return cached
             return self._ui_send(text, targets, mission_id, workspace_hint, new_session, tier,
-                                 attachments, request_id, request_hash, intent)
+                                 attachments, request_id, request_hash, intent, parallel_fanout, report_process)
 
     def _ui_send(
         self, text: str, targets: Any, mission_id: Optional[str], workspace_hint: str,
         new_session: bool, tier: Optional[str], attachments: Any, request_id: str, request_hash: str, intent: str,
+        parallel_fanout: int, report_process: bool,
     ) -> Dict[str, Any]:
         body = str(text or "").strip()
         images = self.images.describe(attachments)
@@ -1669,6 +1678,8 @@ class ConsiliumDaemon:
                 raise ValueError(f"Unknown target {t!r}")
             if pid not in chosen:
                 chosen.append(pid)
+        if parallel_fanout > 1 and len(chosen) > 1:
+            raise ValueError("同一任务由一个接单端启动子代理，请选一端或自动")
         store = self.dispatcher.store
         try:
             sync_local_quotas(store)
@@ -1692,19 +1703,41 @@ class ConsiliumDaemon:
         image_paths = self.images.native_paths(images)
 
         def _wrap(prompt: str) -> str:
+            instructions = []
             if intent == "plan":
-                prompt = ("【计划模式】只做调查和规划。给出步骤、关键决策和验证方式。保持文件与外部状态原样，"
-                          "提交计划后等待使用者确认，再开始执行。\n\n" + prompt)
+                instructions.append(
+                    "【计划模式】只做调查和规划。给出步骤、关键决策和验证方式。保持文件与外部状态原样，"
+                    "提交计划后等待使用者确认，再开始执行。"
+                )
             elif intent == "goal":
-                prompt = ("【目标模式】使用者要求以这条消息作为执行目标。明确完成条件，持续推进直到达成并验证，"
-                          "或遇到需使用者解决的阻塞。当前客户端支持目标工具时，用真实目标创建记录；"
-                          "否则按相同完成条件执行并报告。\n\n" + prompt)
+                instructions.append(
+                    "【目标模式】使用者要求以这条消息作为执行目标。明确完成条件，持续推进直到达成并验证，"
+                    "或遇到需使用者解决的阻塞。当前客户端支持目标工具时，用真实目标创建记录；"
+                    "否则按相同完成条件执行并报告。"
+                )
+            if parallel_fanout > 1:
+                instructions.append(
+                    f"【原生子代理】使用者要求在当前任务并行启动 {parallel_fanout} 个原生子代理。"
+                    "由你在自己的客户端调用原生子代理工具（Codex spawn_agent、Claude Agent、Antigravity invoke_subagent）。"
+                    "把工作拆成独立的小任务，避免同时写同一处；不要用向其他 Consilium 端派任务替代。"
+                    "按当前客户端的实际能力执行并汇总各子代理的产出；启动后回报实际启动数量和分工。"
+                    "若工具缺失或容量有限，说明实际数量和具体原因。"
+                )
+            if report_process:
+                instructions.append(
+                    "【过程摘要】用 consilium_report_progress 向使用者回报简短的可核对进度，"
+                    "包括可引用的观察依据、已做的关键决策、子代理分工和实际校验结果，"
+                    "在完成回执中汇总结果与已知阻塞。仅写公开工作摘要，不输出私有内部推理记录。"
+                )
+            if instructions:
+                prompt = "\n\n".join(instructions + [prompt])
             if image_paths:
                 prompt += "\n\n【使用者附图】请读取以下本机图片后回复：\n" + "\n".join(image_paths)
             return prompt
 
         def message(recipients: List[str], reason: str) -> Dict[str, Any]:
-            return {"text": body, "targets": recipients, "mode": mode, "reason": reason, "attachments": images, "intent": intent,
+            return {"text": body, "targets": recipients, "mode": mode, "reason": reason, "attachments": images,
+                    "intent": intent, "report_process": report_process,
                     "ui_request_id": request_id, "ui_request_hash": request_hash}
 
         events: List[Dict[str, Any]] = []
@@ -1714,7 +1747,7 @@ class ConsiliumDaemon:
                 coordinator = USER_PEER
                 task_specs = [
                     {"assignee_peer": pid, "prompt": _wrap(body), "origin": "user", "new_session": True,
-                     "model_tier": tier_key or "auto"}
+                     "model_tier": tier_key or "auto", "parallel_fanout": parallel_fanout}
                     for pid in chosen
                 ]
             else:
@@ -1724,7 +1757,7 @@ class ConsiliumDaemon:
                 )
                 task_specs = [
                     {"assignee_peer": coordinator, "prompt": _wrap(prompt), "origin": "user", "new_session": True,
-                     "model_tier": tier_key or "auto"}
+                     "model_tier": tier_key or "auto", "parallel_fanout": parallel_fanout}
                 ]
             res = store.create_mission(
                 title=title,
@@ -1777,6 +1810,7 @@ class ConsiliumDaemon:
             dispatched = store.dispatch_ui_message(
                 mid, [(pid, _wrap(prompt), pid not in bindings) for pid, prompt in plan],
                 tier_key or "auto", message(chosen or [plan[0][0]], reason),
+                parallel_fanout=parallel_fanout,
             )
             events = dispatched["events"]
             warnings = dispatched["post_commit_warnings"]
@@ -2434,6 +2468,8 @@ class ConsiliumDaemon:
                             attachments=payload.get("attachments"),
                             client_request_id=str(payload.get("client_request_id") or ""),
                             intent=str(payload.get("intent") or ""),
+                            parallel_fanout=payload.get("parallel_fanout", 1),
+                            report_process=payload.get("report_process", False),
                         )
                         self._send_json(200, {"committed": True, "result": res})
                     except ConflictError as exc:

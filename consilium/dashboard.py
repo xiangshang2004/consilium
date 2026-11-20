@@ -1191,6 +1191,9 @@ __PEER_ICON_CSS__
   font-size: 12px;
   cursor: pointer;
 }
+.composer-execution { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.composer-execution #composer-agents { cursor:default; }
+.agent-count { width:4.5em; font:inherit; color:inherit; background:var(--bg-surface); border:1px solid var(--border); border-radius:4px; }
 
 .composer-box {
   border: 1px solid var(--border-strong);
@@ -1714,7 +1717,15 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
             <div id="account-notice" class="account-notice hidden" role="status"><span></span><button type="button" class="btn-link" id="dismiss-account-notice">知道了</button></div>
             <div class="composer-box" id="composer-box">
               <textarea id="composer-input" class="composer-input" rows="1" placeholder="说说要做的事…" aria-label="消息"></textarea>
-              <button type="button" id="composer-intent" class="composer-intent hidden"></button>
+              <div id="composer-execution" class="composer-execution hidden">
+                <button type="button" id="composer-intent" class="composer-intent hidden"></button>
+                <div id="composer-agents" class="composer-intent hidden">
+                  <label>原生子代理 <input id="agent-count" class="agent-count" type="text" inputmode="numeric" aria-label="原生子代理数量"></label>
+                  <button type="button" id="clear-agents" class="btn-link" aria-label="取消原生子代理">×</button>
+                </div>
+                <button type="button" id="composer-trace" class="composer-intent hidden" aria-label="取消过程摘要">过程摘要 ×</button>
+                <span id="agent-count-error" class="muted hidden" role="status">请输入可精确表示且至少为 2 的整数</span>
+              </div>
               <div id="composer-attachments" class="attachment-list" aria-label="图片草稿"></div>
               <div id="attachment-error" class="hidden" role="status"></div>
               <div class="composer-foot">
@@ -1842,6 +1853,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   };
   const INTENT_LABELS = { plan: "计划", goal: "目标" };
   const SLASH_COMMANDS = [
+    { cmd: "/agents", aliases: ["/subagents"], desc: "为同一任务并行启动多个原生子代理", action: "agents" },
+    { cmd: "/trace", desc: "回报进度、判断依据、关键决策和校验结果", action: "trace" },
     { cmd: "/new", desc: "新建独立会诊", action: "new_chat" },
     { cmd: "/fork", desc: "在当前文件夹新建独立会诊", action: "fork_chat", needsFolder: true },
     { cmd: "/switch", desc: "打开会诊列表，切换会诊", action: "focus_mission" },
@@ -2464,7 +2477,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   function renderUserMsg(u) {
     const targets = (u.targets || []).map(peerLabel).join("、");
     const routing = u.mode === "auto" ? "自动 · " + (u.reason || ("交给 " + targets)) : "交给 " + targets;
-    const meta = [INTENT_LABELS[u.intent], routing].filter(Boolean).join(" · ");
+    const meta = [INTENT_LABELS[u.intent], u.report_process ? "过程摘要" : "", routing].filter(Boolean).join(" · ");
     const images = (u.attachments || []).map(image => {
       const url = "/api/attachments/" + encodeURIComponent(image.id);
       return '<button type="button" class="sent-image" data-open-image="' + esc(url) + '" data-image-label="' + esc(image.name) +
@@ -2553,7 +2566,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       since = task.last_progress_at || (payload.last_progress_at || "") || (task.stale_at ? "" : task.updated_at);
       if (!detail) detail = "等下一次进度或完成回执";
     }
-    return {label, detail, since, event};
+    const delegation = task.parallel_fanout > 1 ? "请求 " + task.parallel_fanout + " 个原生子代理" : "";
+    return {label, detail, since, event, delegation};
   }
 
   function deliveryTimeline(task, mission) {
@@ -2594,7 +2608,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     const label = peerLabel(pid);
     const facts = taskPresentation(t, mission);
     const exhausted = exhaustedQuota(state, pid);
-    const detail = [facts.since ? formatClock(facts.since) : "", facts.detail,
+    const detail = [facts.since ? formatClock(facts.since) : "", facts.detail, facts.delegation,
                     t.status === "running" && (t.runtime_model_used || t.model_used) ? reportedTaskModel(pid, t) : ""]
       .filter(Boolean).join(" · ");
     const standby = Number(((state && state.active_waiters) || {})[pid] || 0) > 0;
@@ -2714,7 +2728,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     let text = String(t.prompt || "");
     const cut = text.indexOf("————");
     if (cut > 0) text = text.slice(0, cut);
-    text = text.replace(/^【[^】]*】\s*/, "").trim();
+    text = text.replace(/^(?:【(?:计划模式|目标模式|原生子代理|过程摘要)】[^\n]*\n\n)+/, "")
+      .replace(/^【[^】]*】\s*/, "").trim();
     const line = (text.split("\n").find(l => l.trim()) || "").trim();
     return line.length > 64 ? line.slice(0, 63) + "…" : (line || "（没有说明）");
   }
@@ -2808,10 +2823,19 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       const phase = (kind === "wait" || kind === "run") ? presentation.label : "";
       const lastFact = presentation.since ? formatClock(presentation.since) : "";
       const tn = tierNote(t);
-      const meta = [phase, lastFact, tn.label, kind === "wait" ? "" : reportedTaskModel(pid, t), t.effort_used || "", timeTxt].filter(Boolean).join(" · ");
+      const meta = [phase, lastFact, presentation.delegation, tn.label, kind === "wait" ? "" : reportedTaskModel(pid, t), t.effort_used || "", timeTxt].filter(Boolean).join(" · ");
       const timeline = isNaN(startMs) && !presentation.event ? "" : deliveryTimeline(t, m);
       const isOpen = Object.prototype.hasOwnProperty.call(taskRowOpen, t.task_id) ? taskRowOpen[t.task_id] : (kind === "run" || !!exhausted);
       const note = kind === "done" || kind === "bad" ? (t.result_summary || t.progress_note || "") : (t.progress_note || "");
+      const reports = isOpen ? (m.events || []).filter(e => e.kind === "progress" && e.task_id === t.task_id &&
+        e.payload && e.payload.public_report && e.payload.attempt_id === t.attempt_id)
+        .sort((a, b) => a.event_id - b.event_id) : [];
+      const reportHistory = reports.map(e =>
+        '<div class="pt-meta">' + esc(formatClock(e.created_at)) + ' · 过程摘要</div>' +
+        '<div class="pt-note">' + renderMarkdownBlock(e.payload.progress_note || "") + '</div>'
+      ).join("");
+      const showNote = note && (kind === "done" || kind === "bad" || !reports.length ||
+        reports[reports.length - 1].payload.progress_note !== note);
       const canRequeue = !closed && (t.status === "claimed" || t.status === "running" || t.status === "failed" || t.status === "blocked");
       const canOpen = !closed && kind === "wait" && !standby;
       const canSettle = !closed && kind === "run" && t.attempt_id && content.tasks.some(task => task.status === "done");
@@ -2827,7 +2851,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
           '</button>' +
           (exhausted ? '<div class="pt-quota-warning">' + esc(exhaustedLabel(pid)) + '</div>' : "") +
           (meta ? '<div class="pt-meta"' + (tn.tip ? ' title="' + esc(tn.tip) + '"' : "") + '>' + esc(meta) + '</div>' : "") +
-          (isOpen ? (note ? '<div class="pt-note">' + renderMarkdownBlock(note) + '</div>' : "") +
+          (isOpen ? reportHistory + (showNote ? '<div class="pt-note">' + renderMarkdownBlock(note) + '</div>' : "") +
             (timeline ? '<div class="pt-meta">' + timeline + '</div>' : "") +
             (acts ? '<div class="pt-act">' + acts + '</div>' : "") : "") +
         '</div>' +
@@ -2944,7 +2968,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 
   function draftFor(key) {
     if (!messageDrafts.has(key)) {
-      messageDrafts.set(key, {text:"", images:[], targets:[], intent:"", workspace:"", tier:"auto", receipt:null});
+      messageDrafts.set(key, {text:"", images:[], targets:[], intent:"", subagents:null, reportProcess:false,
+        workspace:"", tier:"auto", receipt:null});
     }
     return messageDrafts.get(key);
   }
@@ -2952,7 +2977,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   function activeDraft() { return draftFor(currentDraftKey); }
   function isNewDraftKey(key) { return typeof key === "string" && key.startsWith("draft-"); }
   function draftHasContent(draft) {
-    return !!(draft.text.trim() || draft.images.length || draft.intent || draft.targets.length || draft.receipt);
+    return !!(draft.text.trim() || draft.images.length || draft.intent || draft.subagents !== null ||
+      draft.reportProcess || draft.targets.length || draft.receipt);
   }
 
   function selectComposerDraft(mission, hasState) {
@@ -2990,7 +3016,13 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     document.getElementById("composer-input").focus();
   }
 
-  function isSlashQuery(value) { return /^\/[a-z-]*$/i.test(value); }
+  const AGENT_COMMAND_ARGUMENT = /^\/(?:agents|subagents)[ \t]+(\S+)?[ \t]*$/i;
+  function isSlashQuery(value) { return /^\/[a-z-]*$/i.test(value) || AGENT_COMMAND_ARGUMENT.test(value); }
+  function requestedFanout(draft) {
+    if (draft.subagents === null) return 1;
+    const count = Number(draft.subagents);
+    return /^[0-9]+$/.test(draft.subagents) && Number.isSafeInteger(count) && count >= 2 ? count : 0;
+  }
 
   function renderDraftAttachments() {
     const items = activeDraft().images;
@@ -3062,6 +3094,16 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     intentChip.classList.toggle("hidden", !intentLabel);
     intentChip.textContent = intentLabel ? intentLabel + " · 下一条消息 ×" : "";
     intentChip.setAttribute("aria-label", "取消" + intentLabel + "模式");
+    const countInput = document.getElementById("agent-count");
+    const countValue = draft.subagents || "";
+    if (countInput.value !== countValue) countInput.value = countValue;
+    document.getElementById("composer-agents").classList.toggle("hidden", draft.subagents === null);
+    document.getElementById("composer-trace").classList.toggle("hidden", !draft.reportProcess);
+    document.getElementById("composer-execution").classList.toggle("hidden",
+      !intentLabel && draft.subagents === null && !draft.reportProcess);
+    const fanout = requestedFanout(draft);
+    countInput.setAttribute("aria-invalid", String(!fanout));
+    document.getElementById("agent-count-error").classList.toggle("hidden", !!fanout);
     renderDraftAttachments();
     renderAccountNotices(state);
     const compact = !curMission;
@@ -3145,14 +3187,15 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     }
     const val = document.getElementById("composer-input").value || "";
     const pal = document.getElementById("slash-palette");
-    const q = isSlashQuery(val) ? val.toLowerCase() : null;
+    const q = isSlashQuery(val) ? val.toLowerCase().split(/\s+/, 1)[0] : null;
     const showPal = slashOpen || (q !== null && val !== slashDismissed);
     const matches = showPal ? SLASH_COMMANDS.filter(c =>
-      (!q || c.cmd.startsWith(q)) && (!c.needsMission || missionIsOpen(curMission)) &&
+      (!q || [c.cmd].concat(c.aliases || []).some(name => name.startsWith(q))) &&
+      (!c.needsMission || missionIsOpen(curMission)) &&
       (!c.needsFolder || (curMission && curMission.workspace_path))
     ) : [];
     const send = document.getElementById("btn-send");
-    send.disabled = sending || (!val.trim() && !draft.images.length && !matches.length);
+    send.disabled = sending || (!matches.length && (!fanout || (!val.trim() && !draft.images.length)));
     const sendLabel = matches.length ? "执行指令" : "发送";
     send.setAttribute("aria-label", sendLabel);
     send.title = sendLabel + "（Enter）";
@@ -3451,6 +3494,11 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     const draftKey = currentDraftKey;
     const photos = draft.images.slice();
     if ((!text && !photos.length) || sending) return;
+    const parallelFanout = requestedFanout(draft);
+    if (!parallelFanout) {
+      document.getElementById("agent-count").focus();
+      return;
+    }
     const cur = getActiveMission(appState);
     if (!cur && !draft.workspace) {
       folderMenuOpen = true;
@@ -3463,10 +3511,14 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     const recipients = draft.targets.slice();
     const folder = (cur && cur.workspace_path) || draft.workspace || (!open && recentFolders(appState)[0]) || "";
     const intent = draft.intent;
+    const subagents = draft.subagents;
+    const reportProcess = draft.reportProcess;
     const payload = {
       text, targets: recipients, tier: composeTier, intent,
       attachments:photos.map(image => ({id:image.id, name:image.file.name || "剪贴板图片"}))
     };
+    if (parallelFanout > 1) payload.parallel_fanout = parallelFanout;
+    if (reportProcess) payload.report_process = true;
     if (!open) payload.workspace = folder;
     const wire = JSON.stringify([path,payload]);
     if (!draft.receipt || draft.receipt.wire !== wire) draft.receipt = {wire, id:newClientID()};
@@ -3500,6 +3552,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       accepted = true;
       draft.receipt = null;
       if (draft.intent === intent) draft.intent = "";
+      if (draft.subagents === subagents) draft.subagents = null;
+      if (draft.reportProcess === reportProcess) draft.reportProcess = false;
       const sentIDs = new Set(photos.map(image => image.id));
       draft.images = draft.images.filter(image => !sentIDs.has(image.id));
       photos.forEach(image => URL.revokeObjectURL(image.preview));
@@ -3532,6 +3586,26 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   });
   document.getElementById("composer-intent").addEventListener("click", () => {
     activeDraft().intent = "";
+    renderComposerBar(appState);
+    document.getElementById("composer-input").focus();
+  });
+  document.getElementById("agent-count").addEventListener("input", ev => {
+    activeDraft().subagents = ev.target.value;
+    renderComposerBar(appState);
+  });
+  document.getElementById("agent-count").addEventListener("keydown", ev => {
+    if (ev.key === "Enter" && !isImeEnter(ev)) {
+      ev.preventDefault();
+      if (requestedFanout(activeDraft())) document.getElementById("composer-input").focus();
+    }
+  });
+  document.getElementById("clear-agents").addEventListener("click", () => {
+    activeDraft().subagents = null;
+    renderComposerBar(appState);
+    document.getElementById("composer-input").focus();
+  });
+  document.getElementById("composer-trace").addEventListener("click", () => {
+    activeDraft().reportProcess = false;
     renderComposerBar(appState);
     document.getElementById("composer-input").focus();
   });
@@ -3769,6 +3843,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       const act = slashActBtn.getAttribute("data-slash-act");
       slashOpen = false;
       const inp = document.getElementById("composer-input");
+      const countArgument = (inp.value.match(AGENT_COMMAND_ARGUMENT) || [])[1];
       if (isSlashQuery(inp.value)) {
         inp.value = "";
         activeDraft().text = "";
@@ -3789,7 +3864,21 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
         showNewDraft("draft-" + newClientID(), act === "fork_chat" && mission ? mission.workspace_path : "");
         return;
       } else if (act === "parallel") {
-        activeDraft().targets = Object.keys(PEER_META);
+        const draft = activeDraft();
+        draft.subagents = null;
+        draft.targets = Object.keys(PEER_META);
+      } else if (act === "agents") {
+        const draft = activeDraft();
+        draft.subagents = countArgument || draft.subagents || "2";
+        if (draft.targets.length > 1) {
+          draft.targets = [];
+          showToast("由系统选一个接单端，再由它启动子代理");
+        }
+        renderComposerBar(appState);
+        (countArgument ? inp : document.getElementById("agent-count")).focus();
+        return;
+      } else if (act === "trace") {
+        activeDraft().reportProcess = true;
       } else if (act.startsWith("intent:")) {
         activeDraft().intent = act.slice(7);
       } else if (act.startsWith("session:")) {
@@ -3806,6 +3895,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       const draft = activeDraft();
       if (tgt === "auto") draft.targets = [];
       else if (draft.targets.includes(tgt)) draft.targets = draft.targets.filter(x => x !== tgt);
+      else if (draft.subagents !== null) draft.targets = [tgt];
       else draft.targets.push(tgt);
       renderComposerBar(appState);
       return;

@@ -12,6 +12,69 @@ from tests.test_mcp_transports import _raw_http_roundtrip
 
 
 class ConversationStatusSyncTests(unittest.TestCase):
+    def test_one_native_parent_and_public_progress_on_the_current_attempt(self):
+        with tempfile.TemporaryDirectory(prefix="consilium-native-agent-", dir="/tmp") as root:
+            daemon = ConsiliumDaemon(home_dir=root, rendezvous_dir=root)
+            self.addCleanup(daemon.stop)
+            store = daemon.dispatcher.store
+            with patch("consilium.mcp_server.sync_local_quotas"), patch(
+                "consilium.mcp_server._safe_ring_peer", return_value={}
+            ) as ring:
+                initial = daemon.ui_send(
+                    "读两项独立结果", [], workspace_hint=root, parallel_fanout=2, client_request_id="native"
+                )
+                mid = initial["mission_id"]
+                self.assertEqual(daemon.ui_send(
+                    "读两项独立结果", [], workspace_hint=root, parallel_fanout=2, client_request_id="native"
+                )["mission_id"], mid)
+                with self.assertRaises(ConflictError):
+                    daemon.ui_send("读两项独立结果", [], workspace_hint=root,
+                                   parallel_fanout=3, client_request_id="native")
+                with self.assertRaises(ValueError):
+                    daemon.ui_send("同一任务", ["chatgpt", "claude"], mid, parallel_fanout=2)
+                for count in (0, True, 2.5, "2", 1 << 53):
+                    with self.subTest(count=count), self.assertRaises(ValueError):
+                        daemon.ui_send("无效数量", ["chatgpt"], mid, parallel_fanout=count)
+
+                auth = {"Authorization": "Bearer " + daemon.auth_token, "Content-Type": "application/json"}
+                request = {"text": "核对证据", "parallel_fanout": 3, "report_process": True, "intent": "plan"}
+                status, _, _ = _raw_http_roundtrip(
+                    daemon, "POST", f"/api/missions/{mid}/message", auth, body=json.dumps(request).encode()
+                )
+                self.assertEqual(status, 200)
+                missions = store.get_dashboard_missions(source="ui")[0]
+                self.assertEqual(len(missions), 1)
+                self.assertEqual(len(missions[0]["tasks"]), 2)
+                assignee = initial["targets"][0]
+                received = store.pickup_inbox(assignee, mission_id=mid)["claimed_tasks"]
+                first = next(task for task in received if task["parallel_fanout"] == 2)
+                self.assertEqual(first["parallel_fanout"], 2)
+                self.assertIn("spawn_agent", first["prompt"])
+                trace_task = next(task for task in missions[0]["tasks"] if task["parallel_fanout"] == 3)
+                claimed_tasks = received if trace_task["assignee_peer"] == assignee else store.pickup_inbox(
+                    trace_task["assignee_peer"], mission_id=mid
+                )["claimed_tasks"]
+                claimed = next(task for task in claimed_tasks if task["task_id"] == trace_task["task_id"])
+                for marker in ("【计划模式】", "并行启动 3 个原生子代理", "【过程摘要】", "核对证据"):
+                    self.assertIn(marker, claimed["prompt"])
+                ring.reset_mock()
+                for note in ("已分派两项只读核查", "已用隔离样例验证路由"):
+                    returned = daemon.dispatcher._dispatch_tool("consilium_report_progress", {
+                        "peer_id": claimed["assignee_peer"], "task_id": claimed["task_id"],
+                        "attempt_id": claimed["attempt_id"], "progress_note": note,
+                    })
+                    self.assertTrue(returned["event"]["payload"]["public_report"])
+                    self.assertEqual(returned["event"]["to_peer"], "user")
+                    self.assertTrue(returned["event"]["acked_at"])
+                    self.assertEqual(returned["delivery"]["delivery"], "none")
+                ring.assert_not_called()
+
+            snapshot = daemon.get_dashboard_state(sync_quotas=False)["missions"][0]
+            self.assertEqual([m["report_process"] for m in snapshot["user_messages"]], [False, True])
+            updates = [e["payload"] for e in snapshot["events"] if e["kind"] == "progress"]
+            self.assertEqual(len(updates), 2)
+            self.assertTrue(all(p["attempt_id"] == claimed["attempt_id"] for p in updates))
+
     def test_plan_and_goal_intent_survive_routing_and_retries(self):
         with tempfile.TemporaryDirectory(prefix="consilium-intent-", dir="/tmp") as root:
             daemon = ConsiliumDaemon(home_dir=root, rendezvous_dir=root)

@@ -69,6 +69,8 @@ The Consilium window works like the Claude Code desktop app: **the user picks a 
 
 **Coordinating auto-routed messages** (the prompt says you are the coordinator): call `consilium_preferences` first; do it yourself or split it with `consilium_dispatch_task` (prefer peers on standby with quota; never an exhausted one); give the conversation a short title with `consilium_set_title` (at most 20 Chinese characters; ignored if the user renamed it); deliver the final answer with `consilium_complete_task`.
 
+**Native subagents and public progress**: On messages requesting `/agents`, `parallel_fanout` is the user's requested count inside the receiving app. Use that app's native child-agent tool to work concurrently on independent pieces. Report how many actually started, their assignments, and any runtime limit. If a message requests `/trace`, use `consilium_report_progress` for concise public updates about observed evidence, decisions, progress, and verification results. Summarize results with `consilium_complete_task`. Keep private reasoning out of both.
+
 **Keep sources apart**: the bus carries two kinds of conversations: those the user started in the Consilium window, and missions a desktop session created itself for its own project. They must not mix.
 - A standby session serves the Consilium window only: always call `consilium_pickup_inbox(peer_id=<self>, session_label="<self>-standby", scope="consilium")`. If it returns nothing, re-arm silently and say nothing.
 - A session that created its own mission collects results with `consilium_pickup_inbox(peer_id=<self>, mission_id=<that mission>)` or reads `consilium_status(mission_id)`; it never picks up without `mission_id`, so it cannot claim the user's Consilium messages.

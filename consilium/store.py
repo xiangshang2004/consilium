@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS user_messages (
     mode TEXT NOT NULL DEFAULT 'direct',
     reason TEXT NOT NULL DEFAULT '',
     intent TEXT NOT NULL DEFAULT '',
+    report_process INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     created_ms REAL NOT NULL DEFAULT 0
 );
@@ -288,6 +289,7 @@ class BusStore:
                 "ALTER TABLE tasks ADD COLUMN model_used TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE user_messages ADD COLUMN reason TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE user_messages ADD COLUMN intent TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE user_messages ADD COLUMN report_process INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE user_messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'",
                 "ALTER TABLE user_messages ADD COLUMN ui_request_id TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE user_messages ADD COLUMN ui_request_hash TEXT NOT NULL DEFAULT ''",
@@ -2019,20 +2021,28 @@ class BusStore:
                     (now, task["mission_id"]),
                 )
                 self._touch_peer_locked(conn, peer, status="working", now=now)
-                if notify_coordinator and mission is not None:
-                    touched_peers.append(mission["coordinator_peer"])
+                public_report = False
+                if task["user_message_id"] and progress_note.strip():
+                    user_message = conn.execute(
+                        "SELECT report_process FROM user_messages WHERE message_id = ?", (task["user_message_id"],)
+                    ).fetchone()
+                    public_report = bool(user_message and user_message["report_process"])
+                if mission is not None and (notify_coordinator or public_report):
+                    if notify_coordinator:
+                        touched_peers.append(mission["coordinator_peer"])
                     emitted_event = self._insert_event(
                         conn,
                         mission_id=task["mission_id"],
                         task_id=task_id,
                         from_peer=peer,
-                        to_peer=mission["coordinator_peer"],
+                        to_peer=mission["coordinator_peer"] if notify_coordinator else USER_PEER,
                         kind="progress",
                         payload={
                             "task_id": task_id,
                             "attempt_id": provided_attempt,
                             "status": normalized_status,
                             "progress_note": progress_note,
+                            **({"public_report": True} if public_report else {}),
                             "worktree_branch": branch_value,
                         },
                         created_at=now,
@@ -2535,10 +2545,11 @@ class BusStore:
         targets = [str(t) for t in (message.get("targets") or [])]
         row = conn.execute(
             """INSERT INTO user_messages
-                (mission_id, text, targets_json, mode, reason, intent, created_at, created_ms, attachments_json, ui_request_id, ui_request_hash)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (mission_id, text, targets_json, mode, reason, intent, report_process, created_at, created_ms, attachments_json, ui_request_id, ui_request_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (mission_id, text[:20000], json.dumps(targets, ensure_ascii=False), str(message.get("mode") or "direct"),
-             str(message.get("reason") or "")[:300], message.get("intent") or "", now, round(time.time() * 1000.0, 2),
+             str(message.get("reason") or "")[:300], message.get("intent") or "", int(bool(message.get("report_process"))),
+             now, round(time.time() * 1000.0, 2),
              json.dumps(attachments, ensure_ascii=False), message.get("ui_request_id") or "", message.get("ui_request_hash") or ""),
         )
         return row.lastrowid
@@ -2568,7 +2579,7 @@ class BusStore:
         }
 
     def dispatch_ui_message(
-        self, mission_id: str, plans: List[tuple], model_tier: str, message: Dict[str, Any]
+        self, mission_id: str, plans: List[tuple], model_tier: str, message: Dict[str, Any], parallel_fanout: int = 1
     ) -> Dict[str, Any]:
         """Commit a follow-up and all its recipients in one transaction."""
         now = utc_now_iso()
@@ -2586,7 +2597,7 @@ class BusStore:
                 events = [
                     self._insert_task_locked(
                         conn, mission_id=mission_id, from_peer=coordinator, assignee_peer=peer,
-                        prompt=prompt, model_tier=model_tier, model_hint="", parallel_fanout=1,
+                        prompt=prompt, model_tier=model_tier, model_hint="", parallel_fanout=parallel_fanout,
                         worktree_branch="", now=now, now_ms=now_ms, origin="user",
                         new_session=new_session, user_message_id=message_id,
                     )[1]
@@ -2995,6 +3006,7 @@ class BusStore:
                         "mode": r["mode"],
                         "reason": r["reason"] if "reason" in r.keys() else "",
                         "intent": r["intent"],
+                        "report_process": bool(r["report_process"]),
                         "attachments": json.loads(r["attachments_json"] or "[]"),
                         "created_at": r["created_at"],
                     }

@@ -59,3 +59,11 @@ The composer MUST expose the existing local slash commands through a visible tri
 #### Scenario: The user selects plan or goal
 - **WHEN** a message is sent with plan or goal mode selected
 - **THEN** the UI MUST preserve the original message text, display the chosen mode, and deliver corresponding task instructions. The composer MUST clear the mode only after successful delivery or user cancellation.
+
+#### Scenario: The user requests several native subagents
+- **WHEN** the user configures a count using the native subagents command and sends a message
+- **THEN** a single recipient MUST receive one task with the requested count and instructions to invoke its own native subagents. The UI MUST distinguish the request from the execution reported by that recipient.
+
+#### Scenario: The user requests a public process summary
+- **WHEN** the assigned peer reports progress for a message with the process summary command selected
+- **THEN** the dashboard MUST keep the submitted progress within the current task attempt and make it viewable in task details. The task instructions MUST request public observations, decisions, and verification results.
