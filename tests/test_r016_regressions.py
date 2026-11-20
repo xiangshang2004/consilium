@@ -82,6 +82,31 @@ class R016RegressionsTests(unittest.TestCase):
 
         self.assertFalse(inst._is_claude_desktop_running(none_runner))
 
+    def test_subagent_templates_are_a_separate_install_target(self) -> None:
+        import json
+        import subprocess
+        import sys
+        import tempfile
+
+        def plan(*targets: str) -> list:
+            home = tempfile.mkdtemp(prefix="consilium-r016-")
+            env = dict(os.environ)
+            env.pop("CLAUDE_CONFIG_DIR", None)
+            out = subprocess.run(
+                [sys.executable, "-B", os.path.join(REPO_ROOT, "scripts", "install.py"), "--dry-run",
+                 "--target-home", home, "--rendezvous-dir", os.path.join(home, "rv"), "--targets", *targets],
+                capture_output=True, text=True, check=True, env=env,
+            ).stdout
+            return [op["target"] for op in json.loads(out)["operations"]]
+
+        base = plan("claude_code", "codex")
+        self.assertIn("claude_code_mcp", base)
+        self.assertIn("codex_mcp", base)
+        self.assertFalse([t for t in base if t.startswith(("claude_agent:", "codex_agent:"))])
+        agents = plan("claude_agents", "codex_agents")
+        self.assertTrue([t for t in agents if t.startswith("claude_agent:")])
+        self.assertTrue([t for t in agents if t.startswith("codex_agent:")])
+
 
 if __name__ == "__main__":
     unittest.main()

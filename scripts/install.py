@@ -45,6 +45,8 @@ VALID_INSTALL_TARGETS: Tuple[str, ...] = (
     "codex",
     "antigravity",
     "launchd",
+    "claude_agents",
+    "codex_agents",
 )
 
 TARGET_ALIASES: Dict[str, str] = {
@@ -62,6 +64,10 @@ TARGET_ALIASES: Dict[str, str] = {
     "gemini": "antigravity",
     "launchd": "launchd",
     "plist": "launchd",
+    "claude_agents": "claude_agents",
+    "claude-agents": "claude_agents",
+    "codex_agents": "codex_agents",
+    "codex-agents": "codex_agents",
 }
 
 
@@ -605,7 +611,7 @@ def run_installer(
             os.path.join(resolved_repo, "adapters", "skill", "consilium-collab", "SKILL.md")
         )
     claude_agent_files: List[Tuple[str, str]] = []
-    if "claude_code" in selected_set:
+    if "claude_agents" in selected_set:
         claude_agents_dir = os.path.join(resolved_repo, "adapters", "claude", "agents")
         claude_agent_files = [
             (fname, _read_text(os.path.join(claude_agents_dir, fname)))
@@ -613,7 +619,7 @@ def run_installer(
             if fname.endswith(".md")
         ]
     codex_agent_files: List[Tuple[str, str]] = []
-    if "codex" in selected_set:
+    if "codex_agents" in selected_set:
         codex_agents_dir = os.path.join(resolved_repo, "adapters", "codex", "agents")
         codex_agent_files = [
             (fname, _read_text(os.path.join(codex_agents_dir, fname)))
@@ -786,10 +792,10 @@ def run_installer(
                 0o644,
             )
         )
-        for fname, content in claude_agent_files:
-            text_targets.append(
-                (f"claude_agent:{fname}", os.path.join(home_dir, ".claude", "agents", fname), content, 0o644)
-            )
+    for fname, content in claude_agent_files:
+        text_targets.append(
+            (f"claude_agent:{fname}", os.path.join(home_dir, ".claude", "agents", fname), content, 0o644)
+        )
     if "codex" in selected_set:
         text_targets.append(
             (
@@ -799,10 +805,10 @@ def run_installer(
                 0o644,
             )
         )
-        for fname, content in codex_agent_files:
-            text_targets.append(
-                (f"codex_agent:{fname}", os.path.join(home_dir, ".codex", "agents", fname), content, 0o644)
-            )
+    for fname, content in codex_agent_files:
+        text_targets.append(
+            (f"codex_agent:{fname}", os.path.join(home_dir, ".codex", "agents", fname), content, 0o644)
+        )
     if "launchd" in selected_set:
         text_targets.append(
             (
@@ -1191,7 +1197,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=None,
         help=(
             "Target components to plan/apply (comma or space separated): "
-            "claude_desktop, claude_code (code), codex, antigravity, launchd, or all."
+            "claude_desktop, claude_code (code), codex, antigravity, launchd, claude_agents, codex_agents, or all."
         ),
     )
     parser.add_argument(
