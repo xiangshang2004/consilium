@@ -128,3 +128,12 @@
 - **验证**：110 项测试；无头浏览器实测已有会诊里的档位按钮、菜单、改档后发追问、任务页里的档位和理由，无脚本报错；截图 `13_Consilium/03_演示记录/app_r23_tier_menu_2026-11-20.png`。
 - **未验证**：三个 App 里的会话是否真的按档位换了推理强度，只能看它们上报的模型和 effort；已经开着的待命会话是旧工具，报不了档位。
 
+## 十二、待命空转与原账号名（R024、R025，2026-11-20）
+
+- **待命空转（待命会话报告）**：R020 让取件按来源区分后，等待仍只看“有没有未确认事件”。别的项目留下的回执（不归待命会话取）会让 `wait` 每次立刻返回，待命约每 10 秒空跑一轮。
+  - 修法：门铃计数文件增加窗口来源的计数（`ui_seq`、`ui_unacked`、`ui_queued`、`other_seq`）；`wait_for_doorbell`、`consilium wait --scope`、`consilium_wait(scope=...)` 按来源判断；标签以 standby 结尾时默认 `consilium`。旧格式的计数文件按“全部算窗口来源”处理，不会漏叫。
+- **原账号名（用户原话）**：“codex和anti的账号用原名，不要用abcd代替”。
+  - Codex 的名字取自 `codex_accounts.json` 的 email；Antigravity 只有 `current_account.json` 里的当前账号可读，其余账号在成为当前账号时记下。
+  - 名字单独存表 `quota_account_names`，只有 `list_quota_windows(reveal_names=True)`（窗口的 `/api/state`）会带上；MCP 工具返回和协调者提示词仍是代号，测试断言了这一点。
+- **验证**：111 项测试；用本机真实 Cockpit 记录核对（只看是否为原名和数量）：Codex 5 个账号都有名字，Antigravity 3 个里当前的 1 个有名字，工具侧输出不含邮箱。
+

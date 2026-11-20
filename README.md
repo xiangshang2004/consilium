@@ -117,7 +117,7 @@ python3 scripts/install.py --uninstall --targets claude_code codex antigravity
 - 服务只监听 `127.0.0.1`。MCP 请求要带本机的访问令牌（`auth.token`，权限 0600）；浏览器端用随机会话，写操作要同源、JSON 和 CSRF 令牌三样齐全。
 - 界面完全离线：内容安全策略是 `default-src 'none'`，页面里没有任何外部链接或脚本。
 - 应用只会打开 `claude://code/new` 和 `codex://new` 两种深链。
-- 读 Cockpit Tools 的数据时只读额度记录和“当前是哪个账号”的指针，不打开它的账号库、密钥和加密文件；账号标识在 Consilium 里以哈希保存。
+- 读 Cockpit Tools 的数据时只读额度记录和“当前是哪个账号”的指针，不打开它的账号库、密钥和加密文件；账号标识在 Consilium 里以哈希保存。窗口里显示的账号名（登录邮箱）只留在本机，发给三个应用的内容里用的是“账号 A / B”这样的代号。
 - 安装脚本默认只演示（`--dry-run`），`--apply` 才会写入，并且每个文件都留备份；Claude 桌面应用在运行时不会改它的配置。
 
 ## 目前的限制

@@ -87,5 +87,5 @@ The Consilium window works like the Claude Code desktop app: **the user picks a 
 **Low quota**: hand the task off with `consilium_handoff_task(task_id, peer_id, attempt_id, to_peer, note)`; the note says what is done and why. Account switching is always manual; tell the user which account to switch to when every peer is low.
 
 **Standing by**:
-- Claude Code: run `PYTHONPATH=/Applications/Consilium.app/Contents/Resources/python /usr/bin/python3 -B -m consilium.cli wait --peer claude --session-label claude-standby --timeout 86400` with `run_in_background: true`, end the turn, and when it exits pick up with `scope="consilium"`, route, and re-arm. Never poll.
-- Codex / Antigravity: call `consilium_wait(peer_id=<self>, timeout_sec=300)` in a loop; on `woke: true` pick up with `session_label="<self>-standby", scope="consilium"` and handle; keep each iteration terse.
+- Claude Code: run `PYTHONPATH=/Applications/Consilium.app/Contents/Resources/python /usr/bin/python3 -B -m consilium.cli wait --peer claude --session-label claude-standby --scope consilium --timeout 86400` with `run_in_background: true`, end the turn, and when it exits pick up with `scope="consilium"`, route, and re-arm. Never poll.
+- Codex / Antigravity: call `consilium_wait(peer_id=<self>, timeout_sec=300, session_label="<self>-standby", scope="consilium")` in a loop; on `woke: true` pick up with `session_label="<self>-standby", scope="consilium"` and handle; keep each iteration terse.

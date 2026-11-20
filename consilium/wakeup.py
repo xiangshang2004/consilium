@@ -144,11 +144,21 @@ def _read_peer_seq_unlocked(resolved_rv: str, peer: str) -> Dict[str, Any]:
     try:
         with open(target, "r", encoding="utf-8") as handle:
             data = json.load(handle)
+        seq_all = int(data.get("seq", 0))
+        unacked_all = int(data.get("unacked", 0))
+        queued_all = int(data.get("queued_tasks", 0))
         return {
-            "seq": int(data.get("seq", 0)),
-            "unacked": int(data.get("unacked", 0)),
-            "queued_tasks": int(data.get("queued_tasks", 0)),
+            "seq": seq_all,
+            "unacked": unacked_all,
+            "queued_tasks": queued_all,
             "updated_at": float(data.get("updated_at", 0.0)),
+            # Work started in the Consilium window ("ui") vs. missions a session created itself.
+            # A file written before these fields existed counts everything as window work, so
+            # nobody misses a wake-up.
+            "ui_seq": int(data.get("ui_seq", seq_all)),
+            "ui_unacked": int(data.get("ui_unacked", unacked_all)),
+            "ui_queued": int(data.get("ui_queued", queued_all)),
+            "other_seq": int(data.get("other_seq", seq_all)),
         }
     except (OSError, ValueError, TypeError):
         return {"seq": 0, "unacked": 0, "queued_tasks": 0, "updated_at": 0.0}
@@ -206,8 +216,12 @@ def write_peer_seq(
     peer = validate_peer(peer_id)
     resolved_rv = resolve_rendezvous_dir(rendezvous_dir)
     with _seq_lock(resolved_rv, peer):
+        scoped: Optional[Dict[str, int]] = None
         if query_fn is not None:
-            db_seq, db_unacked, db_queued = query_fn()
+            counts = query_fn()
+            db_seq, db_unacked, db_queued = counts[0], counts[1], counts[2]
+            if len(counts) > 3 and isinstance(counts[3], dict):
+                scoped = counts[3]
             seq_val = int(db_seq)
             unacked_val = int(db_unacked)
             queued_val = int(db_queued)
@@ -225,6 +239,10 @@ def write_peer_seq(
             "unacked": unacked_val,
             "queued_tasks": queued_val,
             "updated_at": time.time(),
+            "ui_seq": int((scoped or {}).get("ui_seq", seq_val)),
+            "ui_unacked": int((scoped or {}).get("ui_unacked", unacked_val)),
+            "ui_queued": int((scoped or {}).get("ui_queued", queued_val)),
+            "other_seq": int((scoped or {}).get("other_seq", seq_val)),
         }
         payload = json.dumps(state)
         effective_pulse = bool(pulse) or (
@@ -622,12 +640,42 @@ def query_active_waiters(rendezvous_dir: str) -> Dict[str, int]:
     return {p: max(lease_counts[p], int(sock_counts.get(p, 0))) for p in VALID_PEERS}
 
 
-def _seq_has_work(cur: Dict[str, Any], initial_seq: int) -> bool:
-    return (
-        int(cur.get("unacked", 0)) > 0
-        or int(cur.get("queued_tasks", 0)) > 0
-        or int(cur.get("seq", 0)) > initial_seq
-    )
+WAIT_SCOPES = ("all", "consilium", "other")
+
+
+def scoped_seq(cur: Dict[str, Any], scope: str = "all") -> Dict[str, int]:
+    """The (seq, unacked, queued_tasks) a waiter with this scope should react to."""
+    seq_all = int(cur.get("seq", 0))
+    unacked_all = int(cur.get("unacked", 0))
+    queued_all = int(cur.get("queued_tasks", 0))
+    if scope == "consilium":
+        return {
+            "seq": int(cur.get("ui_seq", seq_all)),
+            "unacked": int(cur.get("ui_unacked", unacked_all)),
+            "queued_tasks": int(cur.get("ui_queued", queued_all)),
+        }
+    if scope == "other":
+        return {
+            "seq": int(cur.get("other_seq", seq_all)),
+            "unacked": max(0, unacked_all - int(cur.get("ui_unacked", unacked_all))),
+            "queued_tasks": max(0, queued_all - int(cur.get("ui_queued", queued_all))),
+        }
+    return {"seq": seq_all, "unacked": unacked_all, "queued_tasks": queued_all}
+
+
+def default_wait_scope(session_label: str, scope: str = "") -> str:
+    """A standby session serves the Consilium window; it must not spin on other projects' events."""
+    chosen = str(scope or "").strip().lower()
+    if chosen:
+        if chosen not in WAIT_SCOPES:
+            raise ValueError("scope must be one of: " + ", ".join(WAIT_SCOPES))
+        return chosen
+    return "consilium" if str(session_label or "").strip().lower().endswith("standby") else "all"
+
+
+def _seq_has_work(cur: Dict[str, Any], initial_seq: int, scope: str = "all") -> bool:
+    view = scoped_seq(cur, scope)
+    return view["unacked"] > 0 or view["queued_tasks"] > 0 or view["seq"] > initial_seq
 
 
 def _open_kqueue_watch(rendezvous_dir: str, peer: str) -> Tuple[int, Any]:
@@ -674,11 +722,12 @@ def _wait_via_kqueue(
     peer: str,
     timeout_sec: float,
     initial_seq: int,
+    scope: str = "all",
 ) -> Tuple[bool, str]:
     fd, kq = _open_kqueue_watch(rendezvous_dir, peer)
     try:
         cur = read_peer_seq(rendezvous_dir, peer)
-        if _seq_has_work(cur, initial_seq):
+        if _seq_has_work(cur, initial_seq, scope):
             return True, "immediate_after_register"
 
         deadline = time.monotonic() + timeout_sec
@@ -702,7 +751,7 @@ def _wait_via_kqueue(
                     pass
                 fd, kq = _open_kqueue_watch(rendezvous_dir, peer)
             cur = read_peer_seq(rendezvous_dir, peer)
-            if _seq_has_work(cur, initial_seq):
+            if _seq_has_work(cur, initial_seq, scope):
                 return True, "kqueue"
     finally:
         try:
@@ -721,11 +770,13 @@ def _wait_via_unix_or_poll(
     timeout_sec: float,
     poll_fallback_sec: float,
     initial_seq: int,
+    scope: str = "all",
 ) -> Tuple[bool, str]:
     sock_path = resolve_socket_path(rendezvous_dir)
     woke = False
     source = "timeout"
-    sock_failed = not os.path.exists(sock_path)
+    # The broker wakes every waiter of a peer; a scoped waiter polls the counts instead.
+    sock_failed = scope != "all" or not os.path.exists(sock_path)
 
     if not sock_failed:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -739,7 +790,7 @@ def _wait_via_unix_or_poll(
             reg = _read_json_line(reader)
             if reg and reg.get("state") == "registered":
                 cur = read_peer_seq(rendezvous_dir, peer)
-                if _seq_has_work(cur, initial_seq):
+                if _seq_has_work(cur, initial_seq, scope):
                     woke = True
                     source = "immediate_after_register"
                 else:
@@ -764,7 +815,7 @@ def _wait_via_unix_or_poll(
         deadline = time.monotonic() + timeout_sec
         while time.monotonic() < deadline:
             cur = read_peer_seq(rendezvous_dir, peer)
-            if _seq_has_work(cur, initial_seq):
+            if _seq_has_work(cur, initial_seq, scope):
                 woke = True
                 source = "poll_fallback"
                 break
@@ -784,9 +835,15 @@ def wait_for_doorbell(
     session_label: str = "",
     auto_pickup: bool = False,
     rendezvous_dir: Optional[str] = None,
+    scope: str = "",
 ) -> Dict[str, Any]:
-    """Block silently with zero DB writes using signals/<peer>.seq + flock leases. Always read-only."""
+    """Block silently with zero DB writes using signals/<peer>.seq + flock leases. Always read-only.
+
+    `scope` decides which work wakes the waiter: "consilium" (started in the Consilium window;
+    the default for a session labelled "...standby"), "other", or "all".
+    """
     peer = validate_peer(peer_id)
+    wait_scope = default_wait_scope(session_label, scope)
     if rendezvous_dir:
         resolved_rv = resolve_rendezvous_dir(rendezvous_dir)
     elif store is not None:
@@ -812,15 +869,17 @@ def wait_for_doorbell(
         if db_unacked > 0 or db_queued > 0:
             seq_before = store.sync_peer_seq(peer, pulse=False)
 
-    if seq_before["unacked"] > 0 or seq_before["queued_tasks"] > 0:
-        cur_after = read_peer_seq(resolved_rv, peer)
+    view_before = scoped_seq(seq_before, wait_scope)
+    if view_before["unacked"] > 0 or view_before["queued_tasks"] > 0:
+        view_after = scoped_seq(read_peer_seq(resolved_rv, peer), wait_scope)
         out: Dict[str, Any] = {
             "peer_id": peer,
             "woke": True,
             "source": "immediate",
-            "unacked_events": cur_after["unacked"],
-            "queued_tasks": cur_after["queued_tasks"],
-            "wake_seq": int(cur_after.get("seq", 0)),
+            "scope": wait_scope,
+            "unacked_events": view_after["unacked"],
+            "queued_tasks": view_after["queued_tasks"],
+            "wake_seq": view_after["seq"],
             "inbox": None,
         }
         if ignored_notice:
@@ -842,7 +901,7 @@ def wait_for_doorbell(
         )
         if hasattr(select, "kqueue"):
             woke, source = _wait_via_kqueue(
-                resolved_rv, peer, capped_timeout, initial_seq=seq_before["seq"]
+                resolved_rv, peer, capped_timeout, initial_seq=view_before["seq"], scope=wait_scope
             )
         else:
             woke, source = _wait_via_unix_or_poll(
@@ -850,19 +909,21 @@ def wait_for_doorbell(
                 peer,
                 capped_timeout,
                 poll_fallback_sec,
-                initial_seq=seq_before["seq"],
+                initial_seq=view_before["seq"],
+                scope=wait_scope,
             )
     finally:
         _release_lease(lease_fd, lease_path)
 
-    cur_after = read_peer_seq(resolved_rv, peer)
+    view_after = scoped_seq(read_peer_seq(resolved_rv, peer), wait_scope)
     out = {
         "peer_id": peer,
         "woke": woke,
         "source": source,
-        "unacked_events": cur_after["unacked"],
-        "queued_tasks": cur_after["queued_tasks"],
-        "wake_seq": int(cur_after.get("seq", 0)),
+        "scope": wait_scope,
+        "unacked_events": view_after["unacked"],
+        "queued_tasks": view_after["queued_tasks"],
+        "wake_seq": view_after["seq"],
         "inbox": None,
     }
     if ignored_notice:

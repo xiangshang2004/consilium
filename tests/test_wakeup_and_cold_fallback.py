@@ -81,6 +81,8 @@ class WakeupAndColdFallbackTests(unittest.TestCase):
             goal="Wake standby peer",
             coordinator_peer="antigravity",
             tasks=[{"assignee_peer": "claude", "prompt": "Wake up"}],
+            # A standby waiter serves conversations started in the Consilium window.
+            user_message={"text": "Wake up", "targets": [], "mode": "auto"},
         )
         delivery = ring_peer(
             store=self.store,

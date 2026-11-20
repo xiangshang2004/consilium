@@ -138,7 +138,8 @@ class R020RegressionsTests(unittest.TestCase):
         self.assertIn('class="mi-archive" data-archive-mission="', html)
         self.assertIn(".mission-item:hover .mi-archive", html)
         self.assertNotIn("esc(cur.mission_id) + '\"' + (cur.archived", html, "archive left the top-right menu")
-        self.assertEqual(html.count('scope=\\"consilium\\"'), 3, "all three standby prompts pick up only the window's work")
+        self.assertEqual(html.count('scope=\\"consilium\\"'), 5, "standby prompts wait and pick up only for the window's work")
+        self.assertIn("--session-label claude-standby --scope consilium --timeout 86400", html)
         self.assertNotIn("<button type=\"button\" class=\"mission-item", html, "no button nested inside a button")
 
     def test_composer_ignores_ime_enter_clears_on_send_and_follows_the_latest_message(self) -> None:
@@ -247,6 +248,51 @@ class R020RegressionsTests(unittest.TestCase):
                       "the tier button is also there in an existing conversation")
         self.assertIn("const tn = tierNote(task);", html)
         self.assertEqual(html.count("由你按难度自己定档位并真的按它做"), 3, "all three standby prompts")
+    def test_standby_wait_is_not_woken_by_another_projects_events(self) -> None:
+        import threading
+        from consilium.wakeup import wait_for_doorbell
+
+        # Another project's session rings Codex through the bus; Codex answers, leaving a receipt
+        # for "claude" that only the session which created that mission may collect.
+        other = self._other_project_mission()
+        picked = self._tool("consilium_pickup_inbox", peer_id="chatgpt", mission_id=other["mission_id"])
+        task = picked["claimed_tasks"][0]
+        self._tool("consilium_complete_task", task_id=task["task_id"], peer_id="chatgpt",
+                   attempt_id=task["attempt_id"], result_summary="已停")
+        self.assertEqual(self.store.count_unacked_events("claude"), 1)
+
+        def wait(label: str, scope: str = "", timeout: float = 0.4) -> dict:
+            return wait_for_doorbell(store=None, rendezvous_dir=self.tmp_rv, peer_id="claude",
+                                     timeout_sec=timeout, session_label=label, scope=scope)
+
+        # The reported bug: this used to return at once with unacked_events=1, over and over.
+        quiet = wait("claude-standby")
+        self.assertEqual((quiet["woke"], quiet["source"], quiet["scope"]), (False, "timeout", "consilium"))
+        self.assertEqual((quiet["unacked_events"], quiet["queued_tasks"]), (0, 0))
+        # The owner of that mission, or an unscoped waiter, still sees it.
+        self.assertTrue(wait("nvdla-session", scope="other")["woke"])
+        self.assertTrue(wait("anything")["woke"])
+
+        # While asleep, another unrelated event must not wake the standby; a window message must.
+        result = {}
+        t = threading.Thread(target=lambda: result.update(wait("claude-standby", timeout=5.0)), daemon=True)
+        t.start()
+        time.sleep(0.3)
+        second = self._other_project_mission()
+        p2 = self._tool("consilium_pickup_inbox", peer_id="chatgpt", mission_id=second["mission_id"])["claimed_tasks"][0]
+        self._tool("consilium_complete_task", task_id=p2["task_id"], peer_id="chatgpt",
+                   attempt_id=p2["attempt_id"], result_summary="也停了")
+        time.sleep(0.5)
+        self.assertTrue(t.is_alive(), "still asleep after another project's receipt")
+        self.daemon.ui_send("帮我看个报错", ["claude"])
+        t.join(timeout=3.0)
+        self.assertFalse(t.is_alive())
+        self.assertTrue(result["woke"])
+        self.assertEqual((result["scope"], result["queued_tasks"]), ("consilium", 1))
+
+        # The MCP tool applies the same default for a standby label.
+        tool = self._tool("consilium_wait", peer_id="chatgpt", timeout_sec=0.2, session_label="chatgpt-standby")
+        self.assertEqual(tool["scope"], "consilium")
 
 if __name__ == "__main__":
     unittest.main()

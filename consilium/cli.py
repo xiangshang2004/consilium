@@ -65,6 +65,13 @@ def _build_parser() -> argparse.ArgumentParser:
     wait_p.add_argument("--timeout", type=float, default=86400.0)
     wait_p.add_argument("--session-label", default="")
     wait_p.add_argument(
+        "--scope",
+        default="",
+        choices=("", "all", "consilium", "other"),
+        help="Which work wakes this waiter: consilium = started in the Consilium window (default for a "
+        "session label ending in 'standby'), other = missions a session created itself, all = both.",
+    )
+    wait_p.add_argument(
         "--pickup",
         action="store_true",
         help="Deprecated & ignored (waiting is strictly read-only; call consilium_pickup_inbox explicitly).",
@@ -145,6 +152,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             timeout_sec=args.timeout,
             session_label=args.session_label,
             auto_pickup=bool(args.pickup),
+            scope=args.scope,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0

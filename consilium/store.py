@@ -131,6 +131,17 @@ CREATE TABLE IF NOT EXISTS quota_accounts (
     PRIMARY KEY (peer_id, account_id)
 );
 
+-- The account names Cockpit shows (usually the sign-in email). Kept apart from the neutral
+-- aliases so they are only ever handed to the local window, never to tool results that
+-- reach the three apps' models.
+CREATE TABLE IF NOT EXISTS quota_account_names (
+    peer_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (peer_id, account_id)
+);
+
 CREATE TABLE IF NOT EXISTS user_messages (
     message_id INTEGER PRIMARY KEY AUTOINCREMENT,
     mission_id TEXT NOT NULL,
@@ -390,6 +401,53 @@ class BusStore:
         queued = int(task_row["queued_cnt"] or 0) if task_row else 0
         return max_id, unacked, queued
 
+    def query_peer_seq_counts_scoped(self, peer_id: str) -> tuple:
+        """Like query_peer_seq_counts, plus the share that belongs to conversations started in the
+        Consilium window, so a standby waiter can ignore other projects' events."""
+        peer = validate_peer(peer_id)
+        ui = "(SELECT mission_id FROM missions WHERE source = 'ui')"
+        with self._connect() as conn:
+            conn.execute("BEGIN;")
+            try:
+                evt_row = conn.execute(
+                    f"""
+                    SELECT
+                        COALESCE(MAX(event_id), 0) AS max_id,
+                        SUM(CASE WHEN acked_at = '' THEN 1 ELSE 0 END) AS unacked_cnt,
+                        COALESCE(MAX(CASE WHEN mission_id IN {ui} THEN event_id END), 0) AS ui_max,
+                        SUM(CASE WHEN acked_at = '' AND mission_id IN {ui} THEN 1 ELSE 0 END) AS ui_unacked,
+                        COALESCE(MAX(CASE WHEN mission_id NOT IN {ui} THEN event_id END), 0) AS other_max
+                    FROM events
+                    WHERE to_peer = ?
+                    """,
+                    (peer,),
+                ).fetchone()
+                task_row = conn.execute(
+                    f"""
+                    SELECT COUNT(*) AS queued_cnt,
+                           SUM(CASE WHEN mission_id IN {ui} THEN 1 ELSE 0 END) AS ui_queued
+                    FROM tasks
+                    WHERE assignee_peer = ? AND status = 'queued'
+                    """,
+                    (peer,),
+                ).fetchone()
+                conn.execute("COMMIT;")
+            except BaseException:
+                conn.execute("ROLLBACK;")
+                raise
+        scoped = {
+            "ui_seq": int(evt_row["ui_max"] or 0),
+            "ui_unacked": int(evt_row["ui_unacked"] or 0),
+            "ui_queued": int(task_row["ui_queued"] or 0),
+            "other_seq": int(evt_row["other_max"] or 0),
+        }
+        return (
+            int(evt_row["max_id"] or 0),
+            int(evt_row["unacked_cnt"] or 0),
+            int(task_row["queued_cnt"] or 0),
+            scoped,
+        )
+
     def sync_peer_seq(
         self, peer_id: str, *, pulse: bool = False, pulse_if_backlog: bool = False
     ) -> Dict[str, Any]:
@@ -398,7 +456,7 @@ class BusStore:
         return write_peer_seq(
             self.rendezvous_dir,
             peer,
-            query_fn=lambda: self.query_peer_seq_counts(peer),
+            query_fn=lambda: self.query_peer_seq_counts_scoped(peer),
             pulse=pulse,
             pulse_if_backlog=pulse_if_backlog,
         )
@@ -2986,7 +3044,40 @@ class BusStore:
                         result.append(self._decode_quota_row(row, now_dt=now_dt))
         return result
 
-    def list_quota_windows(self, peer_id: Optional[str] = None) -> Dict[str, Any]:
+    def remember_account_names(self, peer_id: str, names: Dict[str, str]) -> None:
+        """Record the name Cockpit shows for an account (see quota_account_names)."""
+        peer = validate_peer(peer_id)
+        now = utc_now_iso()
+        rows = [(peer, str(aid), " ".join(str(nm).split())[:120], now) for aid, nm in (names or {}).items() if aid and str(nm).strip()]
+        if not rows:
+            return
+        with self._connect() as conn:
+            with self._tx(conn):
+                conn.executemany(
+                    "INSERT INTO quota_account_names (peer_id, account_id, name, updated_at) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(peer_id, account_id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at",
+                    rows,
+                )
+
+    def _reveal_account_names(self, peers_out: List[Dict[str, Any]]) -> None:
+        with self._connect() as conn:
+            known = {
+                (r["peer_id"], r["account_id"]): r["name"]
+                for r in conn.execute("SELECT peer_id, account_id, name FROM quota_account_names").fetchall()
+            }
+        for p in peers_out:
+            pid = p["peer_id"]
+            backup = p.get("best_backup")
+            old_backup_alias = backup["alias"] if backup else ""
+            for entry in p.get("pool") or []:
+                entry["alias"] = known.get((pid, entry["account_id"])) or entry["alias"]
+            p["active_account_alias"] = known.get((pid, p.get("active_account_id") or "")) or p["active_account_alias"]
+            if backup:
+                backup["alias"] = known.get((pid, backup["account_id"])) or backup["alias"]
+                if p.get("switch_hint") and old_backup_alias and backup["alias"] != old_backup_alias:
+                    p["switch_hint"] = p["switch_hint"].replace(old_backup_alias, backup["alias"])
+
+    def list_quota_windows(self, peer_id: Optional[str] = None, reveal_names: bool = False) -> Dict[str, Any]:
         """Return active-account primary quota posture plus multi-account backup pool (R011 Q4)."""
         target_peers = [validate_peer(peer_id)] if peer_id else list(VALID_PEERS)
         now_dt = datetime.now(timezone.utc)
@@ -3267,4 +3358,8 @@ class BusStore:
                     "historical_accounts_count": len(historical_entries),
                 }
             )
+        if reveal_names:
+            # Only the local window asks for this. Everything that goes to the apps' models
+            # (MCP tool results, coordinator prompts) keeps the neutral aliases.
+            self._reveal_account_names(peers_out)
         return {"peers": peers_out, "updated_at": utc_now_iso()}

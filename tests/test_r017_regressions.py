@@ -403,6 +403,24 @@ class R017RegressionsTests(unittest.TestCase):
         for leak in ("example.com", "uid-b", "ag-2", "cl-1"):
             self.assertNotIn(leak, serialized)
 
+        # The local window shows the names Cockpit shows; nothing that reaches the apps' models does.
+        from consilium.dashboard import build_dashboard_state
+        state = build_dashboard_state(self.store, self.tmp_rv, started_at="", started_monotonic=time.monotonic(),
+                                      host="127.0.0.1", port=0, sync_quotas=False)
+        shown = {q["peer_id"]: q for q in state["quotas"]}
+        self.assertEqual(shown["chatgpt"]["active_account_alias"], "b@example.com")
+        self.assertIn("a@example.com", [e["alias"] for e in shown["chatgpt"]["pool"]])
+        self.assertEqual(shown["antigravity"]["active_account_alias"], "me@example.com")
+        self.assertTrue(all(e["alias"].startswith("账号 ") for e in shown["antigravity"]["pool"] if not e["is_current"]),
+                        "accounts Cockpit has not named in a readable file keep the neutral alias")
+        self.assertNotIn("example.com", json.dumps(shown["claude"], ensure_ascii=False))
+        for tool in ("consilium_quota", "consilium_status", "consilium_preferences"):
+            out = self.daemon.dispatcher._dispatch_tool(tool, {"peer_id": "claude"} if tool == "consilium_preferences" else {})
+            self.assertNotIn("example.com", json.dumps(out, ensure_ascii=False), tool)
+        from consilium.mcp_server import build_auto_coordinator_prompt, peer_quota_digest
+        digest = peer_quota_digest(self.store, self.tmp_rv)
+        self.assertNotIn("example.com", build_auto_coordinator_prompt("x", "claude", digest, [], []))
+
         # Cockpit refreshes Codex about hourly: an older record of the confirmed account is
         # still shown, marked with its age, and no longer drives dispatch.
         db = sqlite3.connect(os.path.join(cp, "codex-quota-history-v1.sqlite"))

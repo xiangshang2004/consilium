@@ -110,6 +110,7 @@ def _load_cockpit_codex_registry(cockpit_dir: str) -> Dict[str, Any]:
             pointer_canon = canon_id
         meta = {
             "account_id": canon_id,
+            "account_name": raw_email,  # shown only in the local window, see BusStore.remember_account_names
             "account_alias": _account_alias(idx),
             "plan_type": plan_type,
             "is_current": is_current,
@@ -260,6 +261,14 @@ def resolve_antigravity_current(
     if len(diffs) > 1 and diffs[1][0] - diffs[0][0] < margin_sec:
         return ""
     return diffs[0][1]
+
+
+def _read_antigravity_current_email(cockpit_dir: str) -> str:
+    try:
+        with open(os.path.join(cockpit_dir, "current_account.json"), "r", encoding="utf-8") as handle:
+            return str((json.load(handle) or {}).get("email") or "").strip()
+    except (OSError, ValueError, AttributeError):
+        return ""
 
 
 def _mark_current(records: List[Dict[str, Any]], peer: str, account_id: str) -> None:
@@ -738,13 +747,21 @@ def sync_local_quotas(
         entries = [dict(e, is_current=bool(codex_current) and e["account_id"] == codex_current)
                    for e in (codex_registry.get("entries") or [])]
         store.sync_peer_accounts("chatgpt", entries)
+        store.remember_account_names(
+            "chatgpt", {e["account_id"]: e.get("account_name") or "" for e in (codex_registry.get("entries") or [])}
+        )
         _mark_current(cockpit_records, "chatgpt", codex_current)
         if not codex_current:
             store.clear_peer_cockpit_current("chatgpt")
             store.sync_peer_accounts("chatgpt", entries)
     else:
         store.clear_peer_cockpit_current("chatgpt")
-    _mark_current(cockpit_records, "antigravity", resolve_antigravity_current(cockpit_dir, cockpit_records))
+    ag_current = resolve_antigravity_current(cockpit_dir, cockpit_records)
+    _mark_current(cockpit_records, "antigravity", ag_current)
+    if ag_current:
+        # Cockpit names only the current Antigravity account in a file we may read, so the
+        # other accounts get their names as each of them becomes current.
+        store.remember_account_names("antigravity", {ag_current: _read_antigravity_current_email(cockpit_dir)})
     claude_accounts = _load_cockpit_claude_accounts(cockpit_dir)
     if claude_accounts:
         store.sync_peer_accounts("claude", claude_accounts)

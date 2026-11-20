@@ -611,6 +611,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "peer_id": {"type": "string", "enum": list(VALID_PEERS)},
                 "timeout_sec": {"type": "number", "minimum": 0.1, "maximum": 300, "default": 45},
                 "session_label": {"type": "string"},
+                "scope": {"type": "string", "enum": ["all", "consilium", "other"], "description": "Which work wakes you. A standby session passes consilium (the default when session_label ends with 'standby') so other projects' events do not wake it."},
                 "auto_pickup": {"type": "boolean", "default": False, "description": "Deprecated and ignored; wait is always read-only."},
             },
         },
@@ -1256,6 +1257,7 @@ class ConsiliumMCPDispatcher:
                 session_label=str(args.get("session_label", "")),
                 auto_pickup=False,
                 rendezvous_dir=self.rendezvous_dir,
+                scope=str(args.get("scope") or ""),
             )
             if requested_auto_pickup:
                 wres["auto_pickup_ignored"] = True

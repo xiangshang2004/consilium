@@ -327,7 +327,7 @@ def build_dashboard_state(
     peers = store.list_peers()
     active_waiters = query_active_waiters(rendezvous_dir)
     quotas_by_peer = {
-        q["peer_id"]: q for q in store.list_quota_windows()["peers"]
+        q["peer_id"]: q for q in store.list_quota_windows(reveal_names=True)["peers"]
     }
     return {
         "daemon": {
@@ -1844,9 +1844,9 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     renderComposerBar(appState);
     document.getElementById("composer-input").focus();
   };
-  const AG_STANDBY_PROMPT = "请作为 Consilium 的 Antigravity 待命端（peer_id=antigravity）：反复调用 consilium_wait(peer_id=\"antigravity\", timeout_sec=300)；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"antigravity\", session_label=\"antigravity-standby\", scope=\"consilium\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used、effort_used、tier_used 和 tier_reason；任务的 model_tier 是 auto 时由你按难度自己定档位并真的按它做，不要让使用者选；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步）；超时没消息就继续等。每轮少说话，不要停下来问我。";
-  const CODEX_STANDBY_PROMPT = "请作为 Consilium 的 Codex 待命端（peer_id=chatgpt）：反复调用 consilium_wait(peer_id=\"chatgpt\", timeout_sec=300)；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"chatgpt\", session_label=\"chatgpt-standby\", scope=\"consilium\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used、effort_used、tier_used 和 tier_reason；任务的 model_tier 是 auto 时由你按难度自己定档位并真的按它做，不要让使用者选；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步）；超时没消息就继续等。每轮少说话，不要停下来问我。";
-  const STANDBY_PROMPT = "请作为 Consilium 的 Claude 常驻待命端：先读 ~/.claude/skills/consilium-collab/SKILL.md 第 2、3 节；用 run_in_background 运行 `PYTHONPATH=/Applications/Consilium.app/Contents/Resources/python /usr/bin/python3 -B -m consilium.cli wait --peer claude --session-label claude-standby --timeout 86400`，被唤醒后用 consilium_pickup_inbox(peer_id=\"claude\", session_label=\"claude-standby\", scope=\"consilium\") 取任务（只取 Consilium 窗口里发起的，取到空就直接重新挂上）、处理、用 consilium_complete_task 回复（带上 model_used、effort_used、tier_used 和 tier_reason；任务的 model_tier 是 auto 时由你按难度自己定档位并真的按它做，不要让使用者选；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步），然后重新挂上等待。不要轮询，每轮少说话。";
+  const AG_STANDBY_PROMPT = "请作为 Consilium 的 Antigravity 待命端（peer_id=antigravity）：反复调用 consilium_wait(peer_id=\"antigravity\", timeout_sec=300, session_label=\"antigravity-standby\", scope=\"consilium\")；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"antigravity\", session_label=\"antigravity-standby\", scope=\"consilium\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used、effort_used、tier_used 和 tier_reason；任务的 model_tier 是 auto 时由你按难度自己定档位并真的按它做，不要让使用者选；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步）；超时没消息就继续等。每轮少说话，不要停下来问我。";
+  const CODEX_STANDBY_PROMPT = "请作为 Consilium 的 Codex 待命端（peer_id=chatgpt）：反复调用 consilium_wait(peer_id=\"chatgpt\", timeout_sec=300, session_label=\"chatgpt-standby\", scope=\"consilium\")；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"chatgpt\", session_label=\"chatgpt-standby\", scope=\"consilium\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used、effort_used、tier_used 和 tier_reason；任务的 model_tier 是 auto 时由你按难度自己定档位并真的按它做，不要让使用者选；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步）；超时没消息就继续等。每轮少说话，不要停下来问我。";
+  const STANDBY_PROMPT = "请作为 Consilium 的 Claude 常驻待命端：先读 ~/.claude/skills/consilium-collab/SKILL.md 第 2、3 节；用 run_in_background 运行 `PYTHONPATH=/Applications/Consilium.app/Contents/Resources/python /usr/bin/python3 -B -m consilium.cli wait --peer claude --session-label claude-standby --scope consilium --timeout 86400`，被唤醒后用 consilium_pickup_inbox(peer_id=\"claude\", session_label=\"claude-standby\", scope=\"consilium\") 取任务（只取 Consilium 窗口里发起的，取到空就直接重新挂上）、处理、用 consilium_complete_task 回复（带上 model_used、effort_used、tier_used 和 tier_reason；任务的 model_tier 是 auto 时由你按难度自己定档位并真的按它做，不要让使用者选；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步），然后重新挂上等待。不要轮询，每轮少说话。";
   let sendTargets = [];
   let sending = false;
   let slashOpen = false;
