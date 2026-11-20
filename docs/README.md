@@ -1,6 +1,8 @@
 # `consilium` Documentation Index
 
-- [Project README](../README.md) — Overview, quickstart, and repository layout
+- [Project README](../README.md) — 中文说明：能做什么、怎么装、怎么用、安全与限制、版本与发布
+- [CHANGELOG](../CHANGELOG.md) — 每个版本的变化；发布用 `scripts/release.sh <版本>`，产物在 GitHub Releases
+- [Screenshots](./screenshots/chat-light.png) — README 用的三张演示截图（[浅色对话](./screenshots/chat-light.png)、[深色对话](./screenshots/chat-dark.png)、[新会诊](./screenshots/new-conversation.png)），内容是演示数据
 - [Architecture & Protocol](./architecture.md) — SQLite WAL truth layer, macOS `kqueue` VNODE doorbell, Seatbelt sandbox compatibility, dual MCP transports, and dashboard/SSE/installer security boundaries
 - [OpenSpec Proposal (`consilium-v1`)](../openspec/changes/consilium-v1/proposal.md) — Motivation, v1 scope, frozen contracts, and non-goals
 - [OpenSpec Design (`consilium-v1`)](../openspec/changes/consilium-v1/design.md) — Bus reliability, security, and offline dashboard design

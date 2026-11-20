@@ -1,82 +1,166 @@
-# consilium
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/consilium-lockup-dark.svg">
+    <img src="docs/brand/consilium-lockup-light.svg" alt="Consilium" width="320">
+  </picture>
+</p>
 
-Local MCP collaboration bus and zero-CLI doorbell wakeup bridge connecting **ChatGPT.app (Codex Desktop)**, **Claude.app (Claude Desktop)**, and **Antigravity.app** on macOS.
+<p align="center">一个窗口，指挥你 Mac 上的 Claude、Codex 和 Antigravity。</p>
 
-> Status: **Stage 0 (`consilium-v1` OpenSpec), Stage 1 (R006), Stage 2/2.5 (R007/R010), Stage 2.6 ([R013](reviews/R013-antigravity-chat-ui-and-q4.md)), R012/R015 hardening, and Stage 4.5 ([Consilium.app](reviews/R015-antigravity-macos-app.md) menu bar wrapper) verified (`79` unit tests OK with and without isolation env vars, `scripts/smoke_test_app.sh` OK, `openspec validate consilium-v1 --strict` valid); ★ Gate 1 PASSED (R014 & Codex `6e308aa`); awaiting Claude/Codex review of R015 before Stage 3 / live deployment.** See [reviews/R015-antigravity-macos-app.md](reviews/R015-antigravity-macos-app.md), [reviews/README.md](reviews/README.md), and [docs/README.md](docs/README.md).
+---
 
-## Why `consilium`?
+Consilium 是一个本地的 macOS 应用。你在它的窗口里说一句话，它把这句话交给你电脑上已经装好的三个官方桌面应用（Claude、ChatGPT/Codex、Antigravity）去做，三家的回复都回到同一个窗口。
 
-When running three separate AI desktop apps on one Mac, you shouldn't have to copy-paste between windows or pay extra API fees by wrapping CLI tools (`claude -p`, `codex exec`, `agy -p`).
+它自己不调用任何模型接口，也不包装命令行工具：干活的始终是那三个应用里你自己的账号和额度。
 
-`consilium` gives all three desktop apps:
-1. **A shared local collaboration bus** (`SQLite` WAL + MCP `stdio` / `127.0.0.1` Streamable HTTP) so you can issue one command in **any** desktop window, let that session act as coordinator, and get a single unified final report.
-2. **A zero-CPU hot doorbell (`kqueue` `KQ_FILTER_VNODE`)** that works even inside macOS Seatbelt sandboxes—waking idle standby sessions in milliseconds without polling tokens or stealing keyboard focus.
-3. **A safe cold fallback** (argv-safe `osascript` macOS notification banner + concise `claude://` / `codex://` / `antigravity://` deep link) when a target app has no active standby listener.
-4. **Native in-app subagent fan-out** (`adapters/`), letting each desktop app dynamically pick models (`pro_reasoning` / `balanced` / `fast`) and spawn parallel subagents inside its own native harness and isolated git worktrees.
-5. **Zero-token local quota & reset awareness** (`consilium/quota.py`, `consilium_quota`), harvesting cached remaining percentages and reset timestamps from local Cockpit Tools SQLite/JSON caches, Codex `rollout-*.jsonl` `rate_limits`, and Claude local usage caches (plus optional `manual_report`) so the coordinator avoids dispatching heavy work to exhausted accounts.
+![对话界面](docs/screenshots/chat-light.png)
 
-## Architecture Overview
+## 能做什么
+
+- **在一个窗口里发消息。** 可以点名发给某一家或几家，也可以选“自动”，由 Consilium 挑一家当协调者，协调者决定自己做还是拆给别人，最后把结果汇总给你。
+- **自动分配看得见理由。** 选“自动”时，你那条消息下面会写明交给了谁、为什么：优先选正在待命、当前账号余量充足的一家，余量耗尽的不选。
+- **待命，零点几秒送达。** 三家都可以开一个待命会话，消息一到就被叫醒。没有待命的一家会收到系统通知，点一下就能在对应应用里打开。
+- **按文件夹工作。** 新会诊时从“最近用过”里选文件夹，或用系统窗口选。文件夹在会诊开始后固定，侧边栏按文件夹分组。
+- **记住你的习惯。** 某一家看出你稳定的偏好（例如“代码审查都给 Codex”）会记成一条偏好，以后自动分配时参考。每一条都看得见、删得掉。
+- **额度不够时交接。** 某一家的额度快用完时，可以把任务连同进度说明交给另一家。切换账号始终由你手动完成。
+- **账号和余量一眼看到。** 左下角的卡片显示三家各自的状态、最近用的模型和当前账号的余量。装了 Cockpit Tools 时，会读它本地的额度记录来确认当前账号。
+- **互不串线。** 窗口里只列出你在 Consilium 里发起的会诊。别的项目里的会话如果自己用了这条总线，不会出现在这里；归档只是在 Consilium 里收起，不动三个应用里的会话。
+- **全部在本机。** 数据在本机的 SQLite 里，服务只监听 `127.0.0.1`，界面不加载任何外部资源。
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/new-conversation.png" alt="新会诊：选文件夹、档位和发给谁"></td>
+    <td><img src="docs/screenshots/chat-dark.png" alt="深色模式"></td>
+  </tr>
+  <tr>
+    <td align="center">新会诊：选文件夹、档位和发给谁</td>
+    <td align="center">深色模式</td>
+  </tr>
+</table>
+
+## 它是怎么工作的
 
 ```text
-  [User orders in ANY Desktop App]
-                 │
-                 ▼
-       Coordinator Desktop App
-        (create_mission / dispatch_task)
-                 │
-   ┌─────────────┴──────────────┐
-   ▼                            ▼
-Truth Layer                                      Doorbell Layer
-~/Library/Application Support/consilium/bus.db    /tmp/consilium-<uid>/signals/<peer>.{sig,seq}
-(SQLite WAL + Loop Guard + auth.token)           + waiters/<peer>/*.lease (flock kernel leases)
-                                │
-          ┌─────────────────────┴─────────────────────┐
-          ▼ (live lease > 0)                          ▼ (no active waiter)
-    Hot Wakeup (kqueue)                        Cold Doorbell Fallback
-  Zero CPU, wakes standby                    osascript banner + deep link
-  session in ~5ms (no UI touch)              (no focus-stealing keystrokes)
-          │
-          ▼
-  Awakened Peer fans out via ITS OWN Native Harness
-  (Antigravity invoke_subagent / Claude Agents / Codex Profiles)
+        你在 Consilium 窗口里说一句话
+                     │
+                     ▼
+      ┌──────────────────────────────┐
+      │  Consilium.app（本机服务）      │   SQLite 记录会诊、任务和事件
+      │  127.0.0.1:18920              │   门铃：文件信号 + kqueue，不轮询
+      └──────────────┬───────────────┘
+                     │  MCP（每个应用里装一个 consilium 连接）
+        ┌────────────┼────────────┐
+        ▼            ▼            ▼
+     Claude        Codex      Antigravity
+   （官方桌面应用，用你自己的账号和额度）
 ```
 
-## Quickstart (Safe Verification Only)
+- **总线**：一个本地服务，提供 17 个 MCP 工具（建会诊、派任务、取件、汇报进度、交付、交接、记偏好、查额度等）。三个应用通过各自的 MCP 配置连上它。
+- **门铃**：有任务时写一个信号文件，待命会话靠 kqueue 被叫醒，空等时不花额度（Codex 和 Antigravity 的待命是 5 分钟一轮的长等待，会用掉少量额度）。
+- **没人待命时**：发系统通知，并提供 `claude://`、`codex://` 深链，点一下在对应应用里新开会话并预填“去取消息”。
+- **协作技能**：安装时会给三个应用各放一份 `consilium-collab` 技能，告诉它们怎么取件、怎么回复、怎么交接。
 
-Requirements: **macOS `/usr/bin/python3` (`Python 3.9+`)**, zero external `pip` dependencies.
+更细的设计见 [docs/architecture.md](docs/architecture.md)。
+
+## 需要什么
+
+- macOS 13 或更新。Releases 里的压缩包是 Apple 芯片版；Intel 机器可以自己构建，但没有测过。
+- Command Line Tools（提供 `/usr/bin/python3` 和 `swiftc`）：`xcode-select --install`。不需要完整的 Xcode，也不需要任何 pip 包。
+- 三个桌面应用里至少装了一个：Claude、ChatGPT（Codex）、Antigravity。
+
+## 安装
+
+**1. 拿到应用。** 从 [Releases](../../releases) 下载 `Consilium-<版本>-arm64.zip`，解压后拖进“应用程序”。应用没有做公证，第一次打开要在“系统设置 → 隐私与安全性”里点“仍要打开”。
+
+也可以自己构建：
 
 ```bash
-cd /Users/up/code/github/consilium
-
-# 1. Run full unit & wire-level test suite (dry-run GUI notifications, isolated home/quota)
-env -u CLAUDE_CONFIG_DIR CONSILIUM_DRY_RUN=1 CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC=1 /usr/bin/python3 -B -W default -m unittest discover -s tests -v
-
-# 2. Preview config changes without touching live ~/.claude, ~/.codex, or ~/.gemini
-CONSILIUM_DRY_RUN=1 /usr/bin/python3 scripts/install.py --dry-run
-
-# 3. Inspect bus status, quota windows, or run local HTTP + wake daemon manually
-/usr/bin/python3 -m consilium.cli status
-/usr/bin/python3 -m consilium.cli quota
-/usr/bin/python3 -m consilium.cli serve --host 127.0.0.1 --port 18920
+git clone https://github.com/xiangshang2004/consilium.git
+cd consilium
+./scripts/build_app.sh
+cp -R build/Consilium.app /Applications/
 ```
 
-## Repository Layout
+**2. 把三个应用连上。** 先看一遍会改哪些文件，再执行：
 
-- `consilium/`: Pure Python 3.9 stdlib package (`models.py`, `store.py`, `quota.py`, `wakeup.py`, `dashboard.py`, `mcp_server.py`, `cli.py`).
-- `app/macos/`: Native macOS menu bar app (`Sources/*.swift`, `Info.plist`, `Resources/AppIcon.iconset/`, `Resources/StatusIconTemplate*.png`) wrapping the bundled `consilium` daemon, `NSStatusItem` live 3-peer status menu, non-persistent `WKWebView`, `POST /api/login` cookie injection, and `UNUserNotificationCenter` R003 deep-link notifications (built into git-ignored `build/Consilium.app` via `scripts/build_app.sh` and verified by `scripts/smoke_test_app.sh`).
-- `adapters/`: Shared skill ([SKILL.md](adapters/skill/consilium-collab/SKILL.md)), Claude subagent templates, Codex agent TOML profiles, Antigravity MCP snippet, and `launchd` plist template.
-- `scripts/install.py`: Two-phase idempotent installer defaulting to `--dry-run` with `--target-home`, `--rendezvous-dir`, `--targets`, `--skip-claude-desktop` (allowing non-desktop targets while `Claude.app` runs), timestamped backups, verified Claude MCP rollback, `InstallApplyError` per-target status reporting on partial apply failures, `rotate-token` (raising structured `TokenRotationError` on mid-rotation failure), and `--uninstall`.
-- `tests/`: `unittest` suite (`79` tests across `11` modules including `test_r010_regressions.py`, `test_r011_regressions.py`, `test_r012_regressions.py`, and `test_r015_regressions.py`) covering SQLite concurrency, loop guard, `attempt_id` fencing + legacy DB `A-1-legacy-<task_id>` backfill, `task_stale` / `consilium_requeue_task`, strictly zero-write `wait`, `kqueue` hot wakeup & `signals/` / rendezvous deletion recovery (`pulse_if_backlog`), atomic `.lease`, 3-fact cold fallback, stdio/HTTP MCP transports, `delivery.warnings` fault isolation, scoped idempotency (`409` + original `delivery_json` receipt replay), active-account multi-account quota pool (`accounts[].id` primary join, newer `codex_accounts.sqlite` mtime distrust, 30m active/backup staleness, unconfirmed single-candidate isolation, `mode=ro&immutable=1` / `query_only=ON`), R006/R010/R011/R012/R015 regressions, minimalist conversation `/ui` (5-state indicators, 5-tab right drawer `任务`/`工作树`/`模型与账号`/`子 Agent`/`文件`, `/` palette, `1440px`/`390px`, volatile tick-key exclusion), strict HTTP/1.1 framing (`GET`/`POST` body draining, `501 Transfer-Encoding`, `400` short/duplicate `Content-Length`), `SessionStore` / `LoginTicketStore` / CSRF / `Origin` / `auth_token_ver`-pinned SSE & ticket issuance, and installer secret redaction + exception rollback + per-target partial status.
-- `openspec/`: OpenSpec baseline and roadmap under [openspec/changes/consilium-v1/](openspec/changes/consilium-v1/proposal.md) (legacy `init-deskbell` archived).
-- `docs/` & `reviews/`: Architecture notes, brand SVGs ([docs/README.md](docs/README.md)), and cross-agent audit packets (`R001`–`R015`).
+```bash
+python3 scripts/install.py --dry-run --targets claude_code codex antigravity
+python3 scripts/install.py --apply --targets claude_code codex antigravity
+```
 
-## Security Model
+安装脚本会给每个被改的配置文件留带时间戳的备份。只想连其中一两家，就只写对应的目标。
 
-- Persistent state (`~/Library/Application Support/consilium/`) and ephemeral rendezvous (`/tmp/consilium-<uid>/`) are strictly split so macOS 3-day `tmp_cleaner` never deletes `bus.db` or `auth.token`. Both directories are verified with `os.lstat()` to reject symlinks and foreign UIDs (`0o700`); DB, signal files, leases, and `auth.token` use `0o600`.
-- HTTP transport binds strictly to `127.0.0.1`, enables Bearer token authentication by default (`--require-token`, **`?token=` query-string auth rejected with `401`**), serves `/mcp` with Bearer-only auth (`405 Allow: POST` on `GET /mcp`), validates `Host` and `Origin` across endpoints (catching malformed non-numeric ports with `403`), and closes keep-alive sockets on error responses (`status >= 400`).
-- **Always open `/ui` via `127.0.0.1:<port>/ui` (not `localhost:<port>/ui`)**: `localhost` and `127.0.0.1` are distinct HTTP origins; even if a session cookie is present, browsers send a `localhost` `Origin` header that exact-origin CSRF guards (`_is_exact_daemon_origin`) intentionally reject with `403`.
-- Local Cockpit quota reads use a strict read-only whitelist (`codex_accounts.json` metadata + `codex-quota-history-v1.sqlite` + `platform-quota-history-v1.sqlite` via `mode=ro&immutable=1` or `PRAGMA query_only=ON`), join on `accounts[].id`, SHA-256 hash all Cockpit/Claude account identifiers (`_hash_account_ref(..., always_hash=True)`), never inspect encrypted account blobs, isolate unconfirmed/stale (`>30m`) candidates as unknown, and compute active-account posture solely from the currently confirmed active account while surfacing valid backup-account switch hints in read-only UI metadata.
-- Dashboard `/ui` uses server-side random `SessionStore` cookies (`consilium_session`, 12h TTL, `HttpOnly; SameSite=Strict`) issued via `POST /api/login` or verified `auth_token_ver`-pinned 30s single-use tickets (`POST /api/ui-ticket` -> `GET /ui/auth?ticket=...` via `consilium ui`), enforces strict HTTP/1.1 framing (`_parse_strict_content_length`) + POST body draining, and validates `_stream_still_authorized()` before headers and initial SSE snapshot emission. Token rotation or `/api/logout` immediately revokes unredeemed tickets, existing sessions (`401`), and active SSE streams.
-- Cookie-authenticated dashboard writes (`/api/missions/<id>/close`, `/api/tasks/<id>/requeue`, `/api/logout`) enforce exact daemon `Origin` (`scheme://host:port`, `403`), `Content-Type: application/json` (`415`), and `X-Consilium-CSRF` (`403`).
-- `/ui` serves a strict offline CSP (`default-src 'none'; ...; frame-ancestors 'none';`) and all HTTP/JSON/SSE/`202` responses set `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, and `Cache-Control: no-store` (`no-cache, no-store` on SSE). `EventHub` caps SSE at `16` concurrent clients (`503` beyond cap) with `10s` write timeouts and monotonic `state_version`.
-- Cold notifications pass untrusted text via `osascript` `argv` (`on run argv`), strip leading `/` from deep-link prompts, truncate safely before UTF-8 percent-encoding, and never simulate keystrokes.
+**3. 打开 Consilium。** 后台服务随应用一起启动、一起退出，没有开机自启。
+
+三个应用都只在**新开的会话**里才看得到新装的 consilium 工具，已经开着的会话要重开一次。
+
+### 卸载
+
+```bash
+python3 scripts/install.py --uninstall --targets claude_code codex antigravity
+```
+
+然后把 Consilium.app 拖进废纸篓。会诊记录在 `~/Library/Application Support/consilium/`，要一并清掉就删这个目录。
+
+## 使用
+
+1. 按 ⌘N 新开会诊，选文件夹，选档位（快 / 均衡 / 深度），选发给谁，说要做的事。
+2. 第一次用时，左下角卡片里没在待命的一家旁边有“叫醒”按钮：点一下会在那个应用里新开一个待命会话，你按一次发送就行（Antigravity 没有深链，会复制一段指令让你粘贴）。
+3. 回复出现在对话里，带着是哪一家、用的什么模型。继续在同一个会诊里输入就是追问，处理的一家会先读这个会诊之前的对话。
+4. 鼠标移到左侧某个会诊上，右边出现归档按钮；归档的会诊收进列表底部的“已归档”。
+5. 点标题可以改名；右上角“⋯”里有“在 Claude 里开专属会话”、主题切换，以及任务、账号、偏好面板。
+
+## 安全与隐私
+
+- 服务只监听 `127.0.0.1`。MCP 请求要带本机的访问令牌（`auth.token`，权限 0600）；浏览器端用随机会话，写操作要同源、JSON 和 CSRF 令牌三样齐全。
+- 界面完全离线：内容安全策略是 `default-src 'none'`，页面里没有任何外部链接或脚本。
+- 应用只会打开 `claude://code/new` 和 `codex://new` 两种深链。
+- 读 Cockpit Tools 的数据时只读额度记录和“当前是哪个账号”的指针，不打开它的账号库、密钥和加密文件；账号标识在 Consilium 里以哈希保存。
+- 安装脚本默认只演示（`--dry-run`），`--apply` 才会写入，并且每个文件都留备份；Claude 桌面应用在运行时不会改它的配置。
+
+## 目前的限制
+
+- 只支持 macOS 的桌面使用，不做手机适配。
+- 三个应用的模型由它们自己决定，Consilium 只显示它们上报的模型；“档位”是给处理方的建议。
+- Claude 桌面应用不允许被自动事件叫醒的那一轮自己开新会话，所以默认由待命会话直接处理；需要专属会话时由你点一下来开。
+- Claude 的余量没有本地记录时显示为空，不会猜一个数字。
+- 待命会话可能被别的项目的门铃叫醒一次，它取不到东西就会回去继续等。
+
+## 开发
+
+纯 Python 标准库（3.9 以上），没有第三方依赖。应用外壳是 Swift，用 Command Line Tools 自带的 `swiftc` 编译。
+
+```bash
+# 全部测试
+env -u CLAUDE_CONFIG_DIR CONSILIUM_DRY_RUN=1 CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC=1 \
+  /usr/bin/python3 -B -m unittest discover -s tests
+
+# 构建应用并冒烟测试
+./scripts/build_app.sh && ./scripts/smoke_test_app.sh
+
+# 不开应用，直接起服务或看状态
+python3 -m consilium.cli serve
+python3 -m consilium.cli status
+```
+
+| 目录 | 内容 |
+|---|---|
+| `consilium/` | 总线、存储、门铃、额度、界面（单个离线网页） |
+| `app/macos/` | Consilium.app 的 Swift 源码 |
+| `adapters/` | 三个应用用的协作技能和子代理模板 |
+| `scripts/` | 构建、冒烟测试、安装、发布 |
+| `tests/` | 单元和回归测试 |
+| `openspec/` | 需求和设计记录 |
+| `reviews/` | 每一轮的评审和交接记录（R001 起） |
+| `docs/` | 架构说明、标志、截图 |
+
+## 版本与发布
+
+用 GitHub Releases 迭代，版本号按 `主.次.修` 三段：改了使用方式或数据格式升“次”，只修问题升“修”。每个版本的变化写在 [CHANGELOG.md](CHANGELOG.md)。
+
+发一个新版本：
+
+1. 在 `CHANGELOG.md` 顶部写好这个版本的条目。
+2. 运行 `./scripts/release.sh 0.2.0`。它会改三处版本号、跑全部测试、构建并冒烟测试应用、打包、提交、打标签 `v0.2.0`、推送，并用这一版的更新说明创建 Release，附上应用压缩包和校验值。
+
+加 `--dry-run` 只做检查和打包，不提交、不推送、不建 Release。
