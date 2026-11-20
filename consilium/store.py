@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS user_messages (
     text TEXT NOT NULL,
     targets_json TEXT NOT NULL DEFAULT '[]',
     mode TEXT NOT NULL DEFAULT 'direct',
+    reason TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
 
@@ -254,6 +255,9 @@ class BusStore:
                 "ALTER TABLE idempotency_keys ADD COLUMN request_hash TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE idempotency_keys ADD COLUMN delivery_json TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE tasks ADD COLUMN origin TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE tasks ADD COLUMN model_used TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE user_messages ADD COLUMN reason TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE tasks ADD COLUMN new_session INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE quota_windows ADD COLUMN is_current INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE quota_windows ADD COLUMN is_historical INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE quota_windows ADD COLUMN account_alias TEXT NOT NULL DEFAULT ''",
@@ -803,6 +807,7 @@ class BusStore:
                         now=now,
                         now_ms=now_ms,
                         origin=str(item.get("origin", "")),
+                        new_session=bool(item.get("new_session")),
                     )
                     created_tasks.append(task_obj)
                     created_events.append(event_obj)
@@ -847,6 +852,7 @@ class BusStore:
         now: str,
         now_ms: Optional[float] = None,
         origin: str = "",
+        new_session: bool = False,
     ) -> tuple:
         assignee = validate_peer(assignee_peer)
         tier = validate_choice(model_tier, VALID_MODEL_TIERS, "model_tier")
@@ -859,8 +865,8 @@ class BusStore:
             INSERT INTO tasks (
                 task_id, mission_id, assignee_peer, model_tier, model_hint,
                 parallel_fanout, worktree_branch, prompt, status,
-                dispatched_at_ms, created_at, updated_at, origin
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
+                dispatched_at_ms, created_at, updated_at, origin, new_session
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -875,6 +881,7 @@ class BusStore:
                 now,
                 now,
                 origin,
+                1 if new_session else 0,
             ),
         )
         task_row = conn.execute(
@@ -914,6 +921,7 @@ class BusStore:
         caller_scope: Optional[str] = None,
         origin: str = "",
         user_message: Optional[Dict[str, Any]] = None,
+        new_session: bool = False,
     ) -> Dict[str, Any]:
         """Dispatch an additional task on an existing open mission."""
         assignee = validate_peer(assignee_peer)
@@ -969,6 +977,7 @@ class BusStore:
                     now=now,
                     now_ms=now_ms,
                     origin=origin,
+                    new_session=new_session,
                 )
                 if user_message:
                     self._insert_user_message_locked(conn, mission_id, user_message, now)
@@ -1239,7 +1248,16 @@ class BusStore:
                             "SELECT * FROM tasks WHERE task_id = ?", (tid,)
                         ).fetchone()
                         if refreshed is not None:
-                            claimed_tasks.append(self._decode_task(refreshed))
+                            claimed = self._decode_task(refreshed)
+                            mrow = conn.execute(
+                                "SELECT title, workspace_path, coordinator_peer FROM missions WHERE mission_id = ?",
+                                (claimed["mission_id"],),
+                            ).fetchone()
+                            if mrow is not None:
+                                claimed["mission_title"] = mrow["title"]
+                                claimed["workspace_path"] = mrow["workspace_path"]
+                                claimed["mission_coordinator"] = mrow["coordinator_peer"]
+                            claimed_tasks.append(claimed)
                         # Annotate the triggering assignment/requeue event with claim_latency_ms + attempt_id.
                         src_ev = conn.execute(
                             """
@@ -1659,8 +1677,10 @@ class BusStore:
         notify_coordinator: bool = False,
         attempt_id: Optional[str] = None,
         client_request_id: Optional[str] = None,
+        model_used: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Update claimed/running task progress while enforcing attempt_id ownership."""
+        model_label = " ".join(str(model_used or "").split())[:80]
         peer = validate_peer(peer_id)
         normalized_status = validate_choice(
             status, PROGRESS_TASK_STATUSES, "progress status"
@@ -1735,6 +1755,8 @@ class BusStore:
                     """,
                     (normalized_status, progress_note, branch_value, now, task_id, provided_attempt),
                 )
+                if model_label:
+                    conn.execute("UPDATE tasks SET model_used = ? WHERE task_id = ?", (model_label, task_id))
                 conn.execute(
                     "UPDATE missions SET updated_at = ? WHERE mission_id = ?",
                     (now, task["mission_id"]),
@@ -1789,8 +1811,10 @@ class BusStore:
         status: str = "done",
         attempt_id: Optional[str] = None,
         client_request_id: Optional[str] = None,
+        model_used: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Mark a claimed/running task terminal after verifying attempt_id, check mission completion, and notify coordinator."""
+        model_label = " ".join(str(model_used or "").split())[:80]
         peer = validate_peer(peer_id)
         terminal_status = validate_choice(status, TERMINAL_TASK_STATUSES, "terminal status")
         provided_attempt = (attempt_id or "").strip()
@@ -1859,6 +1883,8 @@ class BusStore:
                     """,
                     (terminal_status, result_summary, artifacts_json, now, task_id, provided_attempt),
                 )
+                if model_label:
+                    conn.execute("UPDATE tasks SET model_used = ? WHERE task_id = ?", (model_label, task_id))
                 self._touch_peer_locked(conn, peer, status="active", now=now)
                 placeholders = ",".join("?" for _ in TERMINAL_TASK_STATUSES)
                 remaining_row = conn.execute(
@@ -2237,9 +2263,81 @@ class BusStore:
             return
         targets = [str(t) for t in (message.get("targets") or [])]
         conn.execute(
-            "INSERT INTO user_messages (mission_id, text, targets_json, mode, created_at) VALUES (?, ?, ?, ?, ?)",
-            (mission_id, text[:20000], json.dumps(targets, ensure_ascii=False), str(message.get("mode") or "direct"), now),
+            "INSERT INTO user_messages (mission_id, text, targets_json, mode, reason, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (mission_id, text[:20000], json.dumps(targets, ensure_ascii=False), str(message.get("mode") or "direct"),
+             str(message.get("reason") or "")[:300], now),
         )
+
+    def set_mission_title(self, mission_id: str, title: str, actor: str) -> Dict[str, Any]:
+        """Give a conversation a short name (shown in the sidebar and used to name native sessions)."""
+        clean = " ".join(str(title or "").split())
+        if not clean:
+            raise ValueError("title must not be empty")
+        if len(clean) > 40:
+            raise ValueError("title must be at most 40 characters")
+        who = USER_PEER if actor == USER_PEER else validate_peer(actor)
+        now = utc_now_iso()
+        with self._connect() as conn:
+            with self._tx(conn):
+                mission = conn.execute(
+                    "SELECT * FROM missions WHERE mission_id = ?", (mission_id,)
+                ).fetchone()
+                if mission is None:
+                    raise KeyError(f"Unknown mission_id: {mission_id}")
+                if who not in (USER_PEER, mission["coordinator_peer"]):
+                    involved = conn.execute(
+                        "SELECT 1 FROM tasks WHERE mission_id = ? AND assignee_peer = ? LIMIT 1",
+                        (mission_id, who),
+                    ).fetchone()
+                    if involved is None:
+                        raise ValueError(f"Peer {who!r} is not part of mission {mission_id}")
+                conn.execute(
+                    "UPDATE missions SET title = ?, updated_at = ? WHERE mission_id = ?",
+                    (clean, now, mission_id),
+                )
+        return {"mission_id": mission_id, "title": clean, "set_by": who}
+
+    def set_mission_workspace(self, mission_id: str, path: str, actor: str) -> Dict[str, Any]:
+        """Record the folder a conversation works in. Must be an existing absolute directory."""
+        raw = str(path or "").strip()
+        if not raw.startswith("/") and not raw.startswith("~"):
+            raise ValueError("workspace must be an absolute path")
+        resolved = os.path.realpath(os.path.expanduser(raw))
+        if not os.path.isdir(resolved):
+            raise ValueError(f"workspace folder does not exist: {raw}")
+        who = USER_PEER if actor == USER_PEER else validate_peer(actor)
+        now = utc_now_iso()
+        with self._connect() as conn:
+            with self._tx(conn):
+                mission = conn.execute(
+                    "SELECT * FROM missions WHERE mission_id = ?", (mission_id,)
+                ).fetchone()
+                if mission is None:
+                    raise KeyError(f"Unknown mission_id: {mission_id}")
+                if mission["status"] in VALID_MISSION_CLOSE_STATUSES:
+                    raise ValueError(f"Mission {mission_id} is closed")
+                if who not in (USER_PEER, mission["coordinator_peer"]):
+                    involved = conn.execute(
+                        "SELECT 1 FROM tasks WHERE mission_id = ? AND assignee_peer = ? LIMIT 1",
+                        (mission_id, who),
+                    ).fetchone()
+                    if involved is None:
+                        raise ValueError(f"Peer {who!r} is not part of mission {mission_id}")
+                conn.execute(
+                    "UPDATE missions SET workspace_path = ?, updated_at = ? WHERE mission_id = ?",
+                    (resolved, now, mission_id),
+                )
+        return {"mission_id": mission_id, "workspace_path": resolved, "set_by": who}
+
+    def latest_model_by_peer(self) -> Dict[str, str]:
+        """The model each peer most recently reported via model_used (for the sidebar)."""
+        out: Dict[str, str] = {}
+        with self._connect() as conn:
+            for r in conn.execute(
+                "SELECT assignee_peer, model_used FROM tasks WHERE model_used != '' ORDER BY updated_at ASC"
+            ).fetchall():
+                out[r["assignee_peer"]] = r["model_used"]
+        return out
 
     def list_preferences(self, include_inactive: bool = False) -> List[Dict[str, Any]]:
         with self._connect() as conn:
@@ -2440,6 +2538,7 @@ class BusStore:
                         "text": r["text"],
                         "targets": json.loads(r["targets_json"] or "[]"),
                         "mode": r["mode"],
+                        "reason": r["reason"] if "reason" in r.keys() else "",
                         "created_at": r["created_at"],
                     }
                     for r in conn.execute(
