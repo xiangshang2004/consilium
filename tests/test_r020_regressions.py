@@ -205,6 +205,48 @@ class R020RegressionsTests(unittest.TestCase):
         self.assertNotIn("file://", html)
         self.assertNotIn("http://", html)
         self.assertNotIn("https://", html)
+    def test_tier_is_automatic_by_default_and_can_be_changed_inside_a_conversation(self) -> None:
+        mid = self.daemon.ui_send("看个报错", ["chatgpt"])["mission_id"]
+        task = self._tool("consilium_pickup_inbox", peer_id="chatgpt", scope="consilium")["claimed_tasks"][0]
+        self.assertEqual((task["model_tier"], task["mission_tier"]), ("auto", "auto"))
+        # The peer decides, works at that tier and says which and why.
+        bad = self.daemon.dispatcher.handle_payload({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {
+            "name": "consilium_report_progress", "arguments": {"task_id": task["task_id"], "peer_id": "chatgpt",
+            "attempt_id": task["attempt_id"], "progress_note": "x", "tier_used": "turbo"}}})
+        self.assertTrue(bad["result"].get("isError"))
+        self._tool("consilium_complete_task", task_id=task["task_id"], peer_id="chatgpt", attempt_id=task["attempt_id"],
+                   result_summary="好了", model_used="GPT-5.5", effort_used="xhigh", tier_used="deep",
+                   tier_reason="  涉及并发，答错代价大  ")
+        row = next(m for m in self.store.get_dashboard_missions()[0] if m["mission_id"] == mid)["tasks"][0]
+        self.assertEqual((row["tier_used"], row["tier_reason"]), ("pro_reasoning", "涉及并发，答错代价大"))
+
+        # Changing the tier in an existing conversation applies to that message and sticks to the conversation.
+        self.daemon.ui_send("再深入看看", ["chatgpt"], mid, tier="deep")
+        t2 = self._tool("consilium_pickup_inbox", peer_id="chatgpt", scope="consilium")["claimed_tasks"][0]
+        self.assertEqual((t2["model_tier"], t2["mission_tier"]), ("pro_reasoning", "pro_reasoning"))
+        self.daemon.ui_send("继续", ["chatgpt"], mid)  # not said this time: keep the conversation's tier
+        t3 = self._tool("consilium_pickup_inbox", peer_id="chatgpt", scope="consilium")["claimed_tasks"][0]
+        self.assertEqual(t3["model_tier"], "pro_reasoning")
+        self.daemon.ui_send("随便问一句", ["chatgpt"], mid, tier="auto")
+        t4 = self._tool("consilium_pickup_inbox", peer_id="chatgpt", scope="consilium")["claimed_tasks"][0]
+        self.assertEqual((t4["model_tier"], t4["mission_tier"]), ("auto", "auto"))
+
+        from consilium.mcp_server import build_auto_coordinator_prompt
+        auto_prompt = build_auto_coordinator_prompt("x", "claude", [], [], [])
+        self.assertIn("由你按难度自己定", auto_prompt)
+        self.assertIn("不要让使用者来选", auto_prompt)
+        self.assertIn("tier_used", auto_prompt)
+        fixed_prompt = build_auto_coordinator_prompt("x", "claude", [], [], [], tier="pro_reasoning")
+        self.assertIn("使用者指定了“深度”", fixed_prompt)
+
+        html = render_dashboard_html("0.3.0")
+        self.assertIn('["auto", "自动", "按难度自己定，不用你选"]', html)
+        self.assertIn('let composeTier = "auto";', html)
+        self.assertEqual(html.count("tier: composeTier"), 2, "new and existing conversations both send the tier")
+        self.assertIn("optsEl.innerHTML = closedMission ? \"\" : tierBtnHtml + tierMenuHtml;", html,
+                      "the tier button is also there in an existing conversation")
+        self.assertIn("const tn = tierNote(task);", html)
+        self.assertEqual(html.count("由你按难度自己定档位并真的按它做"), 3, "all three standby prompts")
 
 if __name__ == "__main__":
     unittest.main()

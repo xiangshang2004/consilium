@@ -20,6 +20,7 @@ from consilium.models import (
     MISSION_SOURCE_PEER,
     MISSION_SOURCE_UI,
     PICKUP_SCOPES,
+    REPORTED_TIERS,
     NON_TERMINAL_TASK_STATUSES,
     PROGRESS_TASK_STATUSES,
     REQUEUEABLE_TASK_STATUSES,
@@ -188,6 +189,16 @@ def _request_hash(payload: Dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _normalize_reported_tier(value: Optional[str]) -> str:
+    """fast / balanced / deep as reported by a peer; anything else is a mistake worth telling it about."""
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    if raw not in REPORTED_TIERS:
+        raise ValueError("tier_used must be one of: fast, balanced, deep")
+    return REPORTED_TIERS[raw]
+
+
 def _format_countdown(seconds: Optional[int]) -> str:
     """Format remaining seconds until quota reset as a compact human string."""
     if seconds is None:
@@ -275,6 +286,8 @@ class BusStore:
                 "ALTER TABLE quota_windows ADD COLUMN account_alias TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE quota_windows ADD COLUMN plan_type TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE tasks ADD COLUMN effort_used TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE tasks ADD COLUMN tier_used TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE tasks ADD COLUMN tier_reason TEXT NOT NULL DEFAULT ''",
             )
             for stmt in migrations:
                 try:
@@ -1305,7 +1318,7 @@ class BusStore:
                                 claimed["mission_title"] = mrow["title"]
                                 claimed["workspace_path"] = mrow["workspace_path"]
                                 claimed["mission_coordinator"] = mrow["coordinator_peer"]
-                                claimed["mission_tier"] = mrow["tier"]
+                                claimed["mission_tier"] = mrow["tier"] or "auto"
                                 try:
                                     bindings = json.loads(mrow["native_sessions_json"] or "{}")
                                 except ValueError:
@@ -1734,10 +1747,14 @@ class BusStore:
         client_request_id: Optional[str] = None,
         model_used: Optional[str] = None,
         effort_used: Optional[str] = None,
+        tier_used: Optional[str] = None,
+        tier_reason: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Update claimed/running task progress while enforcing attempt_id ownership."""
         model_label = " ".join(str(model_used or "").split())[:80]
         effort_label = " ".join(str(effort_used or "").split())[:40]
+        tier_label = _normalize_reported_tier(tier_used)
+        tier_why = " ".join(str(tier_reason or "").split())[:160]
         peer = validate_peer(peer_id)
         normalized_status = validate_choice(
             status, PROGRESS_TASK_STATUSES, "progress status"
@@ -1816,6 +1833,11 @@ class BusStore:
                     conn.execute("UPDATE tasks SET model_used = ? WHERE task_id = ?", (model_label, task_id))
                 if effort_label:
                     conn.execute("UPDATE tasks SET effort_used = ? WHERE task_id = ?", (effort_label, task_id))
+                if tier_label:
+                    conn.execute(
+                        "UPDATE tasks SET tier_used = ?, tier_reason = CASE WHEN ? != '' THEN ? ELSE tier_reason END WHERE task_id = ?",
+                        (tier_label, tier_why, tier_why, task_id),
+                    )
                 conn.execute(
                     "UPDATE missions SET updated_at = ? WHERE mission_id = ?",
                     (now, task["mission_id"]),
@@ -1872,10 +1894,14 @@ class BusStore:
         client_request_id: Optional[str] = None,
         model_used: Optional[str] = None,
         effort_used: Optional[str] = None,
+        tier_used: Optional[str] = None,
+        tier_reason: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Mark a claimed/running task terminal after verifying attempt_id, check mission completion, and notify coordinator."""
         model_label = " ".join(str(model_used or "").split())[:80]
         effort_label = " ".join(str(effort_used or "").split())[:40]
+        tier_label = _normalize_reported_tier(tier_used)
+        tier_why = " ".join(str(tier_reason or "").split())[:160]
         peer = validate_peer(peer_id)
         terminal_status = validate_choice(status, TERMINAL_TASK_STATUSES, "terminal status")
         provided_attempt = (attempt_id or "").strip()
@@ -1948,6 +1974,11 @@ class BusStore:
                     conn.execute("UPDATE tasks SET model_used = ? WHERE task_id = ?", (model_label, task_id))
                 if effort_label:
                     conn.execute("UPDATE tasks SET effort_used = ? WHERE task_id = ?", (effort_label, task_id))
+                if tier_label:
+                    conn.execute(
+                        "UPDATE tasks SET tier_used = ?, tier_reason = CASE WHEN ? != '' THEN ? ELSE tier_reason END WHERE task_id = ?",
+                        (tier_label, tier_why, tier_why, task_id),
+                    )
                 self._touch_peer_locked(conn, peer, status="active", now=now)
                 placeholders = ",".join("?" for _ in TERMINAL_TASK_STATUSES)
                 remaining_row = conn.execute(

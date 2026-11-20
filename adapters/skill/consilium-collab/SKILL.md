@@ -59,7 +59,7 @@ Whenever the user gives an instruction here that asks to coordinate across model
 
 The Consilium window works like the Claude Code desktop app: **the user picks a folder when starting a conversation; each conversation keeps its own history, and the user can bind a dedicated native session to it.** The user never types paths; never guess a folder from message text.
 
-**What a picked-up task carries**: `mission_title`, `workspace_path` (the folder the user chose), `mission_tier` (`fast` / `balanced` / `pro_reasoning`), `native_session` (the dedicated session the user bound to this conversation for you, or empty), `conversation` (earlier turns of this conversation, oldest first) and `new_session` (1 for the first message to you in this conversation).
+**What a picked-up task carries**: `mission_title`, `workspace_path` (the folder the user chose), `model_tier` on the task itself (`auto`, or the tier the user fixed: `fast` / `balanced` / `pro_reasoning`), `mission_tier` (the conversation's current choice), `native_session` (the dedicated session the user bound to this conversation for you, or empty), `conversation` (earlier turns of this conversation, oldest first) and `new_session` (1 for the first message to you in this conversation).
 
 **Routing (standby sessions)**:
 1. `native_session` is set: the user opened a dedicated session for this conversation. Forward the task to it (Claude Code: `SendMessage` to that session id with `task_id`, `attempt_id`, `peer_id` and the prompt) and keep standing by. If that session no longer exists, handle the task yourself as in step 2.
@@ -73,6 +73,12 @@ The Consilium window works like the Claude Code desktop app: **the user picks a 
 - A standby session serves the Consilium window only: always call `consilium_pickup_inbox(peer_id=<self>, session_label="<self>-standby", scope="consilium")`. If it returns nothing, re-arm silently and say nothing.
 - A session that created its own mission collects results with `consilium_pickup_inbox(peer_id=<self>, mission_id=<that mission>)` or reads `consilium_status(mission_id)`; it never picks up without `mission_id`, so it cannot claim the user's Consilium messages.
 - Missions created by a session do not appear in the Consilium window. Archiving in the window only hides a conversation there; it never touches a session in Claude, Codex or Antigravity.
+
+**Tier (decide it yourself)**: the user does not pick a tier unless they want to. When a task's `model_tier` is `auto`, judge the difficulty before you start: **fast** = a quick answer or a small edit; **balanced** = ordinary work; **deep** = hard debugging, architecture, anything where a wrong answer is costly. Then really work at that tier with your own app's means, and never ask the user to choose:
+- Claude Code: answer fast and balanced work yourself; for deep work delegate to a native subagent with a higher reasoning effort (the Agent tool's `effort`), keeping to the user's own rules about which models may be used.
+- Codex / Antigravity: use your native subagent or reasoning-effort setting the same way; if your app cannot change it from inside a session, say so in `tier_reason` rather than pretending.
+- When the user fixed a tier, follow it. A coordinator writes the tier it chose into `model_tier` on every task it dispatches.
+- Report `tier_used` (`fast` / `balanced` / `deep`) and a one-sentence `tier_reason` in the user's language, together with `model_used` and `effort_used`.
 
 **Quota**: remaining quota is synced by Consilium from Cockpit's local records. Do not query, estimate or report your own quota, and do not ask other peers to; read `consilium_preferences` / `consilium_quota` when you need it.
 

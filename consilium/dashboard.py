@@ -1563,7 +1563,9 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 .caret { color: var(--text-muted); font-size: 10px; }
 .folder-menu, .tier-menu { position: absolute; left: 0; bottom: auto; top: calc(100% + 8px); z-index: 80; background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: 14px; box-shadow: var(--shadow-md); padding: 6px; display: flex; flex-direction: column; }
 .folder-menu { width: 320px; max-width: none; min-width: 0; }
-.tier-menu { width: 220px; left: 120px; }
+.tier-menu { width: 230px; left: 120px; }
+.tier-menu.solo { left: 0; }
+.tier-k { color: var(--text-muted); margin-right: 5px; }
 .folder-item { border-radius: 9px; }
 .folder-item.current { background: var(--bg-hover); }
 .send-btn { margin-left: auto; background: var(--text-primary); color: var(--bg-surface); flex-shrink: 0; }
@@ -1791,7 +1793,26 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   let composeWorkspace = "";
   let folderMenuOpen = false;
   let tierMenuOpen = false;
-  let composeTier = "balanced";
+  let composeTier = "auto";
+  let tierSyncedFor = null; // which conversation composeTier was last read from
+  const TIERS = [
+    ["auto", "自动", "按难度自己定，不用你选"],
+    ["fast", "快", "轻量问题，回得快"],
+    ["balanced", "均衡", "日常使用"],
+    ["deep", "深度", "难题和架构，想得久"]
+  ];
+  const TIER_LABELS = { fast: "快", balanced: "均衡", pro_reasoning: "深度", deep: "深度" };
+  function tierFromMission(m) {
+    const t = (m && m.tier) || "";
+    return t === "pro_reasoning" ? "deep" : (t === "fast" || t === "balanced" ? t : "auto");
+  }
+  // "深度" plus why: shown in front of the model on each reply and task.
+  function tierNote(task) {
+    if (!task || !task.tier_used) return { label: "", tip: "" };
+    const label = TIER_LABELS[task.tier_used] || "";
+    const how = task.model_tier === "auto" ? "自动定的档位" : "你指定的档位";
+    return { label: label, tip: how + "：" + label + (task.tier_reason ? "。" + task.tier_reason : "") };
+  }
   let renamingMission = null;
   let showArchived = false;
   const LOCAL_FOLDERS_KEY = "consilium.recentFolders";
@@ -1823,9 +1844,9 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     renderComposerBar(appState);
     document.getElementById("composer-input").focus();
   };
-  const AG_STANDBY_PROMPT = "请作为 Consilium 的 Antigravity 待命端（peer_id=antigravity）：反复调用 consilium_wait(peer_id=\"antigravity\", timeout_sec=300)；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"antigravity\", session_label=\"antigravity-standby\", scope=\"consilium\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used 和 effort_used；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步）；超时没消息就继续等。每轮少说话，不要停下来问我。";
-  const CODEX_STANDBY_PROMPT = "请作为 Consilium 的 Codex 待命端（peer_id=chatgpt）：反复调用 consilium_wait(peer_id=\"chatgpt\", timeout_sec=300)；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"chatgpt\", session_label=\"chatgpt-standby\", scope=\"consilium\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used 和 effort_used；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步）；超时没消息就继续等。每轮少说话，不要停下来问我。";
-  const STANDBY_PROMPT = "请作为 Consilium 的 Claude 常驻待命端：先读 ~/.claude/skills/consilium-collab/SKILL.md 第 2、3 节；用 run_in_background 运行 `PYTHONPATH=/Applications/Consilium.app/Contents/Resources/python /usr/bin/python3 -B -m consilium.cli wait --peer claude --session-label claude-standby --timeout 86400`，被唤醒后用 consilium_pickup_inbox(peer_id=\"claude\", session_label=\"claude-standby\", scope=\"consilium\") 取任务（只取 Consilium 窗口里发起的，取到空就直接重新挂上）、处理、用 consilium_complete_task 回复（带上 model_used 和 effort_used；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步），然后重新挂上等待。不要轮询，每轮少说话。";
+  const AG_STANDBY_PROMPT = "请作为 Consilium 的 Antigravity 待命端（peer_id=antigravity）：反复调用 consilium_wait(peer_id=\"antigravity\", timeout_sec=300)；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"antigravity\", session_label=\"antigravity-standby\", scope=\"consilium\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used、effort_used、tier_used 和 tier_reason；任务的 model_tier 是 auto 时由你按难度自己定档位并真的按它做，不要让使用者选；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步）；超时没消息就继续等。每轮少说话，不要停下来问我。";
+  const CODEX_STANDBY_PROMPT = "请作为 Consilium 的 Codex 待命端（peer_id=chatgpt）：反复调用 consilium_wait(peer_id=\"chatgpt\", timeout_sec=300)；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"chatgpt\", session_label=\"chatgpt-standby\", scope=\"consilium\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used、effort_used、tier_used 和 tier_reason；任务的 model_tier 是 auto 时由你按难度自己定档位并真的按它做，不要让使用者选；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步）；超时没消息就继续等。每轮少说话，不要停下来问我。";
+  const STANDBY_PROMPT = "请作为 Consilium 的 Claude 常驻待命端：先读 ~/.claude/skills/consilium-collab/SKILL.md 第 2、3 节；用 run_in_background 运行 `PYTHONPATH=/Applications/Consilium.app/Contents/Resources/python /usr/bin/python3 -B -m consilium.cli wait --peer claude --session-label claude-standby --timeout 86400`，被唤醒后用 consilium_pickup_inbox(peer_id=\"claude\", session_label=\"claude-standby\", scope=\"consilium\") 取任务（只取 Consilium 窗口里发起的，取到空就直接重新挂上）、处理、用 consilium_complete_task 回复（带上 model_used、effort_used、tier_used 和 tier_reason；任务的 model_tier 是 auto 时由你按难度自己定档位并真的按它做，不要让使用者选；不要自己查询或汇报余量，余量由 Consilium 从 Cockpit 同步），然后重新挂上等待。不要轮询，每轮少说话。";
   let sendTargets = [];
   let sending = false;
   let slashOpen = false;
@@ -2306,12 +2327,13 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     const chips = artifacts.slice(0, 6).map(a =>
       '<button type="button" class="chip-btn mono" data-open-tab="artifacts">📄 ' + esc(String(a).split("/").pop()) + '</button>'
     ).join("");
-    const sub = [task && task.model_used ? task.model_used : "", task && task.effort_used ? task.effort_used : "", relativeAge(ev.created_at)].filter(Boolean).join(" · ");
+    const tn = tierNote(task);
+    const sub = [tn.label, task && task.model_used ? task.model_used : "", task && task.effort_used ? task.effort_used : "", relativeAge(ev.created_at)].filter(Boolean).join(" · ");
     return '<article class="chat-agent">' +
       (PEER_META[pid] ? '<span class="peer-icon ' + pid + '" aria-hidden="true"></span>' : '<div class="avatar ' + meta.cls + '">' + esc(meta.short) + '</div>') +
       '<div class="chat-agent-body">' +
         '<div class="chat-agent-head"><span class="msg-author">' + esc(meta.label) + '</span>' + tag +
-          '<span class="msg-sub" title="' + esc(formatClock(ev.created_at)) + '">' + esc(sub) + '</span></div>' +
+          '<span class="msg-sub" title="' + esc(formatClock(ev.created_at) + (tn.tip ? " · " + tn.tip : "")) + '">' + esc(sub) + '</span></div>' +
         '<div class="chat-agent-text">' + renderMarkdownBlock(p.result_summary || "") + '</div>' +
         (chips ? '<div style="display:flex;flex-wrap:wrap;gap:6px;padding-top:6px;">' + chips + '</div>' : "") +
       '</div>' +
@@ -2503,7 +2525,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       else if (kind === "done" && !Number.isNaN(startMs) && !Number.isNaN(endMs)) timeTxt = "用时 " + durText((endMs - startMs) / 1000);
       else if (kind === "bad") timeTxt = TASK_STATUS_TEXT[t.status] || t.status;
       const waitTxt = kind === "wait" ? (standby ? "已送到，马上开始" : "等它接收 · 它现在没在待命，已发通知") : "";
-      const meta = [t.model_used || "", t.effort_used || "", timeTxt, waitTxt, t.stale_at ? "很久没有新进展" : ""].filter(Boolean).join(" · ");
+      const tn = tierNote(t);
+      const meta = [tn.label, t.model_used || "", t.effort_used || "", timeTxt, waitTxt, t.stale_at ? "很久没有新进展" : ""].filter(Boolean).join(" · ");
       const isOpen = Object.prototype.hasOwnProperty.call(taskRowOpen, t.task_id) ? taskRowOpen[t.task_id] : kind === "run";
       const note = kind === "done" || kind === "bad" ? (t.result_summary || t.progress_note || "") : (t.progress_note || "");
       const canRequeue = !closed && (t.status === "claimed" || t.status === "running" || t.status === "failed" || t.status === "blocked");
@@ -2516,7 +2539,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
           '<button type="button" class="pt-title" data-toggle-task="' + esc(t.task_id) + '" aria-expanded="' + (isOpen ? "true" : "false") + '" title="' + esc(t.task_id) + '">' +
             '<span class="peer-icon ' + esc(pid) + '" aria-hidden="true"></span><span class="t">' + esc(taskTitle(t)) + '</span><span class="c">' + ICONS.chev + '</span>' +
           '</button>' +
-          (meta ? '<div class="pt-meta">' + esc(meta) + '</div>' : "") +
+          (meta ? '<div class="pt-meta"' + (tn.tip ? ' title="' + esc(tn.tip) + '"' : "") + '>' + esc(meta) + '</div>' : "") +
           (isOpen ? (note ? '<div class="pt-note">' + renderMarkdownBlock(note) + '</div>' : "") + (acts ? '<div class="pt-act">' + acts + '</div>' : "") : "") +
         '</div>' +
       '</div>';
@@ -2645,16 +2668,28 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 
     const optsEl = document.getElementById("compose-opts");
     if (optsEl) {
+      const tierScope = curMission ? curMission.mission_id : "new";
+      if (tierSyncedFor !== tierScope) {
+        composeTier = curMission ? tierFromMission(curMission) : "auto";
+        tierSyncedFor = tierScope;
+      }
+      const tierLabel = (TIERS.find(t => t[0] === composeTier) || TIERS[0])[1];
+      const tierBtnHtml = '<button type="button" class="tier-btn" data-tier-menu="1" title="档位：决定用多强的模型、想多久。自动＝由处理的一端按难度自己定">' +
+        '<span class="tier-k">档位</span>' + esc(tierLabel) + ' <span class="caret">▾</span></button>';
+      const tierMenuHtml = tierMenuOpen
+        ? '<div class="tier-menu' + (curMission ? " solo" : "") + '" role="menu">' + TIERS.map(t =>
+            '<button type="button" class="folder-item' + (t[0] === composeTier ? " current" : "") + '" data-tier="' + t[0] + '"><span>' + t[1] + '</span><span class="path">' + t[2] + '</span></button>'
+          ).join("") + '</div>'
+        : "";
+      const closedMission = curMission && (curMission.status === "completed" || curMission.status === "cancelled" || curMission.status === "failed");
       if (curMission) {
-        optsEl.innerHTML = "";
+        optsEl.innerHTML = closedMission ? "" : tierBtnHtml + tierMenuHtml;
       } else {
         const recents = recentFolders(state);
         if (!composeWorkspace && recents.length) composeWorkspace = recents[0];
-        const TIERS = [["fast", "快", "轻量问题，回得快"], ["balanced", "均衡", "日常使用"], ["deep", "深度", "难题和架构，想得久"]];
-        const tierLabel = (TIERS.find(t => t[0] === composeTier) || TIERS[1])[1];
         optsEl.innerHTML =
           '<button type="button" class="folder-btn' + (composeWorkspace ? "" : " missing") + '" data-folder-menu="1" title="' + esc(composeWorkspace || "这个会诊在哪个文件夹里工作") + '">📁 <span class="name">' + esc(composeWorkspace ? folderName(composeWorkspace) : "选择文件夹") + '</span> <span class="caret">▾</span></button>' +
-          '<button type="button" class="tier-btn" data-tier-menu="1" title="档位：决定用多强的模型和思考多久">' + esc(tierLabel) + ' <span class="caret">▾</span></button>' +
+          tierBtnHtml +
           (folderMenuOpen
             ? '<div class="folder-menu" role="menu">' +
                 (recents.length ? '<div class="folder-menu-label">最近用过</div>' + recents.map(f =>
@@ -2663,11 +2698,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
                 '<button type="button" class="folder-item" data-open-folder-picker="1"><span>选择文件夹…</span></button>' +
               '</div>'
             : "") +
-          (tierMenuOpen
-            ? '<div class="tier-menu" role="menu">' + TIERS.map(t =>
-                '<button type="button" class="folder-item' + (t[0] === composeTier ? " current" : "") + '" data-tier="' + t[0] + '"><span>' + t[1] + '</span><span class="path">' + t[2] + '</span></button>'
-              ).join("") + '</div>'
-            : "");
+          tierMenuHtml;
       }
     }
     const anyStandby = ["claude", "chatgpt", "antigravity"].some(pid => Number(waiters[pid] || 0) > 0);
@@ -2938,7 +2969,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
         method: "POST",
         credentials: "same-origin",
         headers: writeHeaders(),
-        body: JSON.stringify(cur ? { text: text, targets: sendTargets.slice() }
+        body: JSON.stringify(cur ? { text: text, targets: sendTargets.slice(), tier: composeTier }
                                  : { text: text, targets: sendTargets.slice(), workspace: composeWorkspace, tier: composeTier })
       });
       if (res.status === 401) { restoreDraft(); showLogin(true); return; }

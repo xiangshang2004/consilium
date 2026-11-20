@@ -332,7 +332,17 @@ def _quota_line(item: Dict[str, Any]) -> str:
 def build_auto_coordinator_prompt(
     text: str, coordinator: str, digest: List[Dict[str, Any]], preferences: List[Dict[str, Any]],
     routing: List[Dict[str, Any]],
+    tier: str = "",
 ) -> str:
+    tier_name = {"fast": "快", "balanced": "均衡", "pro_reasoning": "深度"}.get(tier, "")
+    tier_line = (
+        f"档位：使用者指定了“{tier_name}”，你和你派出去的子任务都按这个档位做（派子任务时 model_tier 填 {tier}）。"
+        if tier_name else
+        "档位：使用者没有指定，由你按难度自己定——快（fast：随口一问、小改动）、均衡（balanced：日常工作）、"
+        "深度（deep：难查的问题、架构、答错代价大的事）。定了就真的按这个档位做：简单的直接答；"
+        "需要深度时用你所在 App 自带的办法提高推理强度或换更强的模型（例如交给更高 effort 的子代理），不要让使用者来选。"
+        "派子任务时在 model_tier 里写明你给它定的档位。"
+    )
     pref_lines = "\n".join(f"- {p['text']}" for p in preferences) or "- （还没有记录）"
     route_lines = "\n".join(
         f"- 「{r['text'][:60]}」→ {', '.join(PEER_LABELS.get(t, t) for t in r['targets'])}" for r in routing[:8]
@@ -347,8 +357,10 @@ def build_auto_coordinator_prompt(
         "3. 如果这次看出使用者稳定的习惯（例如某类事固定交给谁、喜欢的回答方式），用 consilium_learn_preference 记一句话；不确定就不记。\n"
         "4. 你自己的额度快用完时，用 consilium_handoff_task 把任务连同进度交给另一端。切换账号由使用者手动完成，需要时在回答里提醒。\n"
         "5. 用 consilium_set_title 给会诊起一个不超过 20 字的标题。会诊的文件夹由使用者选定（见 workspace_path），在里面工作；派子任务时写明这个文件夹。"
-        "上报进度和交付时用 model_used 写上你实际使用的模型、用 effort_used 写上推理强度（如 high）。"
+        "上报进度和交付时用 model_used 写上你实际使用的模型、用 effort_used 写上推理强度（如 high）、"
+        "用 tier_used 写上实际用的档位（fast / balanced / deep）、用 tier_reason 写一句为什么。"
         "各端的余量由 Consilium 从 Cockpit 同步（见下方），不要让各端自己查询或汇报余量。\n\n"
+        f"6. {tier_line}\n\n"
         f"【各端状态】\n" + "\n".join(_quota_line(i) for i in digest) + "\n\n"
         f"【使用者偏好】\n{pref_lines}\n\n"
         f"【使用者最近的点名分配】\n{route_lines}"
@@ -458,6 +470,8 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "status": {"type": "string", "enum": ["claimed", "running"], "default": "running"},
                 "model_used": {"type": "string", "maxLength": 80, "description": "The model you are actually running on (e.g. 'Claude Opus 5.5'); shown in the Consilium sidebar."},
                 "effort_used": {"type": "string", "maxLength": 40, "description": "Your reasoning effort / thinking level for this work (e.g. 'high', 'xhigh', 'medium'); shown next to the model. Omit if your app has no such setting."},
+                "tier_used": {"type": "string", "enum": ["fast", "balanced", "deep"], "description": "The tier you actually worked at. When the task's model_tier is 'auto' you choose it yourself from the difficulty."},
+                "tier_reason": {"type": "string", "maxLength": 160, "description": "One short sentence, in the user's language, on why this tier."},
                 "worktree_branch": {"type": "string"},
                 "notify_coordinator": {"type": "boolean", "default": False},
                 "client_request_id": {"type": "string"},
@@ -479,6 +493,8 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "status": {"type": "string", "enum": ["done", "failed", "blocked"], "default": "done"},
                 "model_used": {"type": "string", "maxLength": 80},
                 "effort_used": {"type": "string", "maxLength": 40},
+                "tier_used": {"type": "string", "enum": ["fast", "balanced", "deep"]},
+                "tier_reason": {"type": "string", "maxLength": 160},
                 "client_request_id": {"type": "string"},
             },
         },
@@ -967,6 +983,8 @@ class ConsiliumMCPDispatcher:
                 client_request_id=str(client_req_id) if client_req_id is not None else None,
                 model_used=str(args.get("model_used") or ""),
                 effort_used=str(args.get("effort_used") or ""),
+                tier_used=str(args.get("tier_used") or ""),
+                tier_reason=str(args.get("tier_reason") or ""),
             )
             rec_warnings = []
             if res.get("idempotent_replay"):
@@ -1017,6 +1035,8 @@ class ConsiliumMCPDispatcher:
                 client_request_id=str(client_req_id) if client_req_id is not None else None,
                 model_used=str(args.get("model_used") or ""),
                 effort_used=str(args.get("effort_used") or ""),
+                tier_used=str(args.get("tier_used") or ""),
+                tier_reason=str(args.get("tier_reason") or ""),
             )
             rec_warnings = []
             if res.get("idempotent_replay"):
@@ -1596,7 +1616,7 @@ class ConsiliumDaemon:
         mission_id: Optional[str] = None,
         workspace_hint: str = "",
         new_session: bool = False,
-        tier: str = "",
+        tier: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Send a message typed in the dashboard: @-mentioned peers get it directly; no mention = auto."""
         body = str(text or "").strip()
@@ -1644,17 +1664,17 @@ class ConsiliumDaemon:
                 coordinator = USER_PEER
                 task_specs = [
                     {"assignee_peer": pid, "prompt": _wrap(body), "origin": "user", "new_session": True,
-                     "model_tier": tier_key or "balanced"}
+                     "model_tier": tier_key or "auto"}
                     for pid in chosen
                 ]
             else:
                 coordinator = choose_auto_coordinator(digest)
                 prompt = build_auto_coordinator_prompt(
-                    body, coordinator, digest, store.list_preferences(), store.recent_user_routing()
+                    body, coordinator, digest, store.list_preferences(), store.recent_user_routing(), tier=tier_key
                 )
                 task_specs = [
                     {"assignee_peer": coordinator, "prompt": _wrap(prompt), "origin": "user", "new_session": True,
-                     "model_tier": tier_key or "balanced"}
+                     "model_tier": tier_key or "auto"}
                 ]
             res = store.create_mission(
                 title=title,
@@ -1672,8 +1692,7 @@ class ConsiliumDaemon:
                 },
             )
             mid = res["mission"]["mission_id"]
-            if tier_key:
-                store.set_mission_tier(mid, tier_key)
+            store.set_mission_tier(mid, tier_key)
             events = list(res.get("events") or [])
             warnings = list(res.get("post_commit_warnings") or [])
         else:
@@ -1684,6 +1703,12 @@ class ConsiliumDaemon:
             mid = mission_id
             coord = mission.get("coordinator_peer") or USER_PEER
             bindings = store.mission_bindings(mid)
+            if tier is None:
+                # Not said this time: keep what the conversation is set to.
+                kept = str(mission.get("tier") or "")
+                tier_key = kept if kept in ("fast", "balanced", "pro_reasoning") else ""
+            else:
+                store.set_mission_tier(mid, tier_key)  # "" = auto; the choice follows the conversation
             reason = ""
             if chosen:
                 plan = [(pid, body) for pid in chosen]
@@ -1694,7 +1719,7 @@ class ConsiliumDaemon:
                 pick = choose_auto_coordinator(digest)
                 reason = explain_auto_choice(digest, pick)
                 plan = [(pick, build_auto_coordinator_prompt(
-                    body, pick, digest, store.list_preferences(), store.recent_user_routing()
+                    body, pick, digest, store.list_preferences(), store.recent_user_routing(), tier=tier_key
                 ))]
             warnings = []
             for idx, (pid, prompt) in enumerate(plan):
@@ -1704,7 +1729,7 @@ class ConsiliumDaemon:
                     prompt=_wrap(prompt),
                     origin="user",
                     new_session=pid not in bindings,
-                    model_tier=(mission.get("tier") or "balanced") if (mission.get("tier") or "") in ("fast", "balanced", "pro_reasoning") else "balanced",
+                    model_tier=tier_key or "auto",
                     user_message=(
                         {"text": body, "targets": chosen or [plan[0][0]], "mode": mode, "reason": reason}
                         if idx == 0 else None
@@ -2296,7 +2321,7 @@ class ConsiliumDaemon:
                             payload.get("targets") or [],
                             target_mid,
                             workspace_hint=str(payload.get("workspace") or ""),
-                            tier=str(payload.get("tier") or ""),
+                            tier=(str(payload.get("tier") or "") if "tier" in payload else None),
                         )
                         self._send_json(200, {"committed": True, "result": res})
                     except KeyError as exc:

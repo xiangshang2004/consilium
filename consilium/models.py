@@ -18,7 +18,9 @@ MISSION_SOURCE_UI = "ui"
 MISSION_SOURCE_PEER = "peer"
 PICKUP_SCOPES = ("all", "consilium", "other")
 VALID_ISOLATION = ("worktree", "read_only", "shared")
-VALID_MODEL_TIERS = ("pro_reasoning", "balanced", "fast", "custom")
+# "auto" = whoever handles the task judges its difficulty and picks the tier itself.
+VALID_MODEL_TIERS = ("pro_reasoning", "balanced", "fast", "custom", "auto")
+REPORTED_TIERS = {"fast": "fast", "balanced": "balanced", "deep": "pro_reasoning", "pro_reasoning": "pro_reasoning"}
 VALID_TASK_STATUSES = (
     "queued",
     "claimed",
