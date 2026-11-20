@@ -1551,6 +1551,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 .chat-note::before { content: ""; width: 14px; height: 1px; background: var(--border-strong); flex-shrink: 0; }
 .chat-pending { margin: 10px 0 0; gap: 12px; font-size: 13px; color: var(--text-secondary); }
 .chat-pending > .peer-icon { width: 26px; height: 26px; border-radius: 7px; }
+.chat-pending.quota-exhausted { color: var(--text-primary); font-weight: 600; }
 .pend-dots { display: inline-flex; gap: 3px; }
 .pend-dots i { width: 4px; height: 4px; border-radius: 999px; background: var(--text-muted); animation: pulseDot 1.2s ease-in-out infinite; }
 .pend-dots i:nth-child(2) { animation-delay: 0.2s; }
@@ -1582,6 +1583,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 .send-btn { margin-left: auto; background: var(--text-primary); color: var(--bg-surface); flex-shrink: 0; }
 .standby-banner { background: transparent; justify-content: center; gap: 6px; font-size: 11.5px; color: var(--text-muted); padding: 8px 0 0; margin: 0; }
 .standby-banner .btn-link { font-size: 11.5px; text-decoration: underline; text-underline-offset: 2px; padding: 0 2px; }
+.quota-warning { margin-bottom: 8px; padding: 7px 10px; border-inline-start: 3px solid var(--status-stale); border-radius: 7px; background: var(--status-stale-soft); color: var(--text-primary); font-size: 12px; white-space: pre-line; overflow-wrap: anywhere; }
+.pt-quota-warning { margin-top: 3px; color: var(--text-primary); font-size: 11.5px; font-weight: 600; }
 
 /* new conversation: greeting and composer centred */
 .chat-column.is-new { justify-content: center; padding-bottom: 20vh; }
@@ -1667,6 +1670,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
         <footer class="composer-wrap">
           <div class="composer-inner">
             <div id="slash-palette" class="slash-palette hidden" role="menu"></div>
+            <div id="quota-warning" class="quota-warning hidden" role="status"></div>
             <div class="composer-box">
               <textarea id="composer-input" class="composer-input" rows="1" placeholder="说说要做的事…"></textarea>
               <div class="composer-foot">
@@ -2374,10 +2378,26 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     '</article>';
   }
 
+  function exhaustedQuota(state, peer) {
+    const quota = ((state && state.quotas) || []).find(q => q.peer_id === peer);
+    return quota && quota.exhausted && !quota.current_account_unknown && !quota.account_switch_suspected
+      ? quota
+      : null;
+  }
+
+  function exhaustedLabel(peer) {
+    return peerLabel(peer) + " 当前账号额度已用完";
+  }
+
   function renderPending(t, state) {
     const waiters = (state && state.active_waiters) || {};
     const pid = t.assignee_peer;
     const label = peerLabel(pid);
+    if (exhaustedQuota(state, pid)) {
+      return '<div class="chat-pending quota-exhausted">' +
+        '<span class="peer-icon ' + esc(pid) + '" aria-hidden="true"></span>' +
+        '<span>' + esc(exhaustedLabel(pid)) + '</span></div>';
+    }
     const standby = Number(waiters[pid] || 0) > 0;
     let txt;
     if (t.status === "queued") {
@@ -2561,7 +2581,8 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       if (kind === "run" && !Number.isNaN(startMs)) timeTxt = "已进行 " + durText((Date.now() - startMs) / 1000);
       else if (kind === "done" && !Number.isNaN(startMs) && !Number.isNaN(endMs)) timeTxt = "用时 " + durText((endMs - startMs) / 1000);
       else if (kind === "bad") timeTxt = TASK_STATUS_TEXT[t.status] || t.status;
-      const waitTxt = kind === "wait" ? (standby ? "已送到，马上开始" : "等它接收 · 它现在没在待命，已发通知") : "";
+      const exhausted = !closed && (kind === "wait" || kind === "run") && exhaustedQuota(state, pid);
+      const waitTxt = kind === "wait" && !exhausted ? (standby ? "已送到，马上开始" : "等它接收 · 它现在没在待命，已发通知") : "";
       const tn = tierNote(t);
       const meta = [tn.label, kind === "wait" ? "" : reportedTaskModel(pid, t), t.effort_used || "", timeTxt, waitTxt, t.stale_at ? "很久没有新进展" : ""].filter(Boolean).join(" · ");
       const isOpen = Object.prototype.hasOwnProperty.call(taskRowOpen, t.task_id) ? taskRowOpen[t.task_id] : kind === "run";
@@ -2576,6 +2597,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
           '<button type="button" class="pt-title" data-toggle-task="' + esc(t.task_id) + '" aria-expanded="' + (isOpen ? "true" : "false") + '" title="' + esc(t.task_id) + '">' +
             '<span class="peer-icon ' + esc(pid) + '" aria-hidden="true"></span><span class="t">' + esc(taskTitle(t)) + '</span><span class="c">' + ICONS.chev + '</span>' +
           '</button>' +
+          (exhausted ? '<div class="pt-quota-warning">' + esc(exhaustedLabel(pid)) + '</div>' : "") +
           (meta ? '<div class="pt-meta"' + (tn.tip ? ' title="' + esc(tn.tip) + '"' : "") + '>' + esc(meta) + '</div>' : "") +
           (isOpen ? (note ? '<div class="pt-note">' + renderMarkdownBlock(note) + '</div>' : "") + (acts ? '<div class="pt-act">' + acts + '</div>' : "") : "") +
         '</div>' +
@@ -2738,6 +2760,28 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
           tierMenuHtml;
       }
     }
+    const quotaPeers = new Set(sendTargets);
+    if (curMission && !["completed", "cancelled", "failed"].includes(curMission.status)) {
+      if (!sendTargets.length && PEER_META[curMission.coordinator_peer]) {
+        quotaPeers.add(curMission.coordinator_peer);
+      }
+      for (const task of curMission.tasks || []) {
+        if (["queued", "claimed", "running"].includes(task.status)) quotaPeers.add(task.assignee_peer);
+      }
+    }
+    const warnings = [];
+    for (const peer of quotaPeers) {
+      const quota = exhaustedQuota(state, peer);
+      if (quota) {
+        warnings.push(exhaustedLabel(peer) + "。" +
+          (quota.switch_hint || "可切换账号，或发送时改选接单端。"));
+      }
+    }
+    const quotaWarning = document.getElementById("quota-warning");
+    const warning = warnings.join("\n");
+    quotaWarning.classList.toggle("hidden", !warning);
+    if (quotaWarning.textContent !== warning) quotaWarning.textContent = warning;
+
     const anyStandby = ["claude", "chatgpt", "antigravity"].some(pid => Number(waiters[pid] || 0) > 0);
     const banner = document.getElementById("standby-banner");
     if (state && !anyStandby) {
