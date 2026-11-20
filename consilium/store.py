@@ -128,6 +128,7 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
     caller_scope TEXT NOT NULL DEFAULT '',
     request_hash TEXT NOT NULL DEFAULT '',
     response_json TEXT NOT NULL,
+    delivery_json TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
 
@@ -232,6 +233,7 @@ class BusStore:
                 "ALTER TABLE tasks ADD COLUMN attempt_history_json TEXT NOT NULL DEFAULT '[]'",
                 "ALTER TABLE idempotency_keys ADD COLUMN caller_scope TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE idempotency_keys ADD COLUMN request_hash TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE idempotency_keys ADD COLUMN delivery_json TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE quota_windows ADD COLUMN is_current INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE quota_windows ADD COLUMN is_historical INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE quota_windows ADD COLUMN account_alias TEXT NOT NULL DEFAULT ''",
@@ -242,6 +244,50 @@ class BusStore:
                     conn.execute(stmt)
                 except sqlite3.OperationalError:
                     pass
+            with self._tx(conn):
+                # Legacy DB backfill (R012 P2): give pre-attempt_id active tasks a deterministic fencing token
+                conn.execute(
+                    """
+                    UPDATE tasks
+                    SET attempt_seq = CASE WHEN attempt_seq <= 0 THEN 1 ELSE attempt_seq END,
+                        attempt_id = 'A-1-legacy-' || lower(replace(task_id, '-', '')),
+                        claimed_at = CASE WHEN claimed_at = '' THEN updated_at ELSE claimed_at END
+                    WHERE status IN ('claimed', 'running') AND attempt_id = ''
+                    """
+                )
+                # Scrub any pre-Q4 raw email account_ids inside quota tables
+                raw_win_accts = conn.execute(
+                    "SELECT DISTINCT account_id FROM quota_windows WHERE account_id LIKE '%@%'"
+                ).fetchall()
+                for row in raw_win_accts:
+                    raw_aid = str(row["account_id"] or "")
+                    hashed = f"acct-{hashlib.sha256(raw_aid.strip().lower().encode('utf-8')).hexdigest()[:10]}"
+                    try:
+                        conn.execute(
+                            "UPDATE quota_windows SET account_id = ? WHERE account_id = ?",
+                            (hashed, raw_aid),
+                        )
+                    except sqlite3.IntegrityError:
+                        conn.execute(
+                            "DELETE FROM quota_windows WHERE account_id = ?",
+                            (raw_aid,),
+                        )
+                raw_reg_accts = conn.execute(
+                    "SELECT DISTINCT account_id FROM quota_accounts WHERE account_id LIKE '%@%'"
+                ).fetchall()
+                for row in raw_reg_accts:
+                    raw_aid = str(row["account_id"] or "")
+                    hashed = f"acct-{hashlib.sha256(raw_aid.strip().lower().encode('utf-8')).hexdigest()[:10]}"
+                    try:
+                        conn.execute(
+                            "UPDATE quota_accounts SET account_id = ? WHERE account_id = ?",
+                            (hashed, raw_aid),
+                        )
+                    except sqlite3.IntegrityError:
+                        conn.execute(
+                            "DELETE FROM quota_accounts WHERE account_id = ?",
+                            (raw_aid,),
+                        )
         try:
             os.chmod(self.db_path, 0o600)
         except OSError:
@@ -358,7 +404,7 @@ class BusStore:
             return None
         row = conn.execute(
             """
-            SELECT operation, caller_scope, request_hash, response_json
+            SELECT operation, caller_scope, request_hash, response_json, delivery_json
             FROM idempotency_keys
             WHERE client_request_id = ?
             """,
@@ -383,7 +429,30 @@ class BusStore:
         cached = json.loads(row["response_json"])
         if isinstance(cached, dict):
             cached["idempotent_replay"] = True
+            raw_delivery = row["delivery_json"] if "delivery_json" in row.keys() else ""
+            if raw_delivery:
+                try:
+                    cached["_cached_delivery"] = json.loads(raw_delivery)
+                except ValueError:
+                    pass
         return cached
+
+    def save_idempotency_delivery(
+        self,
+        client_request_id: Optional[str],
+        delivery: Dict[str, Any],
+    ) -> None:
+        """Persist post-commit delivery receipt (including warnings) for faithful idempotent replay."""
+        req_id = (client_request_id or "").strip()
+        if not req_id:
+            return
+        encoded = json.dumps(delivery, ensure_ascii=False)
+        with self._connect() as conn:
+            with self._tx(conn):
+                conn.execute(
+                    "UPDATE idempotency_keys SET delivery_json = ? WHERE client_request_id = ?",
+                    (encoded, req_id),
+                )
 
     def _save_idempotency_locked(
         self,
@@ -2216,6 +2285,17 @@ class BusStore:
                         (peer, *known_ids),
                     )
 
+    def clear_peer_cockpit_current(self, peer_id: str) -> None:
+        """Clear stale Cockpit current-account markers when authoritative registry is absent."""
+        peer = validate_peer(peer_id)
+        with self._connect() as conn:
+            with self._tx(conn):
+                conn.execute("DELETE FROM quota_accounts WHERE peer_id = ?", (peer,))
+                conn.execute(
+                    "UPDATE quota_windows SET is_current = 0 WHERE peer_id = ? AND source LIKE 'cockpit%'",
+                    (peer,),
+                )
+
     def _decode_quota_row(
         self, row: sqlite3.Row, now_dt: Optional[datetime] = None
     ) -> Dict[str, Any]:
@@ -2406,24 +2486,23 @@ class BusStore:
             all_rows = grouped[p]
             reg_map = reg_accounts[p]
 
-            historical_ids = {
-                w["account_id"] for w in all_rows if w.get("is_historical")
-            }
             by_acct_all: Dict[str, List[Dict[str, Any]]] = {}
+            by_acct_hist: Dict[str, List[Dict[str, Any]]] = {}
             for w in all_rows:
                 if w.get("is_historical"):
-                    continue
-                by_acct_all.setdefault(w["account_id"], []).append(w)
+                    by_acct_hist.setdefault(w["account_id"], []).append(w)
+                else:
+                    by_acct_all.setdefault(w["account_id"], []).append(w)
 
             pool_ids: List[str] = list(reg_map.keys())
             for aid in sorted(by_acct_all.keys()):
                 if aid not in reg_map:
                     pool_ids.append(aid)
 
-            def _acct_non_expired(aid: str) -> List[Dict[str, Any]]:
+            def _non_expired(wins: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 return [
                     w
-                    for w in by_acct_all.get(aid, [])
+                    for w in wins
                     if not (w.get("expired_reset") and w["remaining_percent"] <= 0.0)
                 ]
 
@@ -2443,13 +2522,10 @@ class BusStore:
                 letter = chr(65 + idx) if idx < 26 else str(idx + 1)
                 return f"账号 {letter}"
 
-            pool_entries: List[Dict[str, Any]] = []
-            current_ids: List[str] = []
-            for idx, aid in enumerate(pool_ids):
-                nw = _acct_non_expired(aid)
-                is_cur = _is_acct_current(aid)
-                if is_cur:
-                    current_ids.append(aid)
+            def _summarize_bucket(
+                aid: str, wins: List[Dict[str, Any]], *, alias: str, is_cur: bool, is_hist: bool
+            ) -> Dict[str, Any]:
+                nw = _non_expired(wins)
                 rem_pct = min((w["remaining_percent"] for w in nw), default=None)
                 acct_ex = any(w["exhausted"] for w in nw) if nw else False
                 acct_low = any(w["low_quota"] for w in nw) if nw else False
@@ -2461,32 +2537,55 @@ class BusStore:
                     if earliest_r_dt is not None
                     else ""
                 )
-                ages = [
-                    w["sample_age_seconds"]
-                    for w in by_acct_all.get(aid, [])
-                    if w.get("sample_age_seconds") is not None
-                ]
+                ages = [w["sample_age_seconds"] for w in wins if w.get("sample_age_seconds") is not None]
                 sample_age = min(ages) if ages else None
-                src = (by_acct_all.get(aid) or [{}])[0].get("source", "")
+                src = (wins or [{}])[0].get("source", "")
                 plan = (
                     (reg_map.get(aid) or {}).get("plan_type")
-                    or (by_acct_all.get(aid) or [{}])[0].get("plan_type", "")
+                    or (wins or [{}])[0].get("plan_type", "")
                 )
+                return {
+                    "account_id": aid,
+                    "alias": alias,
+                    "is_current": is_cur,
+                    "is_historical": is_hist,
+                    "remaining_percent": rem_pct,
+                    "reset_at": earliest_r,
+                    "reset_in_human": earliest_r_h,
+                    "sample_age_seconds": sample_age,
+                    "exhausted": acct_ex,
+                    "low_quota": acct_low,
+                    "source": src,
+                    "plan_type": plan,
+                }
+
+            pool_entries: List[Dict[str, Any]] = []
+            current_ids: List[str] = []
+            for idx, aid in enumerate(pool_ids):
+                is_cur = _is_acct_current(aid)
+                if is_cur:
+                    current_ids.append(aid)
                 pool_entries.append(
-                    {
-                        "account_id": aid,
-                        "alias": _acct_alias(aid, idx),
-                        "is_current": is_cur,
-                        "remaining_percent": rem_pct,
-                        "reset_at": earliest_r,
-                        "reset_in_human": earliest_r_h,
-                        "sample_age_seconds": sample_age,
-                        "exhausted": acct_ex,
-                        "low_quota": acct_low,
-                        "source": src,
-                        "plan_type": plan,
-                    }
+                    _summarize_bucket(
+                        aid,
+                        by_acct_all.get(aid, []),
+                        alias=_acct_alias(aid, idx),
+                        is_cur=is_cur,
+                        is_hist=False,
+                    )
                 )
+
+            hist_ids_clean = [aid for aid in sorted(by_acct_hist.keys()) if aid not in pool_ids]
+            historical_entries = [
+                _summarize_bucket(
+                    h_aid,
+                    by_acct_hist[h_aid],
+                    alias=f"历史账号 {h_idx + 1}",
+                    is_cur=False,
+                    is_hist=True,
+                )
+                for h_idx, h_aid in enumerate(hist_ids_clean)
+            ]
 
             active_acct_id: Optional[str] = None
             current_account_unknown = False
@@ -2495,28 +2594,29 @@ class BusStore:
             if current_ids:
                 active_acct_id = current_ids[0]
             elif len(pool_ids) == 1:
-                active_acct_id = pool_ids[0]
-                if pool_entries:
-                    pool_entries[0]["is_current"] = True
+                only_id = pool_ids[0]
+                only_wins = by_acct_all.get(only_id, [])
+                has_cockpit = any(str(w.get("source") or "").startswith("cockpit") for w in only_wins)
+                if only_wins and (only_id not in reg_map) and not has_cockpit:
+                    active_acct_id = only_id
+                    if pool_entries:
+                        pool_entries[0]["is_current"] = True
+                else:
+                    current_account_unknown = True
             elif len(pool_ids) > 1:
                 current_account_unknown = True
 
             active_windows: List[Dict[str, Any]] = []
             active_alias = ""
             if active_acct_id is not None:
-                active_windows = _acct_non_expired(active_acct_id)
+                active_windows = _non_expired(by_acct_all.get(active_acct_id, []))
                 match_pool = [e for e in pool_entries if e["account_id"] == active_acct_id]
                 if match_pool:
                     active_alias = match_pool[0]["alias"]
-                cockpit_multi = (
-                    len(pool_entries) > 1
-                    and active_windows
-                    and any(
-                        str(w.get("source") or "").startswith("cockpit")
-                        for w in active_windows
-                    )
+                has_cockpit_active = any(
+                    str(w.get("source") or "").startswith("cockpit") for w in active_windows
                 )
-                if cockpit_multi:
+                if has_cockpit_active:
                     ages = [
                         w["sample_age_seconds"]
                         for w in active_windows
@@ -2554,8 +2654,13 @@ class BusStore:
                 e
                 for e in pool_entries
                 if (not e["is_current"])
+                and (not e["is_historical"])
                 and e["remaining_percent"] is not None
                 and e["remaining_percent"] >= 20.0
+                and (
+                    not str(e.get("source") or "").startswith("cockpit")
+                    or (e["sample_age_seconds"] is not None and e["sample_age_seconds"] <= 1800)
+                )
             ]
             pool_has_capacity = len(backups_with_cap) > 0
             best_backup = (
@@ -2589,10 +2694,11 @@ class BusStore:
                     "earliest_reset_in_human": earliest_human,
                     "windows": active_windows,
                     "pool": pool_entries,
+                    "historical_accounts": historical_entries,
                     "pool_has_capacity": pool_has_capacity,
                     "best_backup": best_backup,
                     "switch_hint": switch_hint,
-                    "historical_accounts_count": len(historical_ids),
+                    "historical_accounts_count": len(historical_entries),
                 }
             )
         return {"peers": peers_out, "updated_at": utc_now_iso()}

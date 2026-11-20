@@ -24,12 +24,14 @@ PLATFORM_TO_PEER = {
 }
 
 
-def _hash_account_ref(raw_id: Any) -> str:
-    """Anonymize email-like account identifiers into stable acct-<hash> tokens."""
+def _hash_account_ref(raw_id: Any, *, always_hash: bool = False) -> str:
+    """Anonymize account identifiers (always for Cockpit IDs/emails, or any email) into acct-<hash>."""
     clean = str(raw_id or "").strip()
     if not clean:
         return "default"
-    if "@" in clean:
+    if clean in ("default", "demo") or (clean.startswith("acct-") and len(clean) == 15):
+        return clean
+    if always_hash or "@" in clean:
         digest = hashlib.sha256(clean.lower().encode("utf-8")).hexdigest()[:10]
         return f"acct-{digest}"
     return clean
@@ -60,6 +62,13 @@ def _load_cockpit_codex_registry(cockpit_dir: str) -> Dict[str, Any]:
     if not isinstance(items, list):
         return empty
 
+    email_counts: Dict[str, int] = {}
+    for entry in items:
+        if isinstance(entry, dict):
+            em = str(entry.get("email") or "").strip().lower()
+            if em:
+                email_counts[em] = email_counts.get(em, 0) + 1
+
     lookup: Dict[str, Dict[str, Any]] = {}
     entries: List[Dict[str, Any]] = []
     current_canon = ""
@@ -71,12 +80,13 @@ def _load_cockpit_codex_registry(cockpit_dir: str) -> Dict[str, Any]:
         plan_type = str(entry.get("plan_type") or "").strip()
         if not raw_id and not raw_email:
             continue
-        canon_id = _hash_account_ref(raw_email or raw_id)
+        # Join primarily on upstream Cockpit accounts[].id so distinct workspaces sharing an email stay distinct.
+        canon_id = _hash_account_ref(raw_id or raw_email, always_hash=True)
         is_current = bool(
             current_raw
             and (
                 (raw_id and raw_id == current_raw)
-                or (raw_email and raw_email.lower() == current_raw.lower())
+                or (not raw_id and raw_email and raw_email.lower() == current_raw.lower())
             )
         )
         if is_current:
@@ -92,7 +102,7 @@ def _load_cockpit_codex_registry(cockpit_dir: str) -> Dict[str, Any]:
         if raw_id:
             lookup[raw_id] = meta
             lookup[raw_id.lower()] = meta
-        if raw_email:
+        if raw_email and email_counts.get(raw_email.lower(), 0) == 1:
             lookup[raw_email.lower()] = meta
 
     return {
@@ -165,10 +175,23 @@ def normalize_remaining_pct(
 
 
 def _connect_sqlite_ro(db_path: str) -> sqlite3.Connection:
-    uri = f"file:{urllib.parse.quote(os.path.abspath(db_path))}?mode=ro"
-    conn = sqlite3.connect(uri, uri=True, timeout=1.0)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """Open Cockpit SQLite strictly read-only without creating -wal/-shm sidecars when idle."""
+    abs_path = os.path.abspath(db_path)
+    quoted = urllib.parse.quote(abs_path)
+    wal_active = os.path.exists(abs_path + "-wal")
+    if not wal_active:
+        conn = sqlite3.connect(f"file:{quoted}?mode=ro&immutable=1", uri=True, timeout=1.0)
+        conn.row_factory = sqlite3.Row
+        return conn
+    try:
+        conn = sqlite3.connect(f"file:{quoted}?mode=ro", uri=True, timeout=1.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA query_only = ON;")
+        return conn
+    except sqlite3.OperationalError:
+        conn = sqlite3.connect(f"file:{quoted}?mode=ro&immutable=1", uri=True, timeout=1.0)
+        conn.row_factory = sqlite3.Row
+        return conn
 
 
 def _collect_cockpit_sqlite(
@@ -191,7 +214,7 @@ def _collect_cockpit_sqlite(
                 return dict(hit)
         raw_first = next((str(c or "").strip() for c in candidates if str(c or "").strip()), "default")
         return {
-            "account_id": _hash_account_ref(raw_first),
+            "account_id": _hash_account_ref(raw_first, always_hash=True),
             "account_alias": "",
             "plan_type": "",
             "is_current": False,
@@ -218,7 +241,7 @@ def _collect_cockpit_sqlite(
                     meta = _resolve_codex_identity(row["account_id"])
                 else:
                     meta = {
-                        "account_id": _hash_account_ref(row["account_id"]),
+                        "account_id": _hash_account_ref(row["account_id"], always_hash=True),
                         "account_alias": "",
                         "plan_type": "",
                         "is_current": False,
@@ -482,7 +505,9 @@ def _collect_claude_local(claude_dir: str) -> List[Dict[str, Any]]:
         if not isinstance(raw, dict):
             continue
 
-        acct = _hash_account_ref(raw.get("account_id") or raw.get("email") or "default")
+        acct = _hash_account_ref(
+            raw.get("account_id") or raw.get("email") or "default", always_hash=True
+        )
         obs = normalize_ts_to_iso(raw.get("observed_at") or raw.get("fetched_at"))
 
         for key, wkey, label in (
@@ -553,6 +578,8 @@ def sync_local_quotas(
     codex_registry = _load_cockpit_codex_registry(cockpit_dir)
     if codex_registry.get("present"):
         store.sync_peer_accounts("chatgpt", codex_registry.get("entries") or [])
+    else:
+        store.clear_peer_cockpit_current("chatgpt")
     discovered: List[Dict[str, Any]] = []
     cockpit_records = _collect_cockpit_sqlite(cockpit_dir, codex_registry=codex_registry)
     discovered.extend(cockpit_records)
