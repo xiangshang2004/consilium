@@ -206,10 +206,13 @@ class R017RegressionsTests(unittest.TestCase):
         self.assertEqual(state["peer_models"].get("chatgpt"), "GPT-5.5 Codex")
 
         html = render_dashboard_html("0.1.0")
-        for needle in ("renderPeerOverview", "peer-overview", "让它待命", "账号未知", "模型未上报",
-                       "renderSideBoard", "当前账号余量", "完成的任务", "平均认领用时", "CODEX_STANDBY_PROMPT",
-                       "自动分配 · "):
+        # R019 redesign: one dock card replaces the peer overview and the separate board.
+        for needle in ("renderPeerDock", 'id="peer-dock"', "dock-ring", "data-start-standby", "叫醒",
+                       "今天完成的任务", "CODEX_STANDBY_PROMPT", "自动 · ", "今天会诊什么？", "--font-serif",
+                       'class="new-row"', "is-new", "data-tier-menu", "conv-actions"):
             self.assertIn(needle, html)
+        for gone in ("renderPeerOverview", "renderSideBoard", "平均认领用时", "sidebar-foot", "运行 <strong"):
+            self.assertNotIn(gone, html)
 
     def test_folder_is_chosen_never_guessed_from_text(self) -> None:
         folder = tempfile.mkdtemp(prefix="consilium-r018-ws-", dir="/tmp")
@@ -301,7 +304,7 @@ class R017RegressionsTests(unittest.TestCase):
         html = render_dashboard_html("0.1.0")
         for needle in ("data-folder-menu", "data-open-folder-picker", "选择文件夹…", "pickFolder", "__consiliumFolderPicked",
                        "data-tier", "data-rename-mission", "data-archive-mission", "data-dedicated-session", "在 Claude 里开专属会话", "folder-group", "已归档",
-                       "data-start-standby", "让它们待命", "renderMissionDetails", "参与与模型", "模型未上报"):
+                       "data-start-standby", "让它们待命"):
             self.assertIn(needle, html)
         for gone in ("compose-ws-input", "data-edit-workspace", "新开会话处理", "工作区绝对路径", "/Users/…/项目文件夹"):
             self.assertNotIn(gone, html)
