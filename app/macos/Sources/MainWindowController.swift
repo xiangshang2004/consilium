@@ -8,7 +8,16 @@ struct WebViewProbeResult {
     let missionCount: Int
 }
 
-final class MainWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate {
+/// Avoids a retain cycle between WKUserContentController and the window controller.
+private final class WeakScriptHandler: NSObject, WKScriptMessageHandler {
+    weak var target: WKScriptMessageHandler?
+    init(_ target: WKScriptMessageHandler) { self.target = target }
+    func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
+        target?.userContentController(c, didReceive: message)
+    }
+}
+
+final class MainWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     private let config: AppConfig
     private let dataStore: WKWebsiteDataStore
     private let webView: WKWebView
@@ -23,6 +32,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
 
         let webConfig = WKWebViewConfiguration()
         webConfig.websiteDataStore = self.dataStore
+        let contentController = WKUserContentController()
+        webConfig.userContentController = contentController
         webConfig.preferences.setValue(false, forKey: "developerExtrasEnabled")
 
         self.webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1280, height: 840), configuration: webConfig)
@@ -38,6 +49,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
         window.isReleasedWhenClosed = false
         window.center()
         window.contentView = self.webView
+        defer { contentController.add(WeakScriptHandler(self), name: "consilium") }
 
         super.init(window: window)
         window.delegate = self
@@ -317,6 +329,41 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
             let waiters = self.initialLoadWaiters
             self.initialLoadWaiters.removeAll()
             waiters.forEach { $0() }
+        }
+    }
+
+    // MARK: - Native bridge (folder picker)
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "consilium",
+              let body = message.body as? [String: Any],
+              let action = body["action"] as? String else { return }
+        // Only answer the dashboard served by our own daemon.
+        guard let host = webView.url?.host, host == "127.0.0.1" else { return }
+        if action == "pickFolder" {
+            presentFolderPicker()
+        }
+    }
+
+    private func presentFolderPicker() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "选择"
+        panel.message = "选择这个会诊要在其中工作的文件夹（可以在这里新建文件夹）"
+        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] resp in
+            guard let self = self else { return }
+            let path = (resp == .OK) ? (panel.url?.path ?? "") : ""
+            let data = (try? JSONSerialization.data(withJSONObject: [path], options: [])) ?? Data("[\"\"]".utf8)
+            let arg = String(data: data, encoding: .utf8) ?? "[\"\"]"
+            self.webView.evaluateJavaScript("window.__consiliumFolderPicked && window.__consiliumFolderPicked(\(arg)[0])", completionHandler: nil)
+        }
+        if let win = window {
+            panel.beginSheetModal(for: win, completionHandler: finish)
+        } else {
+            finish(panel.runModal())
         }
     }
 }

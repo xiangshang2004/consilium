@@ -44,7 +44,11 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         var newEvents: [(event: EventItem, mission: MissionInfo)] = []
         for mission in state.missions ?? [] {
             for ev in mission.events ?? [] where ev.event_id > prevHigh {
-                if notableKinds.contains(ev.kind) && ((ev.acked_at ?? "").isEmpty) {
+                let replyToUser = ev.kind == "task_done" && (ev.to_peer ?? "") == "user"
+                if replyToUser {
+                    // A reply in the Consilium window: only worth a banner when the user is elsewhere.
+                    if !NSApp.isActive { newEvents.append((ev, mission)) }
+                } else if notableKinds.contains(ev.kind) && ((ev.acked_at ?? "").isEmpty) && (ev.from_peer ?? "") != "user" {
                     newEvents.append((ev, mission))
                 }
             }
@@ -62,7 +66,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         content.title = "Consilium · \(mission.title ?? mission.mission_id)"
 
         let p = ev.payload
-        let promptText = p?.prompt ?? p?.question ?? p?.summary ?? p?.reason ?? "请调用 consilium_pickup_inbox 认领任务"
+        let promptText = p?.result_summary ?? p?.prompt ?? p?.question ?? p?.summary ?? p?.reason ?? "请调用 consilium_pickup_inbox 认领任务"
         switch ev.kind {
         case "task_assigned":
             content.subtitle = "新任务待认领 (@\(peerDisplayName(toPeer)))"
@@ -72,6 +76,8 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
             content.subtitle = "已触达复核轮次上限"
         case "task_stale":
             content.subtitle = "任务进度超时提醒"
+        case "task_done":
+            content.subtitle = "\(peerDisplayName((ev.from_peer ?? "").lowercased())) 回复了你"
         default:
             content.subtitle = "会诊事件更新"
         }
