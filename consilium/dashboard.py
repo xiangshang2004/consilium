@@ -2182,6 +2182,9 @@ __PEER_ICON_CSS__
     const head = '<div class="chat-head">' + titleHtml +
       (m.workspace_path ? '<span class="head-folder" title="' + esc(m.workspace_path) + '">📁 ' + esc(folderName(m.workspace_path)) + '</span>' : "") +
       (closed ? '<span class="chat-head-state">已结束</span>' : "") +
+      (closed ? "" : ((m.native_sessions || {}).claude
+        ? '<span class="chat-head-state" title="' + esc((m.native_sessions.claude || {}).ref || "") + '">Claude 专属会话已绑定</span>'
+        : '<button type="button" class="btn-link" data-dedicated-session="' + esc(m.mission_id) + '" title="在这个文件夹里新开一个同名 Claude Code 会话，之后这个会诊的消息都交给它">在 Claude 里开专属会话</button>')) +
       '<button type="button" class="btn-link" data-archive-mission="' + esc(m.mission_id) + '"' + (m.archived ? ' data-archive-undo="1">取消归档' : '>归档') + '</button>' +
       '</div>';
     container.innerHTML = head + items.map(i => i.html).join("") + pending.map(t => renderPending(t, state)).join("");
@@ -2775,6 +2778,18 @@ __PEER_ICON_CSS__
       if (ti) { ti.focus(); ti.select(); }
       return;
     }
+    const dedicatedBtn = ev.target.closest("[data-dedicated-session]");
+    if (dedicatedBtn) {
+      const dmid = dedicatedBtn.getAttribute("data-dedicated-session");
+      const dm = ((appState && appState.missions) || []).find(x => x.mission_id === dmid) || {};
+      const prompt = "接管 Consilium 会诊「" + (dm.title || dmid) + "」（mission_id=" + dmid + "）：" +
+        "先用 get_session(\"self\") 拿到你自己的会话 id，再调用 consilium_bind_session(mission_id=\"" + dmid + "\", peer_id=\"claude\", session_ref=<你的会话 id>)；" +
+        "然后用 consilium_status(mission_id=\"" + dmid + "\") 读一下会诊内容。之后待命会话会把这个会诊的新消息转给你，按 consilium-collab 技能第 3 节处理，用 consilium_complete_task 回复。";
+      const url = buildHandoffDeeplink("claude", prompt, dm.workspace_path || "");
+      if (url) { window.location.href = url; showToast("已打开 Claude 新会话，按一次发送它就会接管这个会诊"); }
+      return;
+    }
+
     const archiveBtn = ev.target.closest("[data-archive-mission]");
     if (archiveBtn) {
       const amid = archiveBtn.getAttribute("data-archive-mission");
