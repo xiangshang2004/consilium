@@ -208,10 +208,10 @@ class R017RegressionsTests(unittest.TestCase):
         html = render_dashboard_html("0.1.0")
         # R019 redesign: one dock card replaces the peer overview and the separate board.
         for needle in ("renderPeerDock", 'id="peer-dock"', "dock-ring", "data-start-standby", "叫醒",
-                       "今天完成的任务", "CODEX_STANDBY_PROMPT", "自动 · ", "今天会诊什么？", "--font-serif",
+                       "CODEX_STANDBY_PROMPT", "自动 · ", "今天会诊什么？", "--font-serif",
                        'class="new-row"', "is-new", "data-tier-menu", "conv-actions"):
             self.assertIn(needle, html)
-        for gone in ("renderPeerOverview", "renderSideBoard", "平均认领用时", "sidebar-foot", "运行 <strong"):
+        for gone in ("renderPeerOverview", "renderSideBoard", "平均认领用时", "sidebar-foot", "运行 <strong", "今天完成"):
             self.assertNotIn(gone, html)
 
     def test_folder_is_chosen_never_guessed_from_text(self) -> None:
@@ -314,6 +314,103 @@ class R017RegressionsTests(unittest.TestCase):
         self.assertIn("NSOpenPanel", swift)
         self.assertIn("canCreateDirectories = true", swift)
         self.assertIn('host == "127.0.0.1"', swift)
+
+    def test_cockpit_current_account_is_confirmed_for_codex_antigravity_and_claude(self) -> None:
+        import builtins
+        import hashlib
+        import sqlite3
+        import time
+        from unittest import mock
+
+        from consilium.quota import sync_local_quotas
+
+        home = tempfile.mkdtemp(prefix="consilium-r020-hm-", dir="/tmp")
+        self.addCleanup(shutil.rmtree, home, True)
+        cp = os.path.join(home, ".antigravity_cockpit")
+        os.makedirs(os.path.join(cp, "cache", "quota_api_v1_desktop", "authorized"))
+        os.makedirs(os.path.join(cp, "accounts"))
+        now = int(time.time())
+
+        # Codex: JSON index is OLDER than the SQLite index, pointer says uid-b, Cockpit binds uid-b,
+        # and uid-b has the freshest samples.
+        with open(os.path.join(cp, "codex_accounts.json"), "w", encoding="utf-8") as h:
+            json.dump({"accounts": [{"id": "uid-a", "email": "a@example.com", "plan_type": "plus"},
+                                    {"id": "uid-b", "email": "b@example.com", "plan_type": "pro"}],
+                       "current_account_id": "uid-b"}, h)
+        old = now - 86400
+        os.utime(os.path.join(cp, "codex_accounts.json"), (old, old))
+        with open(os.path.join(cp, "codex_accounts.sqlite"), "w", encoding="utf-8") as h:
+            h.write("VAULT")
+        with open(os.path.join(cp, "codex_instances.json"), "w", encoding="utf-8") as h:
+            json.dump({"instances": [], "defaultSettings": {"bindAccountId": "uid-b"}}, h)
+        db = sqlite3.connect(os.path.join(cp, "codex-quota-history-v1.sqlite"))
+        db.execute("CREATE TABLE quota_samples (account_id TEXT, identity TEXT, minute INTEGER, observed_at INTEGER, short_remaining INTEGER, weekly_remaining INTEGER)")
+        db.executemany("INSERT INTO quota_samples VALUES (?,?,?,?,?,?)", [
+            ("uid-a", "ia", 1, now - 7200, 10, 20), ("uid-b", "ib", 2, now - 120, 88, 91)])
+        db.commit(); db.close()
+
+        # Antigravity: three accounts with per-model windows; the current email's cache file was
+        # written at the same moment as account ag-2's newest observation.
+        email = "me@example.com"
+        with open(os.path.join(cp, "current_account.json"), "w", encoding="utf-8") as h:
+            json.dump({"email": email, "updated_at": now - 600}, h)
+        cache = os.path.join(cp, "cache", "quota_api_v1_desktop", "authorized", hashlib.sha256(email.encode()).hexdigest() + ".json")
+        with open(cache, "w", encoding="utf-8") as h:
+            h.write('{"secret":"DO_NOT_READ"}')
+        os.utime(cache, (now - 60, now - 60))
+        with open(os.path.join(cp, "accounts", "antigravity_x.json"), "w", encoding="utf-8") as h:
+            h.write('{"ciphertext":"DO_NOT_READ"}')
+        db = sqlite3.connect(os.path.join(cp, "platform-quota-history-v1.sqlite"))
+        db.execute("CREATE TABLE quota_observations (platform TEXT, account_id TEXT, account_created_at INTEGER, metric TEXT, label TEXT, observed_at INTEGER, remaining INTEGER, reset_at INTEGER)")
+        rows = []
+        for acct, ts, five, week in (("ag-1", now - 5000, 70, 80), ("ag-2", now - 60, 35, 42), ("ag-3", now - 900, 90, 95)):
+            rows += [("antigravity", acct, 0, "gemini-5h", "5h", ts, five, now + 3600),
+                     ("antigravity", acct, 0, "gemini-weekly", "weekly", ts, week, now + 86400),
+                     ("antigravity", acct, 0, "gemini-4-neon-high", "per-model", ts, 0, now + 3600)]
+        db.executemany("INSERT INTO quota_observations VALUES (?,?,?,?,?,?,?,?)", rows)
+        db.commit(); db.close()
+
+        # Claude: one account, plan only.
+        with open(os.path.join(cp, "claude_accounts.json"), "w", encoding="utf-8") as h:
+            json.dump({"accounts": [{"id": "cl-1", "email": "c@example.com", "plan_type": "max"}]}, h)
+
+        opened = []
+        real_open = builtins.open
+
+        def spy(file, *a, **k):
+            opened.append(os.path.abspath(os.fspath(file)) if not isinstance(file, int) else str(file))
+            return real_open(file, *a, **k)
+
+        with mock.patch("builtins.open", side_effect=spy):
+            sync_local_quotas(self.store, user_home=home)
+        for forbidden in (cache, os.path.join(cp, "accounts", "antigravity_x.json"), os.path.join(cp, "codex_accounts.sqlite")):
+            self.assertNotIn(os.path.abspath(forbidden), opened)
+
+        peers = {q["peer_id"]: q for q in self.store.list_quota_windows()["peers"]}
+        cx = peers["chatgpt"]
+        self.assertFalse(cx["current_account_unknown"])
+        self.assertEqual(cx["min_remaining_percent"], 88.0)
+        self.assertEqual(cx["active_plan_type"], "pro")
+        ag = peers["antigravity"]
+        self.assertFalse(ag["current_account_unknown"])
+        self.assertEqual(ag["min_remaining_percent"], 35.0, "headline is the account-level limit, not a per-model 0")
+        self.assertFalse(ag["exhausted"])
+        self.assertEqual(sorted(w["window_key"] for w in ag["windows"]), ["gemini-5h", "gemini-weekly"])
+        cl = peers["claude"]
+        self.assertEqual(cl["active_plan_type"], "max")
+        self.assertIsNone(cl["min_remaining_percent"])
+        serialized = json.dumps(peers, ensure_ascii=False)
+        for leak in ("example.com", "uid-b", "ag-2", "cl-1"):
+            self.assertNotIn(leak, serialized)
+
+        # A stale pointer without fresh samples is not trusted.
+        db = sqlite3.connect(os.path.join(cp, "codex-quota-history-v1.sqlite"))
+        db.execute("UPDATE quota_samples SET observed_at = ?", (now - 7200,))
+        db.commit(); db.close()
+        sync_local_quotas(self.store, user_home=home)
+        cx2 = next(q for q in self.store.list_quota_windows()["peers"] if q["peer_id"] == "chatgpt")
+        self.assertTrue(cx2["current_account_unknown"])
+        self.assertIsNone(cx2["min_remaining_percent"])
 
 
 if __name__ == "__main__":

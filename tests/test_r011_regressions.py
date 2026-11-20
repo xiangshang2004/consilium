@@ -315,14 +315,16 @@ class R011RegressionsTests(unittest.TestCase):
         forbidden_paths = [
             os.path.join(cockpit_dir, "accounts.json"),
             os.path.join(cockpit_dir, "google_accounts.json"),
-            os.path.join(cockpit_dir, "claude_accounts.json"),
-            os.path.join(cockpit_dir, "current_account.json"),
+            # R020 (user: "账号接入cockpit"): current_account.json, claude_accounts.json,
+            # provider_current_accounts.json and codex_instances.json hold only "which account is
+            # current" pointers and plan types (no credentials) and are now read. Vaults stay forbidden.
+            os.path.join(cockpit_dir, "antigravity_accounts.sqlite"),
+            os.path.join(cockpit_dir, "provider_current_accounts.sqlite"),
             os.path.join(cockpit_dir, "secure-account-storage.key"),
             os.path.join(cockpit_dir, "codex_accounts.sqlite"),
             os.path.join(cockpit_dir, "claude_accounts.sqlite"),
             os.path.join(cockpit_dir, "accounts", "ag_secret.json"),
             os.path.join(cockpit_dir, "codex_accounts", "cx_secret.json"),
-            os.path.join(cockpit_dir, "provider_current_accounts.json"),
         ]
         for fp in forbidden_paths:
             with open(fp, "w", encoding="utf-8") as h:
