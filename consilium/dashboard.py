@@ -639,7 +639,6 @@ code.inline {
 .mission-detail-row .grow { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-btn { border: none; background: transparent; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-btn:hover { text-decoration: underline; }
-.ws-input { width: 100%; font: inherit; font-size: 12px; padding: 4px 6px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-surface); color: var(--text-primary); }
 .standby-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12.5px; color: var(--text-secondary); background: var(--bg-subtle); border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; }
 .standby-banner.hidden { display: none; }
 .sidebar-foot {
@@ -739,7 +738,27 @@ code.inline {
 .chat-empty-sub { font-size: 13.5px; }
 .target-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: transparent; border-radius: 999px; padding: 3px 10px; font-size: 12.5px; cursor: pointer; color: var(--text-secondary); }
 .target-chip.active { background: var(--text-primary); color: var(--bg-surface); border-color: var(--text-primary); }
-.compose-opts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.compose-opts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; position: relative; }
+.compose-opts:empty { display: none; }
+.folder-btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: var(--bg-surface); border-radius: 8px; padding: 3px 10px; font-size: 12.5px; cursor: pointer; color: var(--text-primary); max-width: 320px; }
+.folder-btn .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-btn.missing { color: #b45309; border-color: rgba(180, 83, 9, 0.4); }
+.folder-menu { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 80; min-width: 300px; max-width: 460px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-md); padding: 6px; display: flex; flex-direction: column; }
+.folder-menu-label { font-size: 11px; color: var(--text-muted); padding: 4px 8px; }
+.folder-item { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; border: none; background: transparent; text-align: left; padding: 6px 8px; border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--text-primary); }
+.folder-item:hover, .folder-item.current { background: var(--bg-subtle); }
+.folder-item .path { font-size: 11px; color: var(--text-muted); max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+.tier-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.tier-seg button { border: none; background: transparent; padding: 3px 10px; font-size: 12px; cursor: pointer; color: var(--text-secondary); }
+.tier-seg button.active { background: var(--text-primary); color: var(--bg-surface); }
+.folder-group { margin-top: 6px; }
+.folder-group-head { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-muted); padding: 6px 8px 2px; }
+.folder-group-head .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.archived-toggle { border: none; background: transparent; font-size: 11.5px; color: var(--text-muted); padding: 8px; cursor: pointer; text-align: left; }
+.title-input { font: inherit; font-size: 15px; font-weight: 650; padding: 2px 6px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-surface); color: var(--text-primary); min-width: 0; flex: 1; }
+.head-folder { font-size: 12px; color: var(--text-muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.chat-head-title { cursor: text; }
 .opt-chip { display: inline-flex; align-items: center; gap: 4px; border: 1px dashed var(--border-strong); background: transparent; border-radius: 999px; padding: 2px 10px; font-size: 12px; cursor: pointer; color: var(--text-secondary); max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .opt-chip.on { border-style: solid; color: var(--text-primary); background: var(--bg-subtle); }
 .ws-compose-input { font: inherit; font-size: 12px; padding: 3px 8px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--bg-surface); color: var(--text-primary); width: 360px; }
@@ -1553,10 +1572,40 @@ __PEER_ICON_CSS__
   let openPopoverPeer = null;
   let handoffTarget = "claude";
   let composingNew = false;
-  let editingWorkspace = null;
   let composeWorkspace = "";
-  let composeWsEditing = false;
-  let composeNewSession = false;
+  let folderMenuOpen = false;
+  let composeTier = "balanced";
+  let renamingMission = null;
+  let showArchived = false;
+  const LOCAL_FOLDERS_KEY = "consilium.recentFolders";
+
+  function loadLocalFolders() {
+    try { const v = JSON.parse(localStorage.getItem(LOCAL_FOLDERS_KEY) || "[]"); return Array.isArray(v) ? v.filter(x => typeof x === "string") : []; }
+    catch (e) { return []; }
+  }
+  function rememberFolder(path) {
+    if (!path) return;
+    try {
+      const list = [path].concat(loadLocalFolders().filter(x => x !== path)).slice(0, 12);
+      localStorage.setItem(LOCAL_FOLDERS_KEY, JSON.stringify(list));
+    } catch (e) { /* storage unavailable: the in-memory choice still works */ }
+  }
+  function recentFolders(state) {
+    const out = [];
+    loadLocalFolders().forEach(f => { if (out.indexOf(f) < 0) out.push(f); });
+    ((state && state.missions) || []).forEach(mm => { if (mm.workspace_path && out.indexOf(mm.workspace_path) < 0) out.push(mm.workspace_path); });
+    return out.slice(0, 12);
+  }
+  function folderName(path) { return path ? (path.split("/").filter(Boolean).pop() || path) : ""; }
+  function canPickNativeFolder() {
+    return !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.consilium);
+  }
+  window.__consiliumFolderPicked = function (path) {
+    if (path) { composeWorkspace = path; rememberFolder(path); }
+    folderMenuOpen = false;
+    renderComposerBar(appState);
+    document.getElementById("composer-input").focus();
+  };
   const AG_STANDBY_PROMPT = "请作为 Consilium 的 Antigravity 待命端（peer_id=antigravity）：反复调用 consilium_wait(peer_id=\"antigravity\", timeout_sec=300)；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"antigravity\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used）；超时没消息就继续等。每轮少说话，不要停下来问我。";
   const CODEX_STANDBY_PROMPT = "请作为 Consilium 的 Codex 待命端（peer_id=chatgpt）：反复调用 consilium_wait(peer_id=\"chatgpt\", timeout_sec=300)；返回 woke=true 时调用 consilium_pickup_inbox(peer_id=\"chatgpt\") 取任务，按 consilium-collab 技能处理并用 consilium_complete_task 回复（带上 model_used）；超时没消息就继续等。每轮少说话，不要停下来问我。";
   const STANDBY_PROMPT = "请作为 Consilium 的 Claude 常驻待命端：先读 ~/.claude/skills/consilium-collab/SKILL.md 第 2、3 节；用 run_in_background 运行 `PYTHONPATH=/Applications/Consilium.app/Contents/Resources/python /usr/bin/python3 -B -m consilium.cli wait --peer claude --session-label claude-standby --timeout 86400`，被唤醒后用 consilium_pickup_inbox 取任务、处理、用 consilium_complete_task 回复，然后重新挂上等待。不要轮询，每轮少说话。";
@@ -1717,7 +1766,7 @@ __PEER_ICON_CSS__
       listEl.innerHTML = '<div style="padding:12px;font-size:12.5px;color:var(--text-muted);">暂无会诊记录</div>';
       return;
     }
-    listEl.innerHTML = missions.map(m => {
+    const itemHtml = m => {
       const tasks = m.tasks || [];
       const doneCnt = tasks.filter(t => t.status === "done").length;
       const dotCls = m.status === "completed" ? "standby" : (m.status === "active" ? "working" : "offline");
@@ -1732,9 +1781,26 @@ __PEER_ICON_CSS__
           '<span class="tabular-nums" title="' + esc(m.mission_id + " · " + doneCnt + "/" + tasks.length) + '">' + esc(relativeAge(m.updated_at)) + '</span>' +
         '</div>' +
       '</button>' + (activeCls ? renderMissionDetails(m, state) : "");
-    }).join("");
-    const wsInput = document.getElementById("ws-input");
-    if (wsInput && document.activeElement !== wsInput) { wsInput.focus(); wsInput.select(); }
+    };
+    const live = missions.filter(m => !m.archived);
+    const archived = missions.filter(m => m.archived);
+    const groups = [];
+    live.forEach(m => {
+      const key = m.workspace_path || "";
+      let g = groups.find(x => x.key === key);
+      if (!g) { g = { key: key, items: [] }; groups.push(g); }
+      g.items.push(m);
+    });
+    listEl.innerHTML = groups.map(g =>
+      '<div class="folder-group">' +
+        '<div class="folder-group-head" title="' + esc(g.key || "未选择文件夹的旧会诊") + '">📁 <span class="name">' + esc(g.key ? folderName(g.key) : "未选择文件夹") + '</span></div>' +
+        g.items.map(itemHtml).join("") +
+      '</div>'
+    ).join("") +
+    (archived.length
+      ? '<button type="button" class="archived-toggle" data-toggle-archived="1">' + (showArchived ? "▾" : "▸") + ' 已归档（' + archived.length + '）</button>' +
+        (showArchived ? archived.map(itemHtml).join("") : "")
+      : "");
   }
 
   function renderTopBar(state) {
@@ -1991,10 +2057,8 @@ __PEER_ICON_CSS__
     const byPeer = {};
     (m.tasks || []).forEach(t => { byPeer[t.assignee_peer] = t; });
     const ws = m.workspace_path || "";
-    const wsShort = ws ? ws.split("/").filter(Boolean).slice(-2).join("/") : "未定（协调者会按消息内容判断）";
-    const wsHtml = editingWorkspace === m.mission_id
-      ? '<input id="ws-input" class="ws-input" value="' + esc(ws) + '" placeholder="/Users/…/项目文件夹，回车保存，Esc 取消">'
-      : '<button type="button" class="ws-btn" data-edit-workspace="' + esc(m.mission_id) + '" title="' + esc(ws ? ws + "（点击修改）" : "点击手动指定") + '">📁 ' + esc(wsShort) + '</button>';
+    const wsShort = ws ? ws.split("/").filter(Boolean).slice(-2).join("/") : "未选择";
+    const wsHtml = '<div class="mission-detail-row" title="' + esc(ws) + '"><span class="grow">📁 ' + esc(wsShort) + '</span></div>';
     const peerRows = Object.keys(byPeer).map(pid => {
       const t = byPeer[pid];
       const st = t.status === "running" || t.status === "claimed" ? "working" : (Number(waiters[pid] || 0) > 0 ? "standby" : (t.status === "queued" ? "offline" : "online"));
@@ -2007,7 +2071,7 @@ __PEER_ICON_CSS__
       '</div>';
     }).join("");
     return '<div class="mission-detail">' +
-      '<div class="mission-detail-label">工作区</div>' + wsHtml +
+      '<div class="mission-detail-label">文件夹</div>' + wsHtml +
       '<div class="mission-detail-label">协调者 · ' + esc(peerLabel(m.coordinator_peer)) + '</div>' +
       (peerRows ? '<div class="mission-detail-label">参与与模型</div>' + peerRows : "") +
     '</div>';
@@ -2112,9 +2176,13 @@ __PEER_ICON_CSS__
     items.sort((a, b) => (a.ts < b.ts ? -1 : (a.ts > b.ts ? 1 : ((a.order - b.order) || (a.id - b.id)))));
     const closed = m.status === "completed" || m.status === "cancelled" || m.status === "failed";
     const pending = closed ? [] : tasks.filter(t => t.status === "queued" || t.status === "claimed" || t.status === "running");
-    const head = '<div class="chat-head"><span class="chat-head-title">' + esc(m.title) + '</span>' +
-      (closed ? '<span class="chat-head-state">已结束</span>'
-              : '<button type="button" class="btn-link-danger" data-close-mission="' + esc(m.mission_id) + '">关闭会诊</button>') +
+    const titleHtml = renamingMission === m.mission_id
+      ? '<input id="title-input" class="title-input" maxlength="40" value="' + esc(m.title) + '">'
+      : '<span class="chat-head-title" data-rename-mission="' + esc(m.mission_id) + '" title="点击改名">' + esc(m.title) + '</span>';
+    const head = '<div class="chat-head">' + titleHtml +
+      (m.workspace_path ? '<span class="head-folder" title="' + esc(m.workspace_path) + '">📁 ' + esc(folderName(m.workspace_path)) + '</span>' : "") +
+      (closed ? '<span class="chat-head-state">已结束</span>' : "") +
+      '<button type="button" class="btn-link" data-archive-mission="' + esc(m.mission_id) + '"' + (m.archived ? ' data-archive-undo="1">取消归档' : '>归档') + '</button>' +
       '</div>';
     container.innerHTML = head + items.map(i => i.html).join("") + pending.map(t => renderPending(t, state)).join("");
   }
@@ -2260,15 +2328,28 @@ __PEER_ICON_CSS__
     });
     document.getElementById("handoff-targets").innerHTML = chips.join("");
     const optsEl = document.getElementById("compose-opts");
-    if (optsEl && !(composeWsEditing && document.activeElement && document.activeElement.id === "compose-ws-input")) {
-      const recent = [];
-      ((state && state.missions) || []).forEach(mm => { if (mm.workspace_path && recent.indexOf(mm.workspace_path) < 0) recent.push(mm.workspace_path); });
-      const wsLabel = composeWorkspace ? composeWorkspace.split("/").filter(Boolean).slice(-2).join("/") : "自动";
-      optsEl.innerHTML = (composeWsEditing
-          ? '<input id="compose-ws-input" class="ws-compose-input" list="compose-ws-list" value="' + esc(composeWorkspace) + '" placeholder="工作区绝对路径，回车确定；留空=自动">' +
-            '<datalist id="compose-ws-list">' + recent.slice(0, 12).map(w => '<option value="' + esc(w) + '"></option>').join("") + '</datalist>'
-          : '<button type="button" class="opt-chip' + (composeWorkspace ? " on" : "") + '" data-compose-ws="1" title="' + esc(composeWorkspace || "不指定时，由消息里的路径或协调者决定") + '">📁 工作区：' + esc(wsLabel) + '</button>') +
-        '<button type="button" class="opt-chip' + (composeNewSession ? " on" : "") + '" data-compose-newsess="1" title="让接手的一端新开一个会话（名称与会诊同步）来处理">' + (composeNewSession ? "✓ " : "") + '新开会话处理</button>';
+    const curMission = getActiveMission(state);
+    if (optsEl) {
+      if (curMission) {
+        optsEl.innerHTML = "";
+      } else {
+        const recents = recentFolders(state);
+        if (!composeWorkspace && recents.length) composeWorkspace = recents[0];
+        const tiers = [["fast", "快"], ["balanced", "均衡"], ["deep", "深度"]];
+        optsEl.innerHTML =
+          '<button type="button" class="folder-btn' + (composeWorkspace ? "" : " missing") + '" data-folder-menu="1" title="' + esc(composeWorkspace || "这个会诊在哪个文件夹里工作") + '">📁 <span class="name">' + esc(composeWorkspace ? folderName(composeWorkspace) : "选择文件夹") + '</span> ▾</button>' +
+          '<span class="tier-seg" title="快：轻量问题；均衡：日常；深度：难题和架构">' +
+            tiers.map(t => '<button type="button" class="' + (composeTier === t[0] ? "active" : "") + '" data-tier="' + t[0] + '">' + t[1] + '</button>').join("") +
+          '</span>' +
+          (folderMenuOpen
+            ? '<div class="folder-menu" role="menu">' +
+                (recents.length ? '<div class="folder-menu-label">最近用过</div>' + recents.map(f =>
+                  '<button type="button" class="folder-item' + (f === composeWorkspace ? " current" : "") + '" data-pick-folder="' + esc(f) + '"><span>' + esc(folderName(f)) + '</span><span class="path">' + esc(f) + '</span></button>'
+                ).join("") + '<div class="folder-sep"></div>' : "") +
+                '<button type="button" class="folder-item" data-open-folder-picker="1"><span>选择文件夹…</span></button>' +
+              '</div>'
+            : "");
+      }
     }
     const anyStandby = ["claude", "chatgpt", "antigravity"].some(pid => Number(waiters[pid] || 0) > 0);
     const banner = document.getElementById("standby-banner");
@@ -2484,6 +2565,12 @@ __PEER_ICON_CSS__
     const text = (inp.value || "").trim();
     if (!text || sending || text.startsWith("/")) return;
     const cur = getActiveMission(appState);
+    if (!cur && !composeWorkspace) {
+      folderMenuOpen = true;
+      renderComposerBar(appState);
+      showToast("先选择这个会诊要在哪个文件夹里工作");
+      return;
+    }
     const open = cur && !(cur.status === "completed" || cur.status === "cancelled" || cur.status === "failed");
     const path = open ? "/api/missions/" + encodeURIComponent(cur.mission_id) + "/message" : "/api/conversations";
     sending = true;
@@ -2493,7 +2580,8 @@ __PEER_ICON_CSS__
         method: "POST",
         credentials: "same-origin",
         headers: writeHeaders(),
-        body: JSON.stringify({ text: text, targets: sendTargets.slice(), workspace: composeWorkspace, new_session: composeNewSession })
+        body: JSON.stringify(cur ? { text: text, targets: sendTargets.slice() }
+                                 : { text: text, targets: sendTargets.slice(), workspace: composeWorkspace, tier: composeTier })
       });
       if (res.status === 401) { showLogin(true); return; }
       const data = await res.json().catch(() => ({}));
@@ -2502,8 +2590,12 @@ __PEER_ICON_CSS__
       inp.style.height = "";
       composingNew = false;
       selectedMissionId = data.result.mission_id;
-      if (composeNewSession && sendTargets.indexOf("chatgpt") >= 0) {
-        const codexUrl = buildHandoffDeeplink("chatgpt", "调用 consilium_pickup_inbox(peer_id=\"chatgpt\") 认领 Consilium 里的新消息，按 consilium-collab 技能处理。", composeWorkspace);
+      if (!cur) rememberFolder(composeWorkspace);
+      const codexWaiting = Number(((appState && appState.active_waiters) || {}).chatgpt || 0) > 0;
+      const codexBound = cur && cur.native_sessions && cur.native_sessions.chatgpt;
+      if (sendTargets.indexOf("chatgpt") >= 0 && !codexWaiting && !codexBound) {
+        const folder = cur ? (cur.workspace_path || "") : composeWorkspace;
+        const codexUrl = buildHandoffDeeplink("chatgpt", "调用 consilium_pickup_inbox(peer_id=\"chatgpt\") 认领 Consilium 里的新消息，按 consilium-collab 技能处理，并用 consilium_bind_session 记下这个会话。", folder);
         if (codexUrl) window.location.href = codexUrl;
       }
       await fetchState();
@@ -2529,35 +2621,25 @@ __PEER_ICON_CSS__
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 220) + "px";
   });
-  document.addEventListener("keydown", ev => {
-    if (!ev.target || ev.target.id !== "compose-ws-input") return;
-    if (ev.key === "Escape") { composeWsEditing = false; renderComposerBar(appState); return; }
-    if (ev.key !== "Enter") return;
-    ev.preventDefault();
-    composeWorkspace = (ev.target.value || "").trim();
-    composeWsEditing = false;
-    renderComposerBar(appState);
-    document.getElementById("composer-input").focus();
-  });
-
   document.addEventListener("keydown", async ev => {
-    if (!ev.target || ev.target.id !== "ws-input") return;
-    if (ev.key === "Escape") { editingWorkspace = null; if (appState) renderSidebar(appState); return; }
+    if (!ev.target || ev.target.id !== "title-input") return;
+    if (ev.key === "Escape") { renamingMission = null; if (appState) renderConversation(appState); return; }
     if (ev.key !== "Enter") return;
     ev.preventDefault();
-    const mid = editingWorkspace;
-    const path = (ev.target.value || "").trim();
+    const mid = renamingMission;
+    const title = (ev.target.value || "").trim();
+    if (!title) return;
     try {
-      const res = await fetch("/api/missions/" + encodeURIComponent(mid) + "/workspace", {
-        method: "POST", credentials: "same-origin", headers: writeHeaders(), body: JSON.stringify({ path: path })
+      const res = await fetch("/api/missions/" + encodeURIComponent(mid) + "/title", {
+        method: "POST", credentials: "same-origin", headers: writeHeaders(), body: JSON.stringify({ title: title })
       });
       if (res.status === 401) { showLogin(true); return; }
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { showToast(data.error || "保存失败"); return; }
-      editingWorkspace = null;
+      if (!res.ok) { showToast(data.error || "改名失败"); return; }
+      renamingMission = null;
       await fetchState();
     } catch (err) {
-      showToast("保存失败：" + err);
+      showToast("改名失败：" + err);
     }
   });
 
@@ -2656,16 +2738,56 @@ __PEER_ICON_CSS__
       return;
     }
 
-    if (ev.target.closest("[data-compose-ws]")) {
-      composeWsEditing = true;
+    if (ev.target.closest("[data-folder-menu]")) {
+      folderMenuOpen = !folderMenuOpen;
       renderComposerBar(appState);
-      const wi = document.getElementById("compose-ws-input");
-      if (wi) { wi.focus(); wi.select(); }
       return;
     }
-    if (ev.target.closest("[data-compose-newsess]")) {
-      composeNewSession = !composeNewSession;
+    const pickFolderBtn = ev.target.closest("[data-pick-folder]");
+    if (pickFolderBtn) {
+      composeWorkspace = pickFolderBtn.getAttribute("data-pick-folder");
+      folderMenuOpen = false;
       renderComposerBar(appState);
+      return;
+    }
+    if (ev.target.closest("[data-open-folder-picker]")) {
+      folderMenuOpen = false;
+      renderComposerBar(appState);
+      if (canPickNativeFolder()) window.webkit.messageHandlers.consilium.postMessage({ action: "pickFolder" });
+      else showToast("请在 Consilium App 里选择文件夹（浏览器里只能从最近用过的里选）");
+      return;
+    }
+    const tierBtn = ev.target.closest("[data-tier]");
+    if (tierBtn) {
+      composeTier = tierBtn.getAttribute("data-tier");
+      renderComposerBar(appState);
+      return;
+    }
+    if (folderMenuOpen && !ev.target.closest(".folder-menu")) {
+      folderMenuOpen = false;
+      renderComposerBar(appState);
+    }
+    const renameBtn = ev.target.closest("[data-rename-mission]");
+    if (renameBtn) {
+      renamingMission = renameBtn.getAttribute("data-rename-mission");
+      if (appState) renderConversation(appState);
+      const ti = document.getElementById("title-input");
+      if (ti) { ti.focus(); ti.select(); }
+      return;
+    }
+    const archiveBtn = ev.target.closest("[data-archive-mission]");
+    if (archiveBtn) {
+      const amid = archiveBtn.getAttribute("data-archive-mission");
+      const undo = archiveBtn.getAttribute("data-archive-undo") === "1";
+      fetch("/api/missions/" + encodeURIComponent(amid) + (undo ? "/unarchive" : "/archive"), {
+        method: "POST", credentials: "same-origin", headers: writeHeaders(), body: "{}"
+      }).then(r => { if (r.status === 401) showLogin(true); if (!undo && selectedMissionId === amid) { composingNew = true; selectedMissionId = null; } return fetchState(); })
+        .catch(() => showToast("操作失败"));
+      return;
+    }
+    if (ev.target.closest("[data-toggle-archived]")) {
+      showArchived = !showArchived;
+      if (appState) renderSidebar(appState);
       return;
     }
 
@@ -2680,13 +2802,6 @@ __PEER_ICON_CSS__
       }
       window.location.href = sbUrl;
       showToast("已打开 " + peerLabel(sbPeer) + " 新会话，按一次发送它就会进入待命");
-      return;
-    }
-
-    const editWsBtn = ev.target.closest("[data-edit-workspace]");
-    if (editWsBtn) {
-      editingWorkspace = editWsBtn.getAttribute("data-edit-workspace");
-      if (appState) renderSidebar(appState);
       return;
     }
 
