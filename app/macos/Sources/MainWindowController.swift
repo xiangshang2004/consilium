@@ -267,7 +267,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
     // MARK: - NSWindowDelegate
 
     func windowWillClose(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        // Keep the Dock icon: closing the window leaves Consilium running (menu bar + Dock); reopen via either.
     }
 
     // MARK: - WKNavigationDelegate

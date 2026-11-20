@@ -60,7 +60,7 @@ struct AppConfig {
         let dryRun = env["CONSILIUM_DRY_RUN"] == "1"
         let disableLocalQuotaSync = env["CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC"] == "1"
 
-        var openOnLaunch = false
+        var openOnLaunch = true
         var noNotifications = false
         var smokeOutPath: String?
         var captureDirPath: String?
@@ -70,6 +70,8 @@ struct AppConfig {
             let arg = arguments[idx]
             if arg == "--open-on-launch" {
                 openOnLaunch = true
+            } else if arg == "--background" {
+                openOnLaunch = false
             } else if arg == "--no-notifications" {
                 noNotifications = true
             } else if arg == "--smoke-out", idx + 1 < arguments.count {
