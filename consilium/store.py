@@ -16,10 +16,12 @@ from consilium.models import (
     ConflictError,
     DEFAULT_CLAIM_TIMEOUT_SEC,
     DEFAULT_RUNNING_TIMEOUT_SEC,
+    MAX_ACTIVE_PREFERENCES,
     NON_TERMINAL_TASK_STATUSES,
     PROGRESS_TASK_STATUSES,
     REQUEUEABLE_TASK_STATUSES,
     TERMINAL_TASK_STATUSES,
+    USER_PEER,
     VALID_ISOLATION,
     VALID_MISSION_CLOSE_STATUSES,
     VALID_MODEL_TIERS,
@@ -120,6 +122,23 @@ CREATE TABLE IF NOT EXISTS quota_accounts (
     is_current INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (peer_id, account_id)
+);
+
+CREATE TABLE IF NOT EXISTS user_messages (
+    message_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mission_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    targets_json TEXT NOT NULL DEFAULT '[]',
+    mode TEXT NOT NULL DEFAULT 'direct',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS preferences (
+    pref_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS idempotency_keys (
@@ -234,6 +253,7 @@ class BusStore:
                 "ALTER TABLE idempotency_keys ADD COLUMN caller_scope TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE idempotency_keys ADD COLUMN request_hash TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE idempotency_keys ADD COLUMN delivery_json TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE tasks ADD COLUMN origin TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE quota_windows ADD COLUMN is_current INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE quota_windows ADD COLUMN is_historical INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE quota_windows ADD COLUMN account_alias TEXT NOT NULL DEFAULT ''",
@@ -374,6 +394,8 @@ class BusStore:
         status: str = "active",
         now: Optional[str] = None,
     ) -> None:
+        if peer_id == USER_PEER:
+            return
         peer = validate_peer(peer_id)
         ts = now or utc_now_iso()
         conn.execute(
@@ -501,14 +523,17 @@ class BusStore:
     ) -> Dict[str, Any]:
         enriched_payload = dict(payload)
         enriched_payload.setdefault("ring_sent_at_ms", round(time.time() * 1000.0, 2))
+        acked_at = created_at if to_peer == USER_PEER else ""
+        if acked_at:
+            enriched_payload["peer_acked"] = True
         payload_str = json.dumps(enriched_payload, ensure_ascii=False)
         cur = conn.execute(
             """
             INSERT INTO events (
-                mission_id, task_id, from_peer, to_peer, kind, payload_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                mission_id, task_id, from_peer, to_peer, kind, payload_json, created_at, acked_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (mission_id, task_id, from_peer, to_peer, kind, payload_str, created_at),
+            (mission_id, task_id, from_peer, to_peer, kind, payload_str, created_at, acked_at),
         )
         return {
             "event_id": cur.lastrowid,
@@ -519,7 +544,7 @@ class BusStore:
             "kind": kind,
             "payload": enriched_payload,
             "created_at": created_at,
-            "acked_at": "",
+            "acked_at": acked_at,
         }
 
     def _decode_task(
@@ -694,9 +719,19 @@ class BusStore:
         max_rounds: int = 3,
         tasks: Optional[List[Dict[str, Any]]] = None,
         client_request_id: Optional[str] = None,
+        allow_user_coordinator: bool = False,
+        user_message: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Create a mission and optionally dispatch initial tasks atomically."""
-        coordinator = validate_peer(coordinator_peer)
+        """Create a mission and optionally dispatch initial tasks atomically.
+
+        `allow_user_coordinator` is only set by the dashboard: the user owns the
+        conversation and agents' results come back to the UI instead of a peer.
+        `user_message` ({text, targets, mode}) records what the user typed.
+        """
+        if allow_user_coordinator and (coordinator_peer or "").strip().lower() == USER_PEER:
+            coordinator = USER_PEER
+        else:
+            coordinator = validate_peer(coordinator_peer)
         isolation = validate_choice(isolation_policy, VALID_ISOLATION, "isolation_policy")
         if max_rounds < 1:
             raise ValueError("max_rounds must be >= 1")
@@ -767,11 +802,14 @@ class BusStore:
                         worktree_branch=item.get("worktree_branch", ""),
                         now=now,
                         now_ms=now_ms,
+                        origin=str(item.get("origin", "")),
                     )
                     created_tasks.append(task_obj)
                     created_events.append(event_obj)
                     touched_peers.append(task_obj["assignee_peer"])
 
+                if user_message:
+                    self._insert_user_message_locked(conn, mission_id, user_message, now)
                 mission_row = conn.execute(
                     "SELECT * FROM missions WHERE mission_id = ?", (mission_id,)
                 ).fetchone()
@@ -808,6 +846,7 @@ class BusStore:
         worktree_branch: str,
         now: str,
         now_ms: Optional[float] = None,
+        origin: str = "",
     ) -> tuple:
         assignee = validate_peer(assignee_peer)
         tier = validate_choice(model_tier, VALID_MODEL_TIERS, "model_tier")
@@ -820,8 +859,8 @@ class BusStore:
             INSERT INTO tasks (
                 task_id, mission_id, assignee_peer, model_tier, model_hint,
                 parallel_fanout, worktree_branch, prompt, status,
-                dispatched_at_ms, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)
+                dispatched_at_ms, created_at, updated_at, origin
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -835,6 +874,7 @@ class BusStore:
                 dispatched_ms,
                 now,
                 now,
+                origin,
             ),
         )
         task_row = conn.execute(
@@ -855,6 +895,7 @@ class BusStore:
                 "worktree_branch": worktree_branch,
                 "prompt_preview": prompt[:200],
                 "dispatched_at_ms": dispatched_ms,
+                "origin": origin,
             },
             created_at=now,
         )
@@ -871,6 +912,8 @@ class BusStore:
         worktree_branch: str = "",
         client_request_id: Optional[str] = None,
         caller_scope: Optional[str] = None,
+        origin: str = "",
+        user_message: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Dispatch an additional task on an existing open mission."""
         assignee = validate_peer(assignee_peer)
@@ -925,7 +968,10 @@ class BusStore:
                     worktree_branch=worktree_branch,
                     now=now,
                     now_ms=now_ms,
+                    origin=origin,
                 )
+                if user_message:
+                    self._insert_user_message_locked(conn, mission_id, user_message, now)
                 next_status = (
                     "active" if mission["status"] == "ready_to_report" else mission["status"]
                 )
@@ -2181,6 +2227,180 @@ class BusStore:
                 summaries.append(item)
         return {"missions": summaries}
 
+    # ---- User conversations, preferences and quota-aware handoff ----
+
+    def _insert_user_message_locked(
+        self, conn: sqlite3.Connection, mission_id: str, message: Dict[str, Any], now: str
+    ) -> None:
+        text = str(message.get("text") or "").strip()
+        if not text:
+            return
+        targets = [str(t) for t in (message.get("targets") or [])]
+        conn.execute(
+            "INSERT INTO user_messages (mission_id, text, targets_json, mode, created_at) VALUES (?, ?, ?, ?, ?)",
+            (mission_id, text[:20000], json.dumps(targets, ensure_ascii=False), str(message.get("mode") or "direct"), now),
+        )
+
+    def list_preferences(self, include_inactive: bool = False) -> List[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM preferences "
+                + ("" if include_inactive else "WHERE active = 1 ")
+                + "ORDER BY pref_id ASC"
+            ).fetchall()
+        return [
+            {
+                "pref_id": int(r["pref_id"]),
+                "text": r["text"],
+                "source": r["source"],
+                "active": bool(r["active"]),
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+    def add_preference(self, text: str, source: str) -> Dict[str, Any]:
+        clean = " ".join(str(text or "").split())
+        if not clean:
+            raise ValueError("preference text must not be empty")
+        if len(clean) > 300:
+            raise ValueError("preference text must be at most 300 characters")
+        src = USER_PEER if source == USER_PEER else validate_peer(source)
+        now = utc_now_iso()
+        with self._connect() as conn:
+            with self._tx(conn):
+                dup = conn.execute(
+                    "SELECT pref_id FROM preferences WHERE active = 1 AND text = ?", (clean,)
+                ).fetchone()
+                if dup is not None:
+                    return {"pref_id": int(dup["pref_id"]), "text": clean, "duplicate": True}
+                active_count = conn.execute(
+                    "SELECT COUNT(*) AS c FROM preferences WHERE active = 1"
+                ).fetchone()["c"]
+                if int(active_count) >= MAX_ACTIVE_PREFERENCES:
+                    raise ValueError(
+                        f"At most {MAX_ACTIVE_PREFERENCES} active preferences; ask the user to remove one first"
+                    )
+                cur = conn.execute(
+                    "INSERT INTO preferences (text, source, active, created_at) VALUES (?, ?, 1, ?)",
+                    (clean, src, now),
+                )
+        return {"pref_id": int(cur.lastrowid), "text": clean, "source": src, "created_at": now}
+
+    def deactivate_preference(self, pref_id: int) -> bool:
+        with self._connect() as conn:
+            with self._tx(conn):
+                cur = conn.execute(
+                    "UPDATE preferences SET active = 0 WHERE pref_id = ? AND active = 1", (int(pref_id),)
+                )
+        return cur.rowcount > 0
+
+    def recent_user_routing(self, limit: int = 15) -> List[Dict[str, Any]]:
+        """Recent explicit (@-mentioned) sends, so a coordinator can infer the user's habits."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT text, targets_json, created_at FROM user_messages WHERE mode = 'direct' "
+                "ORDER BY message_id DESC LIMIT ?",
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [
+            {"text": r["text"][:160], "targets": json.loads(r["targets_json"] or "[]"), "created_at": r["created_at"]}
+            for r in rows
+        ]
+
+    def handoff_task(
+        self,
+        task_id: str,
+        peer_id: str,
+        attempt_id: str,
+        to_peer: str,
+        note: str,
+    ) -> Dict[str, Any]:
+        """Hand an active task to another peer (e.g. low quota), archiving the current attempt."""
+        peer = validate_peer(peer_id)
+        target = validate_peer(to_peer)
+        if target == peer:
+            raise ValueError("Cannot hand a task off to the same peer")
+        handoff_note = str(note or "").strip()
+        if not handoff_note:
+            raise ValueError("handoff note must describe progress so far and why")
+        now = utc_now_iso()
+        now_ms = round(time.time() * 1000.0, 2)
+        with self._connect() as conn:
+            with self._tx(conn):
+                task = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+                if task is None:
+                    raise KeyError(f"Unknown task_id: {task_id}")
+                if task["assignee_peer"] != peer:
+                    raise ValueError(f"Peer {peer!r} does not own task {task_id}")
+                if task["status"] not in ("claimed", "running") or task["attempt_id"] != (attempt_id or "").strip():
+                    raise ValueError(f"Stale or missing attempt_id for task {task_id}")
+                mission = conn.execute(
+                    "SELECT * FROM missions WHERE mission_id = ?", (task["mission_id"],)
+                ).fetchone()
+                if mission is None or mission["status"] in VALID_MISSION_CLOSE_STATUSES:
+                    raise ValueError(f"Mission for task {task_id} is closed")
+                try:
+                    history = json.loads(task["attempt_history_json"] or "[]")
+                    if not isinstance(history, list):
+                        history = []
+                except ValueError:
+                    history = []
+                history.append(
+                    {
+                        "attempt_seq": int(task["attempt_seq"] or 0),
+                        "attempt_id": task["attempt_id"],
+                        "status": task["status"],
+                        "assignee_peer": peer,
+                        "progress_note": task["progress_note"],
+                        "archived_at": now,
+                        "reason": f"handoff to {target}: {handoff_note}",
+                    }
+                )
+                new_prompt = (
+                    task["prompt"]
+                    + f"\n\n【交接说明，来自 {peer}】{handoff_note}"
+                )
+                conn.execute(
+                    """
+                    UPDATE tasks
+                    SET assignee_peer = ?, status = 'queued', attempt_id = '', claimed_by_session = '',
+                        claimed_at = '', claimed_at_ms = 0.0, claim_latency_ms = NULL, stale_at = '',
+                        progress_note = '', prompt = ?, attempt_history_json = ?, dispatched_at_ms = ?,
+                        updated_at = ?
+                    WHERE task_id = ?
+                    """,
+                    (target, new_prompt, json.dumps(history, ensure_ascii=False), now_ms, now, task_id),
+                )
+                self._touch_peer_locked(conn, peer, status="online", now=now)
+                evt = self._insert_event(
+                    conn,
+                    mission_id=task["mission_id"],
+                    task_id=task_id,
+                    from_peer=peer,
+                    to_peer=target,
+                    kind="task_handoff",
+                    payload={
+                        "task_id": task_id,
+                        "from_peer": peer,
+                        "to_peer": target,
+                        "note": handoff_note,
+                        "previous_attempt_id": task["attempt_id"],
+                        "dispatched_at_ms": now_ms,
+                    },
+                    created_at=now,
+                )
+                updated = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+                out = {
+                    "task": self._decode_task(updated),
+                    "event": evt,
+                    "coordinator_peer": mission["coordinator_peer"],
+                }
+            out["post_commit_warnings"] = self._safe_sync_peers_seq(
+                [peer, target], pulse_peers=[target]
+            )
+        return out
+
     def get_dashboard_missions(
         self, limit: int = 20, events_per_mission: int = 100
     ) -> tuple:
@@ -2214,6 +2434,19 @@ class BusStore:
                 item["task_counts"] = counts
                 item["tasks"] = tasks_dec
                 item["events"] = [self._decode_event(e) for e in event_rows]
+                item["user_messages"] = [
+                    {
+                        "message_id": int(r["message_id"]),
+                        "text": r["text"],
+                        "targets": json.loads(r["targets_json"] or "[]"),
+                        "mode": r["mode"],
+                        "created_at": r["created_at"],
+                    }
+                    for r in conn.execute(
+                        "SELECT * FROM user_messages WHERE mission_id = ? ORDER BY message_id ASC",
+                        (mid,),
+                    ).fetchall()
+                ]
                 missions_out.append(item)
         return missions_out, latest_event_id
 

@@ -10,6 +10,10 @@ import tempfile
 from typing import Optional
 
 VALID_PEERS = ("chatgpt", "claude", "antigravity")
+# The person using the dashboard. Only the dashboard may make the user a mission coordinator;
+# agents' results for such missions are shown in the UI instead of being sent to a peer.
+USER_PEER = "user"
+MAX_ACTIVE_PREFERENCES = 30
 VALID_ISOLATION = ("worktree", "read_only", "shared")
 VALID_MODEL_TIERS = ("pro_reasoning", "balanced", "fast", "custom")
 VALID_TASK_STATUSES = (
