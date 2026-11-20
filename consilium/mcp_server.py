@@ -6,6 +6,7 @@ import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import re
 import queue
 import socket
 import sys
@@ -245,6 +246,22 @@ def _deliver_reaper_notifications(
 PEER_LABELS = {"claude": "Claude", "chatgpt": "Codex", "antigravity": "Antigravity", USER_PEER: "使用者"}
 
 
+_PATH_IN_TEXT_RE = re.compile(r"(?:~|/(?:Users|Volumes|private|opt|tmp))/[^\s，。、；：！？'\"`（）()\[\]<>]+")
+
+
+def detect_workspace(text: str, explicit: str = "") -> str:
+    """Pick a conversation folder: an explicit choice, else the first existing absolute path in the message."""
+    candidates = [explicit] if explicit else []
+    candidates += _PATH_IN_TEXT_RE.findall(text or "")
+    for raw in candidates:
+        cand = os.path.realpath(os.path.expanduser(str(raw).strip().rstrip(".,;:")))
+        if os.path.isdir(cand):
+            return cand
+        if os.path.isfile(cand):
+            return os.path.dirname(cand)
+    return ""
+
+
 def peer_quota_digest(store: BusStore, rendezvous_dir: str) -> List[Dict[str, Any]]:
     """Compact per-peer standby + current-account quota view for routing and handoff decisions."""
     waiters = query_active_waiters(rendezvous_dir) or {}
@@ -281,6 +298,24 @@ def choose_auto_coordinator(digest: List[Dict[str, Any]]) -> str:
     return best
 
 
+def explain_auto_choice(digest: List[Dict[str, Any]], chosen: str) -> str:
+    """One plain sentence on why auto routing picked `chosen`, shown under the user's message."""
+    item = next((d for d in digest if d["peer_id"] == chosen), None) or {}
+    label = PEER_LABELS.get(chosen, chosen)
+    rem = item.get("remaining_percent")
+    rem_txt = "余量未知" if rem is None else f"余量 {round(float(rem))}%"
+    skipped = [PEER_LABELS.get(d["peer_id"], d["peer_id"]) for d in digest if d.get("exhausted")]
+    if item.get("standby"):
+        why = f"交给 {label}：它正在待命，{rem_txt}"
+    elif any(d.get("standby") for d in digest):
+        why = f"交给 {label}：{rem_txt}"
+    else:
+        why = f"三端都没在待命，先排给 {label}（默认协调者），它上线后处理"
+    if skipped:
+        why += f"；{'、'.join(skipped)} 余量已耗尽，跳过"
+    return why
+
+
 def _quota_line(item: Dict[str, Any]) -> str:
     rem = item["remaining_percent"]
     rem_txt = "余量未知" if rem is None else f"余量 {round(float(rem))}%"
@@ -304,7 +339,10 @@ def build_auto_coordinator_prompt(
         "优先派给待命中、余量充足的一端；余量未知可以照常派，已耗尽的不要派。\n"
         "2. 收齐结果后，用 consilium_complete_task 交付你自己的这个任务：result_summary 直接写给使用者看的最终回答。\n"
         "3. 如果这次看出使用者稳定的习惯（例如某类事固定交给谁、喜欢的回答方式），用 consilium_learn_preference 记一句话；不确定就不记。\n"
-        "4. 你自己的额度快用完时，用 consilium_handoff_task 把任务连同进度交给另一端。切换账号由使用者手动完成，需要时在回答里提醒。\n\n"
+        "4. 你自己的额度快用完时，用 consilium_handoff_task 把任务连同进度交给另一端。切换账号由使用者手动完成，需要时在回答里提醒。\n"
+        "5. 用 consilium_set_title 给会诊起一个不超过 20 字的标题；如果这件事属于某个项目文件夹而会诊还没有工作区，用 consilium_set_workspace 记下（绝对路径）。"
+        "派子任务时把工作区写进任务说明。"
+        "上报进度时用 model_used 写上你实际使用的模型。\n\n"
         f"【各端状态】\n" + "\n".join(_quota_line(i) for i in digest) + "\n\n"
         f"【使用者偏好】\n{pref_lines}\n\n"
         f"【使用者最近的点名分配】\n{route_lines}"
@@ -400,6 +438,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "attempt_id": {"type": "string"},
                 "progress_note": {"type": "string"},
                 "status": {"type": "string", "enum": ["claimed", "running"], "default": "running"},
+                "model_used": {"type": "string", "maxLength": 80, "description": "The model you are actually running on (e.g. 'Claude Opus 5.5'); shown in the Consilium sidebar."},
                 "worktree_branch": {"type": "string"},
                 "notify_coordinator": {"type": "boolean", "default": False},
                 "client_request_id": {"type": "string"},
@@ -419,6 +458,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "result_summary": {"type": "string"},
                 "artifacts": {"type": "array", "items": {"type": "string"}},
                 "status": {"type": "string", "enum": ["done", "failed", "blocked"], "default": "done"},
+                "model_used": {"type": "string", "maxLength": 80},
                 "client_request_id": {"type": "string"},
             },
         },
@@ -441,6 +481,32 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "name": "consilium_preferences",
         "description": "Read the user's learned preferences, recent explicit routing choices, and each peer's standby/quota digest before deciding who should do what.",
         "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "consilium_set_title",
+        "description": "Give the conversation a short title (max 40 chars). Name your own native session the same way so the user can find it.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["mission_id", "peer_id", "title"],
+            "properties": {
+                "mission_id": {"type": "string"},
+                "peer_id": {"type": "string", "enum": list(VALID_PEERS)},
+                "title": {"type": "string", "maxLength": 40},
+            },
+        },
+    },
+    {
+        "name": "consilium_set_workspace",
+        "description": "Record the project folder (absolute path) this conversation works in, so every peer and the user's sidebar see it.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["mission_id", "peer_id", "path"],
+            "properties": {
+                "mission_id": {"type": "string"},
+                "peer_id": {"type": "string", "enum": list(VALID_PEERS)},
+                "path": {"type": "string"},
+            },
+        },
     },
     {
         "name": "consilium_learn_preference",
@@ -856,6 +922,7 @@ class ConsiliumMCPDispatcher:
                 notify_coordinator=notify_coord,
                 attempt_id=str(args["attempt_id"]) if args.get("attempt_id") is not None else None,
                 client_request_id=str(client_req_id) if client_req_id is not None else None,
+                model_used=str(args.get("model_used") or ""),
             )
             rec_warnings = []
             if res.get("idempotent_replay"):
@@ -904,6 +971,7 @@ class ConsiliumMCPDispatcher:
                 status=str(args.get("status", "done")),
                 attempt_id=str(args["attempt_id"]) if args.get("attempt_id") is not None else None,
                 client_request_id=str(client_req_id) if client_req_id is not None else None,
+                model_used=str(args.get("model_used") or ""),
             )
             rec_warnings = []
             if res.get("idempotent_replay"):
@@ -995,6 +1063,20 @@ class ConsiliumMCPDispatcher:
                 "recent_user_routing": self.store.recent_user_routing(),
                 "peers": peer_quota_digest(self.store, self.rendezvous_dir),
             }
+
+        if name == "consilium_set_title":
+            res = self.store.set_mission_title(
+                str(args["mission_id"]), str(args["title"]), actor=str(args["peer_id"])
+            )
+            pub_warn = self._emit_mutation("set_title")
+            return {"committed": True, "result": res, "delivery": {"warnings": [pub_warn] if pub_warn else []}}
+
+        if name == "consilium_set_workspace":
+            res = self.store.set_mission_workspace(
+                str(args["mission_id"]), str(args["path"]), actor=str(args["peer_id"])
+            )
+            pub_warn = self._emit_mutation("set_workspace")
+            return {"committed": True, "result": res, "delivery": {"warnings": [pub_warn] if pub_warn else []}}
 
         if name == "consilium_learn_preference":
             res = self.store.add_preference(str(args["text"]), source=str(args["peer_id"]))
@@ -1456,7 +1538,12 @@ class ConsiliumDaemon:
         self.publish_state_update(reason)
 
     def ui_send(
-        self, text: str, targets: Any, mission_id: Optional[str] = None
+        self,
+        text: str,
+        targets: Any,
+        mission_id: Optional[str] = None,
+        workspace_hint: str = "",
+        new_session: bool = False,
     ) -> Dict[str, Any]:
         """Send a message typed in the dashboard: @-mentioned peers get it directly; no mention = auto."""
         body = str(text or "").strip()
@@ -1483,26 +1570,48 @@ class ConsiliumDaemon:
         digest = peer_quota_digest(store, self.rendezvous_dir)
         title = body.splitlines()[0][:40]
         mode = "direct" if chosen else "auto"
+        workspace = detect_workspace(body, explicit=workspace_hint)
+        hint = os.path.expanduser(str(workspace_hint or "").strip())
+        pending_ws = hint if (hint.startswith("/") and not workspace) else ""
+
+        def _wrap(prompt: str) -> str:
+            notes = []
+            if pending_ws:
+                notes.append(f"使用者指定的工作区还不存在：{pending_ws}。请按该位置的目录规范新建，再用 consilium_set_workspace 记下。")
+            if new_session:
+                notes.append("使用者要求新开一个会话来处理这件事（工作区和会话名称见任务里的 workspace_path、mission_title）。")
+            return prompt if not notes else prompt + "\n\n" + "\n".join("【Consilium】" + n for n in notes)
         events: List[Dict[str, Any]] = []
 
         if mission_id is None:
             if chosen:
                 coordinator = USER_PEER
-                task_specs = [{"assignee_peer": pid, "prompt": body, "origin": "user"} for pid in chosen]
+                task_specs = [
+                    {"assignee_peer": pid, "prompt": _wrap(body), "origin": "user", "new_session": new_session}
+                    for pid in chosen
+                ]
             else:
                 coordinator = choose_auto_coordinator(digest)
                 prompt = build_auto_coordinator_prompt(
                     body, coordinator, digest, store.list_preferences(), store.recent_user_routing()
                 )
-                task_specs = [{"assignee_peer": coordinator, "prompt": prompt, "origin": "user"}]
+                task_specs = [
+                    {"assignee_peer": coordinator, "prompt": _wrap(prompt), "origin": "user", "new_session": new_session}
+                ]
             res = store.create_mission(
                 title=title,
                 goal=body,
                 coordinator_peer=coordinator,
+                workspace_path=workspace,
                 isolation_policy="shared",
                 tasks=task_specs,
                 allow_user_coordinator=True,
-                user_message={"text": body, "targets": chosen or [coordinator], "mode": mode},
+                user_message={
+                    "text": body,
+                    "targets": chosen or [coordinator],
+                    "mode": mode,
+                    "reason": "" if chosen else explain_auto_choice(digest, coordinator),
+                },
             )
             mid = res["mission"]["mission_id"]
             events = list(res.get("events") or [])
@@ -1514,12 +1623,20 @@ class ConsiliumDaemon:
                 raise ValueError("这个会诊已经关闭，请新开一个")
             mid = mission_id
             coord = mission.get("coordinator_peer") or USER_PEER
+            if workspace and not mission.get("workspace_path"):
+                try:
+                    store.set_mission_workspace(mid, workspace, actor=USER_PEER)
+                except (KeyError, ValueError):
+                    pass
+            reason = ""
             if chosen:
                 plan = [(pid, body) for pid in chosen]
             elif coord != USER_PEER:
+                reason = f"交给这个会诊的协调者 {PEER_LABELS.get(coord, coord)}"
                 plan = [(coord, f"【使用者追问】\n{body}\n\n（你是这次会诊的协调者，按需继续分配，最后交付给使用者。）")]
             else:
                 pick = choose_auto_coordinator(digest)
+                reason = explain_auto_choice(digest, pick)
                 plan = [(pick, build_auto_coordinator_prompt(
                     body, pick, digest, store.list_preferences(), store.recent_user_routing()
                 ))]
@@ -1528,10 +1645,12 @@ class ConsiliumDaemon:
                 r = store.dispatch_task(
                     mission_id=mid,
                     assignee_peer=pid,
-                    prompt=prompt,
+                    prompt=_wrap(prompt),
                     origin="user",
+                    new_session=new_session,
                     user_message=(
-                        {"text": body, "targets": chosen or [plan[0][0]], "mode": mode} if idx == 0 else None
+                        {"text": body, "targets": chosen or [plan[0][0]], "mode": mode, "reason": reason}
+                        if idx == 0 else None
                     ),
                 )
                 events.append(r["event"])
@@ -2116,8 +2235,40 @@ class ConsiliumDaemon:
                         target_mid = urllib.parse.unquote(route[len("/api/missions/") : -len("/message")])
                     try:
                         res = daemon.ui_send(
-                            str(payload.get("text") or ""), payload.get("targets") or [], target_mid
+                            str(payload.get("text") or ""),
+                            payload.get("targets") or [],
+                            target_mid,
+                            workspace_hint=str(payload.get("workspace") or ""),
+                            new_session=bool(payload.get("new_session") is True),
                         )
+                        self._send_json(200, {"committed": True, "result": res})
+                    except KeyError as exc:
+                        self._send_json(404, {"error": str(exc)})
+                    except ValueError as exc:
+                        self._send_json(400, {"error": str(exc)})
+                    return
+
+                if route.startswith("/api/missions/") and route.endswith("/workspace"):
+                    ok_sec, auth_mode, session_rec, _ver = self._check_security(allow_cookie=True)
+                    if not ok_sec or auth_mode is None:
+                        return
+                    if not self._check_cookie_write_csrf(auth_mode, session_rec):
+                        return
+                    ok, payload = self._read_json_body()
+                    if not ok:
+                        return
+                    if not isinstance(payload, dict):
+                        self._send_json(400, {"error": "Expected JSON object"})
+                        return
+                    ws_mid = urllib.parse.unquote(route[len("/api/missions/") : -len("/workspace")])
+                    try:
+                        res = daemon.dispatcher.store.set_mission_workspace(
+                            ws_mid, str(payload.get("path") or ""), actor=USER_PEER
+                        )
+                        try:
+                            daemon.publish_state_update("ui_set_workspace")
+                        except Exception:
+                            pass
                         self._send_json(200, {"committed": True, "result": res})
                     except KeyError as exc:
                         self._send_json(404, {"error": str(exc)})
