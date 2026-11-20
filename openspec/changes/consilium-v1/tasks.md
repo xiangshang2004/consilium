@@ -31,9 +31,15 @@
 - [x] 2.5.3 Add `tests/test_r010_regressions.py` covering all R008/R009 items (1–16) and pass full 59-test `unittest` suite under `CONSILIUM_DRY_RUN=1 CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC=1`.
 - [x] 2.5.4 Update `run_demo_a.py` & `capture_dashboard.mjs`, generate & `ffprobe`/visually verify `2026-11-19` Light/Dark Retina PNGs + live MP4 + `demo_a_timeline.md`, sync `openspec/changes/consilium-v1/` & docs, write `reviews/R010-antigravity-r009-fixes.md`, and commit topically (preserving `★ Gate 1` and `★ Gate 2` unchecked).
 
+## Stage 2.6: R011 P3 Polish, Q4 Multi-Account Quota & Minimalist Chat /ui (R013)
+- [x] 2.6.1 Harden HTTP/Origin and test socket isolation (R011 P3-1..4): catch `ValueError` in `_is_valid_origin` and `_is_exact_daemon_origin` on malformed ports (`403`), set `close_connection = True` on `_send_json` for `status >= 400`, add `CONSILIUM_SOCKET_FALLBACK_DIR` in `resolve_socket_path` (updating `test_wakeup_and_cold_fallback.py`), and surface explicit `127.0.0.1` vs `localhost` login warning in `/ui` and `README.md`.
+- [x] 2.6.2 Implement Q4 read-only Cockpit quota whitelist and active-account aggregation: restrict `consilium/quota.py` to `codex_accounts.json` metadata (`id`/`email`/`plan_type`/`current_account_id`) plus `codex-quota-history-v1.sqlite` & `platform-quota-history-v1.sqlite`, SHA-256 hash account refs (`_hash_account_ref`), sync `quota_accounts` (`is_current`/`is_historical`), and aggregate active-account posture (`active_account_id`, `active_account_alias`, `current_account_unknown`, `account_switch_suspected`, `pool`, `pool_has_capacity`, `best_backup`, `switch_hint`) in `BusStore.list_quota_windows`.
+- [x] 2.6.3 Redesign `/ui` (`consilium/dashboard.py`) as minimalist conversation stream (R011 Gate 2 direction + 6 prototype fixes + Q1 read-only scope): retractable `会诊列表` sidebar (responsive closed on `<= 860px`), unclipped `.peer-subbar` 3-peer capsules + popover, centered conversation turns + `.timeline-fade`, read-only handoff composer + `/` palette (`--bg-elevated`, `Esc` close, `claude://code/new?q=` / `codex://new?prompt=` links only, zero stale hardcoded models), closed-by-default 5-tab right drawer (`任务`, `工作树`, `账号池`, `产物`, `子 Agent`), and full desktop `1440px` + mobile `390px` responsive polish.
+- [x] 2.6.4 Add `tests/test_r011_regressions.py` and update `tests/test_r010_regressions.py`, pass full `unittest` suite both with and without `CONSILIUM_DRY_RUN=1 CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC=1`, re-capture & visually/`ffprobe` verify `2026-11-20` Light/Dark `1440px`/`390px` PNGs + live SSE MP4, sync OpenSpec/READMEs, write `reviews/R013-antigravity-chat-ui-and-q4.md` (reserving `R012` for Codex), and commit topically (keeping `★ Gate 1` & `★ Gate 2` unchecked).
+
 ## Stage 3: Level-B Real App Trial (Blocked on ★ Gates 1 & 2)
 - [ ] 3.1 Add project-scoped `.mcp.json` / `.gitignore` and B-level worker script in `13_Consilium/`.
-- [ ] 3.2 Run live Claude Code (+ Codex if trusted) coordinator walkthrough with dashboard open.
+- [ ] 3.2 Run live Claude Code (+ Codex if trusted) coordinator walkthrough with dashboard open; validate Q2 (live composer dispatch) and Q3 (read-only local log mirror) readiness after Gate 2 approval.
 - [ ] ★ **Gate 3**: User confirms workflow smoothness.
 
 ## Stage 4: Level-C Live Installation (Blocked on ★ Gate 3 & User Consent)
@@ -41,7 +47,7 @@
 - [ ] 4.2 Present `--dry-run` plan → ★ User consent → `--apply` → `consilium doctor` → per-app smoke tests → `--uninstall` drill.
 
 ## Stage 5: Daily-Use Polish (Blocked on Stage 4)
-- [ ] 5.1 Mission templates, quota-aware dispatch hints, Markdown export, refined per-app skills.
+- [ ] 5.1 Mission templates, Q5 auto-dispatch hints (user-selectable), workspace/git diff tab, Markdown export, refined per-app skills.
 
 ## Stage 6: Operations (Blocked on Stage 5)
 - [ ] 6.1 Log rotation, daily `bus.db` 7-day backup, daemon/client version mismatch indicator on dashboard.
