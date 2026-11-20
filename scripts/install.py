@@ -136,13 +136,41 @@ def _atomic_write_text(path: str, content: str, mode: int = 0o600) -> None:
         raise
 
 
+_BEARER_RE = re.compile(r"(Bearer\s+)[^\s\"'`]+", re.IGNORECASE)
+_AUTH_JSON_RE = re.compile(r'("Authorization"\s*:\s*")[^"]+(")', re.IGNORECASE)
+_AUTH_TOML_RE = re.compile(r'(Authorization\s*=\s*")[^"]+(")', re.IGNORECASE)
+
+
+def _redact_secrets(text: str, secrets: Iterable[str] = ()) -> str:
+    """Scrub Bearer tokens and explicit secret strings from diagnostic/rollback text."""
+    out = str(text or "")
+    if not out:
+        return out
+    out = _BEARER_RE.sub(r"\1[REDACTED]", out)
+    out = _AUTH_JSON_RE.sub(r"\1[REDACTED]\2", out)
+    out = _AUTH_TOML_RE.sub(r"\1[REDACTED]\2", out)
+    for secret in sorted({str(s or "").strip() for s in secrets if s}, key=len, reverse=True):
+        if len(secret) >= 6:
+            out = out.replace(secret, "[REDACTED]")
+    return out
+
+
 def _backup_file(target_path: str, home_dir: str, backup_root: str) -> Optional[str]:
     if not os.path.exists(target_path):
         return None
+    os.makedirs(backup_root, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(backup_root, 0o700)
+    except OSError:
+        pass
     rel = os.path.relpath(target_path, home_dir)
     dest = os.path.join(backup_root, rel)
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    os.makedirs(os.path.dirname(dest), mode=0o700, exist_ok=True)
     shutil.copy2(target_path, dest)
+    try:
+        os.chmod(dest, 0o600)
+    except OSError:
+        pass
     return dest
 
 
@@ -317,6 +345,7 @@ def _apply_claude_code_mcp(
     backup_root: str,
     claude_bin: str,
     runner: Any = subprocess.run,
+    secrets_to_redact: Iterable[str] = (),
 ) -> None:
     """Apply Claude Code MCP change via CLI with saved entry and verified rollback."""
     saved_previous: Optional[Dict[str, Any]] = copy.deepcopy(previous_entry)
@@ -328,6 +357,80 @@ def _apply_claude_code_mcp(
 
     _backup_file(path, home_dir, backup_root)
     env = _claude_subprocess_env(home_dir)
+
+    def _restore_and_verify(failure_summary: str) -> str:
+        if not (removed_old and saved_previous is not None):
+            return "no previous entry to restore"
+        try:
+            rb_res = runner(
+                [
+                    claude_bin,
+                    "mcp",
+                    "add-json",
+                    "-s",
+                    "user",
+                    "consilium",
+                    json.dumps(saved_previous, ensure_ascii=False),
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except Exception as rb_exc:
+            raise RuntimeError(
+                _redact_secrets(
+                    f"{failure_summary}; rollback invocation failed ({type(rb_exc).__name__}: {rb_exc}); "
+                    f"restore backup from {backup_root}",
+                    secrets_to_redact,
+                )
+            ) from rb_exc
+        if rb_res.returncode != 0:
+            raise RuntimeError(
+                _redact_secrets(
+                    f"{failure_summary}; rollback add-json also failed "
+                    f"({rb_res.returncode}): {rb_res.stderr or rb_res.stdout}; "
+                    f"restore backup from {backup_root}",
+                    secrets_to_redact,
+                )
+            )
+        verify_res = runner(
+            [claude_bin, "mcp", "get", "consilium"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if verify_res.returncode != 0:
+            raise RuntimeError(
+                _redact_secrets(
+                    f"{failure_summary}; rollback verification via "
+                    f"`claude mcp get consilium` failed ({verify_res.returncode}): "
+                    f"{verify_res.stderr or verify_res.stdout}; restore backup from {backup_root}",
+                    secrets_to_redact,
+                )
+            )
+        if os.path.exists(path):
+            restored_data = _load_json_dict(path)
+            restored_entry = (restored_data.get("mcpServers") or {}).get("consilium")
+            if restored_entry != saved_previous:
+                raise RuntimeError(
+                    _redact_secrets(
+                        f"{failure_summary}; rollback verification "
+                        f"failed: {path} consilium entry does not match saved previous entry; "
+                        f"restore backup from {backup_root}",
+                        secrets_to_redact,
+                    )
+                )
+        elif saved_previous is not None:
+            raise RuntimeError(
+                _redact_secrets(
+                    f"{failure_summary}; rollback verification "
+                    f"failed: {path} missing after rollback; restore backup from {backup_root}",
+                    secrets_to_redact,
+                )
+            )
+        return "previous entry restored and verified"
 
     # Probe via `claude mcp get consilium` before removal so prior state is confirmed.
     if saved_previous is not None or remove:
@@ -350,76 +453,34 @@ def _apply_claude_code_mcp(
         )
         if remove and rm_res.returncode != 0:
             raise RuntimeError(
-                f"claude mcp remove failed ({rm_res.returncode}): {rm_res.stderr or rm_res.stdout}"
+                _redact_secrets(
+                    f"claude mcp remove failed ({rm_res.returncode}): {rm_res.stderr or rm_res.stdout}",
+                    secrets_to_redact,
+                )
             )
         removed_old = rm_res.returncode == 0
 
     if not remove:
         payload_json = json.dumps(desired, ensure_ascii=False)
-        add_res = runner(
-            [claude_bin, "mcp", "add-json", "-s", "user", "consilium", payload_json],
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if add_res.returncode != 0:
-            rollback_note = "no previous entry to restore"
-            if removed_old and saved_previous is not None:
-                rb_res = runner(
-                    [
-                        claude_bin,
-                        "mcp",
-                        "add-json",
-                        "-s",
-                        "user",
-                        "consilium",
-                        json.dumps(saved_previous, ensure_ascii=False),
-                    ],
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if rb_res.returncode != 0:
-                    raise RuntimeError(
-                        f"claude mcp add-json failed ({add_res.returncode}): "
-                        f"{add_res.stderr or add_res.stdout}; rollback add-json also failed "
-                        f"({rb_res.returncode}): {rb_res.stderr or rb_res.stdout}; "
-                        f"restore backup from {backup_root}"
-                    )
-                verify_res = runner(
-                    [claude_bin, "mcp", "get", "consilium"],
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if verify_res.returncode != 0:
-                    raise RuntimeError(
-                        f"claude mcp add-json failed ({add_res.returncode}): "
-                        f"{add_res.stderr or add_res.stdout}; rollback verification via "
-                        f"`claude mcp get consilium` failed ({verify_res.returncode}): "
-                        f"{verify_res.stderr or verify_res.stdout}; restore backup from {backup_root}"
-                    )
-                if os.path.exists(path):
-                    restored_data = _load_json_dict(path)
-                    restored_entry = (restored_data.get("mcpServers") or {}).get("consilium")
-                    if restored_entry != saved_previous:
-                        raise RuntimeError(
-                            f"claude mcp add-json failed ({add_res.returncode}); rollback verification "
-                            f"failed: {path} consilium entry does not match saved previous entry; "
-                            f"restore backup from {backup_root}"
-                        )
-                elif saved_previous is not None:
-                    raise RuntimeError(
-                        f"claude mcp add-json failed ({add_res.returncode}); rollback verification "
-                        f"failed: {path} missing after rollback; restore backup from {backup_root}"
-                    )
-                rollback_note = "previous entry restored and verified"
+        try:
+            add_res = runner(
+                [claude_bin, "mcp", "add-json", "-s", "user", "consilium", payload_json],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except Exception as add_exc:
+            summary = f"claude mcp add-json raised {type(add_exc).__name__}: {add_exc}"
+            rollback_note = _restore_and_verify(summary)
             raise RuntimeError(
-                f"claude mcp add-json failed ({add_res.returncode}): "
-                f"{add_res.stderr or add_res.stdout} ({rollback_note})"
+                _redact_secrets(f"{summary} ({rollback_note})", secrets_to_redact)
+            ) from add_exc
+        if add_res.returncode != 0:
+            summary = f"claude mcp add-json failed ({add_res.returncode}): {add_res.stderr or add_res.stdout}"
+            rollback_note = _restore_and_verify(summary)
+            raise RuntimeError(
+                _redact_secrets(f"{summary} ({rollback_note})", secrets_to_redact)
             )
 
 
@@ -781,7 +842,9 @@ def rotate_token(
         else os.path.join(home_dir, "Library", "Application Support", "consilium")
     )
     backup_root = os.path.join(resolved_state, "backups", f"rotate-{_timestamp_tag()}")
+    existing_token = read_auth_token(resolved_state) or ""
     new_token = generate_auth_token()
+    secrets_to_redact: List[str] = [s for s in (existing_token, new_token) if s]
 
     antigravity_path = os.path.join(home_dir, ".gemini", "config", "mcp_config.json")
     claude_code_path = os.path.join(home_dir, ".claude.json")
@@ -792,7 +855,14 @@ def rotate_token(
     ag_content: Optional[str] = None
     if ag_exists:
         ag_data = _load_json_dict(antigravity_path)
-        if "consilium" in (ag_data.get("mcpServers") or {}):
+        ag_entry = (ag_data.get("mcpServers") or {}).get("consilium")
+        if isinstance(ag_entry, dict):
+            hdrs = ag_entry.get("headers") or {}
+            if isinstance(hdrs, dict) and hdrs.get("Authorization"):
+                auth_val = str(hdrs["Authorization"]).strip()
+                secrets_to_redact.append(auth_val)
+                if auth_val.startswith("Bearer "):
+                    secrets_to_redact.append(auth_val[7:].strip())
             _, _, ag_content = _plan_json_mcp(
                 antigravity_path,
                 {
@@ -814,6 +884,13 @@ def rotate_token(
         cc_data = _load_json_dict(claude_code_path)
         if "consilium" in (cc_data.get("mcpServers") or {}):
             cc_prev = cc_data["mcpServers"]["consilium"]
+            if isinstance(cc_prev, dict):
+                hdrs = cc_prev.get("headers") or {}
+                if isinstance(hdrs, dict) and hdrs.get("Authorization"):
+                    auth_val = str(hdrs["Authorization"]).strip()
+                    secrets_to_redact.append(auth_val)
+                    if auth_val.startswith("Bearer "):
+                        secrets_to_redact.append(auth_val[7:].strip())
             cc_needs_update = True
             if not (os.path.isfile(claude_bin) and os.access(claude_bin, os.X_OK)):
                 raise FileNotFoundError(f"Executable claude CLI not found at {claude_bin}")
@@ -844,6 +921,7 @@ def rotate_token(
                 backup_root=backup_root,
                 claude_bin=claude_bin,
                 runner=claude_runner,
+                secrets_to_redact=secrets_to_redact,
             )
 
         steps.append(("claude_code_mcp", claude_code_path, _rot_cc))
@@ -855,7 +933,7 @@ def rotate_token(
 
         steps.append(("codex_mcp", codex_path, _rot_cx))
 
-    previous_token_existed = bool(read_auth_token(resolved_state))
+    previous_token_existed = bool(existing_token)
     token_path = os.path.join(resolved_state, "auth.token")
     if previous_token_existed:
         _backup_file(token_path, resolved_state, backup_root)
@@ -887,52 +965,68 @@ def rotate_token(
                 )
             else:
                 rollback_instructions.append(
-                    f"Restore previous server token into {token_path} and restart consilium serve."
+                    f"Restore previous server token from protected backup into {token_path} and restart consilium serve."
                 )
             for done_target in updated_targets:
-                if done_target == "antigravity_mcp" and actual_backup:
-                    bak = os.path.join(actual_backup, os.path.relpath(antigravity_path, home_dir))
+                if done_target == "antigravity_mcp":
+                    bak = os.path.join(actual_backup, os.path.relpath(antigravity_path, home_dir)) if actual_backup else ""
                     rollback_instructions.append(
-                        f"Restore Antigravity config: cp -f {bak!r} {antigravity_path!r}"
+                        f"Restore Antigravity config from protected backup: cp -f {bak!r} {antigravity_path!r}"
+                        if bak
+                        else f"Inspect {antigravity_path!r} and restore previous consilium entry."
                     )
                 elif done_target == "claude_code_mcp":
                     bak = os.path.join(actual_backup, os.path.relpath(claude_code_path, home_dir)) if actual_backup else ""
-                    if cc_prev is not None:
-                        rollback_instructions.append(
-                            f"Restore Claude Code MCP: {claude_bin} mcp remove -s user consilium && "
-                            f"{claude_bin} mcp add-json -s user consilium {json.dumps(cc_prev, ensure_ascii=False)!r}"
-                            + (f" (or restore backup {bak!r} -> {claude_code_path!r})" if bak else "")
-                        )
-                    elif bak:
-                        rollback_instructions.append(
-                            f"Restore Claude Code config: cp -f {bak!r} {claude_code_path!r}"
-                        )
-                elif done_target == "codex_mcp" and actual_backup:
-                    bak = os.path.join(actual_backup, os.path.relpath(codex_path, home_dir))
                     rollback_instructions.append(
-                        f"Restore Codex config: cp -f {bak!r} {codex_path!r}"
+                        (
+                            f"Restore Claude Code config from 0o600 protected backup {bak!r} "
+                            f"(e.g., restore `mcpServers.consilium` from backup into {claude_code_path!r} or re-register via "
+                            f"`{claude_bin} mcp add-json` using the backed-up entry) and verify with `{claude_bin} mcp get consilium`."
+                        )
+                        if bak
+                        else f"Restore Claude Code `mcpServers.consilium` in {claude_code_path!r} and verify with `{claude_bin} mcp get consilium`."
+                    )
+                elif done_target == "codex_mcp":
+                    bak = os.path.join(actual_backup, os.path.relpath(codex_path, home_dir)) if actual_backup else ""
+                    rollback_instructions.append(
+                        f"Restore Codex managed block from protected backup: cp -f {bak!r} {codex_path!r}"
+                        if bak
+                        else f"Inspect managed block in {codex_path!r} and restore previous token."
                     )
             if not updated_targets:
-                rollback_instructions.append("No client configs were modified before the failure.")
+                rollback_instructions.append("No client configs completed before the failure.")
 
+            if actual_backup and os.path.exists(dest_path or ""):
+                rollback_instructions.append(
+                    f"Failed step {target_name!r} may have partially mutated {dest_path!r}; verify or restore from {actual_backup!r}."
+                )
+
+            safe_error = _redact_secrets(str(exc), secrets_to_redact)
+            safe_instructions = [_redact_secrets(inst, secrets_to_redact) for inst in rollback_instructions]
             report = {
                 "rotated": False,
                 "state_dir": resolved_state,
                 "port": port,
                 "failed_target": target_name,
-                "error": str(exc),
+                "failed_target_path": dest_path or "",
+                "failed_target_may_be_modified": True,
+                "codex_scope": "managed_block_only",
+                "error": safe_error,
                 "updated_targets": updated_targets,
                 "updated_paths": updated_paths,
                 "remaining_targets": remaining_targets,
                 "server_token_rotated": server_rotated,
                 "backup_root": actual_backup,
-                "rollback_instructions": rollback_instructions,
+                "rollback_instructions": safe_instructions,
             }
-            summary = (
-                f"rotate-token failed at {target_name}: {exc}. "
-                f"Updated targets={updated_targets}; remaining={remaining_targets}; "
-                f"server_token_rotated={server_rotated}; backup_root={actual_backup!r}. "
-                f"Rollback: {' | '.join(rollback_instructions)}"
+            summary = _redact_secrets(
+                (
+                    f"rotate-token failed at {target_name}: {safe_error}. "
+                    f"Updated targets={updated_targets}; remaining={remaining_targets}; "
+                    f"server_token_rotated={server_rotated}; backup_root={actual_backup!r}. "
+                    f"Rollback: {' | '.join(safe_instructions)}"
+                ),
+                secrets_to_redact,
             )
             raise TokenRotationError(summary, report=report) from exc
 

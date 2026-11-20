@@ -71,6 +71,13 @@ def _parse_bool(args: Dict[str, Any], key: str, default: bool) -> bool:
 def _safe_ring_peer(**kwargs: Any) -> Dict[str, Any]:
     """Invoke ring_peer without letting notification errors fail an already-committed DB write."""
     peer_id = str(kwargs.get("peer_id", ""))
+    store = kwargs.get("store")
+    event_ids = kwargs.get("event_ids")
+    if store is not None and event_ids and kwargs.get("on_escalate") is None:
+        tracked_ids = list(event_ids)
+        kwargs["on_escalate"] = lambda cold_res: _safe_record_event_delivery(
+            store, tracked_ids, cold_res
+        )
     try:
         return ring_peer(**kwargs)
     except Exception as exc:
@@ -79,6 +86,37 @@ def _safe_ring_peer(**kwargs: Any) -> Dict[str, Any]:
             "peer_id": peer_id,
             "error": f"{type(exc).__name__}: {exc}",
         }
+
+
+def _safe_save_idempotency_delivery(
+    store: BusStore,
+    client_request_id: Optional[str],
+    delivery: Dict[str, Any],
+) -> Optional[str]:
+    """Best-effort persistence of post-commit delivery receipt onto idempotency row."""
+    req_id = (str(client_request_id) if client_request_id is not None else "").strip()
+    if not req_id:
+        return None
+    try:
+        store.save_idempotency_delivery(req_id, delivery)
+        return None
+    except Exception as exc:
+        return f"save_idempotency_delivery({req_id}): {type(exc).__name__}: {exc}"
+
+
+def _replay_delivery_payload(
+    res: Dict[str, Any], *, multi: bool = False
+) -> Dict[str, Any]:
+    """Return the originally persisted delivery receipt on idempotent replay when present."""
+    cached = res.pop("_cached_delivery", None)
+    if isinstance(cached, dict):
+        out = dict(cached)
+        out["idempotent_replay"] = True
+        return out
+    out = {"delivery": "replayed", "idempotent_replay": True}
+    if multi:
+        out["deliveries"] = []
+    return out
 
 
 def _safe_record_event_delivery(
@@ -548,17 +586,13 @@ class ConsiliumMCPDispatcher:
                 client_request_id=str(client_req_id) if client_req_id is not None else None,
             )
             if created.get("idempotent_replay"):
-                replay_delivery: Dict[str, Any] = {
-                    "delivery": "replayed",
-                    "idempotent_replay": True,
-                    "deliveries": [],
-                }
+                replay_delivery = _replay_delivery_payload(created, multi=True)
                 return {
                     **created,
                     "committed": True,
                     "result": created,
                     "delivery": replay_delivery,
-                    "deliveries": [],
+                    "deliveries": replay_delivery.get("deliveries", []),
                 }
             mission = created["mission"]
             tasks_by_peer: Dict[str, List[Dict[str, Any]]] = {}
@@ -610,6 +644,7 @@ class ConsiliumMCPDispatcher:
             )
             if all_warnings:
                 delivery_summary["warnings"] = all_warnings
+            _safe_save_idempotency_delivery(self.store, client_req_id, delivery_summary)
             return {
                 **created,
                 "committed": True,
@@ -633,7 +668,7 @@ class ConsiliumMCPDispatcher:
                 caller_scope=(f"peer:{self.default_peer}" if self.default_peer else None),
             )
             if dispatched.get("idempotent_replay"):
-                replay_delivery = {"delivery": "replayed", "idempotent_replay": True}
+                replay_delivery = _replay_delivery_payload(dispatched)
                 return {
                     **dispatched,
                     "committed": True,
@@ -669,6 +704,7 @@ class ConsiliumMCPDispatcher:
             )
             if all_warnings:
                 delivery["warnings"] = all_warnings
+            _safe_save_idempotency_delivery(self.store, client_req_id, delivery)
             return {
                 **dispatched,
                 "committed": True,
@@ -719,7 +755,7 @@ class ConsiliumMCPDispatcher:
             )
             rec_warnings = []
             if res.get("idempotent_replay"):
-                delivery = {"delivery": "replayed", "idempotent_replay": True}
+                delivery = _replay_delivery_payload(res)
             elif res.get("event") and res.get("coordinator_peer"):
                 evt_id = int(res["event"]["event_id"])
                 ring_ms = time.time() * 1000.0
@@ -742,15 +778,16 @@ class ConsiliumMCPDispatcher:
                     rec_warnings.append(rw)
             else:
                 delivery = {"delivery": "none"}
-            pub_warn = self._emit_mutation("report_progress")
-            if pub_warn:
-                rec_warnings.append(pub_warn)
             if not res.get("idempotent_replay"):
+                pub_warn = self._emit_mutation("report_progress")
+                if pub_warn:
+                    rec_warnings.append(pub_warn)
                 all_warnings = _collect_post_commit_warnings(
                     res.get("post_commit_warnings"), delivery, rec_warnings
                 )
                 if all_warnings:
                     delivery["warnings"] = all_warnings
+                _safe_save_idempotency_delivery(self.store, client_req_id, delivery)
             return {**res, "committed": True, "result": res, "delivery": delivery}
 
         if name == "consilium_complete_task":
@@ -766,8 +803,7 @@ class ConsiliumMCPDispatcher:
             )
             rec_warnings = []
             if res.get("idempotent_replay"):
-                delivery = {"delivery": "replayed", "idempotent_replay": True}
-                self._emit_mutation("complete_task")
+                delivery = _replay_delivery_payload(res)
             else:
                 coord = res["coordinator_peer"]
                 evt_id = int(res["event"]["event_id"])
@@ -800,6 +836,7 @@ class ConsiliumMCPDispatcher:
                 )
                 if all_warnings:
                     delivery["warnings"] = all_warnings
+                _safe_save_idempotency_delivery(self.store, client_req_id, delivery)
             return {**res, "committed": True, "result": res, "delivery": delivery}
 
         if name == "consilium_requeue_task":
@@ -812,8 +849,7 @@ class ConsiliumMCPDispatcher:
             )
             rec_warnings = []
             if res.get("idempotent_replay"):
-                delivery = {"delivery": "replayed", "idempotent_replay": True}
-                self._emit_mutation("requeue_task")
+                delivery = _replay_delivery_payload(res)
             else:
                 eid = int(res["event"]["event_id"])
                 ring_ms = time.time() * 1000.0
@@ -842,6 +878,7 @@ class ConsiliumMCPDispatcher:
                 )
                 if all_warnings:
                     delivery["warnings"] = all_warnings
+                _safe_save_idempotency_delivery(self.store, client_req_id, delivery)
             return {**res, "committed": True, "result": res, "delivery": delivery}
 
         if name == "consilium_request_review":
@@ -857,8 +894,7 @@ class ConsiliumMCPDispatcher:
             )
             rec_warnings = []
             if res.get("idempotent_replay"):
-                delivery = {"delivery": "replayed", "idempotent_replay": True}
-                self._emit_mutation("request_review")
+                delivery = _replay_delivery_payload(res)
             else:
                 target = str(args["to_peer"]) if res["allowed"] else res["coordinator_peer"]
                 sender_norm = str(args["from_peer"]).strip().lower()
@@ -898,6 +934,7 @@ class ConsiliumMCPDispatcher:
                 )
                 if all_warnings:
                     delivery["warnings"] = all_warnings
+                _safe_save_idempotency_delivery(self.store, client_req_id, delivery)
             return {**res, "committed": True, "result": res, "delivery": delivery}
 
         if name == "consilium_wait":
@@ -920,19 +957,6 @@ class ConsiliumMCPDispatcher:
                     "consilium_wait is strictly read-only; auto_pickup is ignored. "
                     "Call consilium_pickup_inbox explicitly."
                 )
-            if wres.get("woke") and wres.get("source") in (
-                "kqueue",
-                "socket",
-                "immediate_after_register",
-            ):
-                try:
-                    woke_ms = time.time() * 1000.0
-                    self.store.record_peer_wakeup_latency(
-                        peer, woke_ms, max_event_id=wres.get("wake_seq")
-                    )
-                    self._emit_mutation("wait_woke")
-                except Exception:
-                    pass
             return wres
 
         if name == "consilium_quota":
@@ -961,17 +985,13 @@ class ConsiliumMCPDispatcher:
                 client_request_id=str(client_req_id) if client_req_id is not None else None,
             )
             if res.get("idempotent_replay"):
-                replay_delivery = {
-                    "delivery": "replayed",
-                    "idempotent_replay": True,
-                    "deliveries": [],
-                }
+                replay_delivery = _replay_delivery_payload(res, multi=True)
                 return {
                     **res,
                     "committed": True,
                     "result": res,
                     "delivery": replay_delivery,
-                    "deliveries": [],
+                    "deliveries": replay_delivery.get("deliveries", []),
                 }
             deliveries = []
             rec_warnings = []
@@ -1012,6 +1032,7 @@ class ConsiliumMCPDispatcher:
             )
             if all_warnings:
                 delivery_summary["warnings"] = all_warnings
+            _safe_save_idempotency_delivery(self.store, client_req_id, delivery_summary)
             return {
                 **res,
                 "committed": True,
@@ -1323,34 +1344,34 @@ class ConsiliumDaemon:
 
             def _authenticate_request(
                 self, *, allow_cookie: bool = False
-            ) -> Tuple[Optional[str], Optional[SessionRecord]]:
+            ) -> Tuple[Optional[str], Optional[SessionRecord], int]:
                 auth_hdr = self.headers.get("Authorization", "")
+                active_token, token_ver = daemon.get_auth_state()
                 if not daemon.require_token:
                     if auth_hdr.startswith("Bearer "):
-                        return "bearer", None
-                    return "open", None
-                active_token, token_ver = daemon.get_auth_state()
+                        return "bearer", None, token_ver
+                    return "open", None, token_ver
                 expected_hdr = f"Bearer {active_token}"
                 if auth_hdr and hmac.compare_digest(auth_hdr, expected_hdr):
-                    return "bearer", None
+                    return "bearer", None, token_ver
                 if allow_cookie:
                     cookies = parse_cookie_header(self.headers.get("Cookie", ""))
                     sess_id = cookies.get(SESSION_COOKIE_NAME, "")
                     session_rec = daemon.session_store.get(sess_id, token_ver)
                     if session_rec is not None:
-                        return "cookie", session_rec
-                return None, None
+                        return "cookie", session_rec, token_ver
+                return None, None, token_ver
 
             def _check_security(
                 self, *, allow_cookie: bool = False
-            ) -> Tuple[bool, Optional[str], Optional[SessionRecord]]:
+            ) -> Tuple[bool, Optional[str], Optional[SessionRecord], int]:
                 if not self._check_host_origin():
-                    return False, None, None
-                mode, session_rec = self._authenticate_request(allow_cookie=allow_cookie)
+                    return False, None, None, 0
+                mode, session_rec, token_ver = self._authenticate_request(allow_cookie=allow_cookie)
                 if mode is None:
                     self._send_json(401, {"error": "Unauthorized"})
-                    return False, None, None
-                return True, mode, session_rec
+                    return False, None, None, token_ver
+                return True, mode, session_rec, token_ver
 
             def _check_cookie_write_csrf(
                 self, auth_mode: str, session_rec: Optional[SessionRecord]
@@ -1376,14 +1397,57 @@ class ConsiliumDaemon:
                         return False
                 return True
 
+            def _parse_strict_content_length(self) -> Tuple[bool, Optional[int], int, str]:
+                """Validate HTTP/1.1 Transfer-Encoding and Content-Length framing strictly."""
+                if self.headers.get_all("Transfer-Encoding"):
+                    return False, None, 501, "Transfer-Encoding is not supported"
+                cl_headers = self.headers.get_all("Content-Length") or []
+                if len(cl_headers) > 1:
+                    return False, None, 400, "Duplicate Content-Length header"
+                if not cl_headers:
+                    return True, None, 200, ""
+                raw_len = cl_headers[0].strip()
+                if not raw_len or not raw_len.isascii() or not raw_len.isdigit():
+                    return False, None, 400, "Invalid Content-Length"
+                return True, int(raw_len), 200, ""
+
+            def _consume_optional_body(self, max_bytes: int = 65536) -> bool:
+                """Drain small bounded request bodies on keep-alive POST routes or reject framing errors."""
+                if getattr(self, "_body_consumed", False):
+                    return True
+                ok_len, length, err_status, err_msg = self._parse_strict_content_length()
+                if not ok_len:
+                    self._send_json(err_status, {"error": err_msg})
+                    return False
+                if length is None or length == 0:
+                    self._body_consumed = True
+                    return True
+                if length > max_bytes:
+                    self._send_json(413, {"error": "Payload too large"})
+                    return False
+                raw = self.rfile.read(length)
+                if len(raw) != length:
+                    self._send_json(400, {"error": "Incomplete request body"})
+                    return False
+                self._body_consumed = True
+                return True
+
             def _send_json(
                 self,
                 status: int,
                 body: Any,
                 extra_headers: Optional[Dict[str, str]] = None,
             ) -> None:
-                if status >= 400:
-                    # Close keep-alive connections on error so unread request bodies cannot desync framing (P3-2).
+                has_unconsumed_post = (
+                    getattr(self, "command", "") in ("POST", "PUT", "PATCH")
+                    and not getattr(self, "_body_consumed", False)
+                    and bool(
+                        self.headers.get_all("Transfer-Encoding")
+                        or any(v.strip() != "0" for v in (self.headers.get_all("Content-Length") or []))
+                    )
+                )
+                if status >= 400 or has_unconsumed_post:
+                    # Close keep-alive connections on error or unconsumed body so framing never desyncs (P3-2).
                     self.close_connection = True
                 encoded = json.dumps(body, ensure_ascii=False).encode("utf-8")
                 self.send_response(status)
@@ -1421,24 +1485,24 @@ class ConsiliumDaemon:
                 self.wfile.write(encoded)
 
             def _read_json_body(self) -> Tuple[bool, Any]:
-                raw_len = self.headers.get("Content-Length")
-                if raw_len is None or raw_len.strip() == "":
+                ok_len, length, err_status, err_msg = self._parse_strict_content_length()
+                if not ok_len:
+                    self._send_json(err_status, {"error": err_msg})
+                    return False, None
+                if length is None:
                     self._send_json(400, {"error": "Missing or invalid Content-Length"})
-                    return False, None
-                try:
-                    length = int(raw_len.strip())
-                except ValueError:
-                    self._send_json(400, {"error": "Invalid Content-Length"})
-                    return False, None
-                if length < 0:
-                    self._send_json(400, {"error": "Negative Content-Length"})
                     return False, None
                 if length > 2 * 1024 * 1024:
                     self._send_json(413, {"error": "Payload too large"})
                     return False, None
-                raw = self.rfile.read(length) if length > 0 else b""
-                if not raw:
+                if length == 0:
+                    self._body_consumed = True
                     return True, {}
+                raw = self.rfile.read(length)
+                if len(raw) != length:
+                    self._send_json(400, {"error": "Incomplete request body"})
+                    return False, None
+                self._body_consumed = True
                 try:
                     return True, json.loads(raw.decode("utf-8"))
                 except ValueError as exc:
@@ -1452,6 +1516,7 @@ class ConsiliumDaemon:
                 self,
                 parsed_url: urllib.parse.ParseResult,
                 session_rec: Optional[SessionRecord],
+                auth_token_ver: int,
             ) -> None:
                 qs = urllib.parse.parse_qs(parsed_url.query)
                 max_events = 0
@@ -1461,7 +1526,7 @@ class ConsiliumDaemon:
                     except ValueError:
                         max_events = 0
 
-                _, stream_tok_ver = daemon.get_auth_state()
+                stream_tok_ver = int(auth_token_ver)
                 stream_sess_id = session_rec.session_id if session_rec is not None else ""
                 sub = daemon.event_hub.subscribe(
                     session_id=stream_sess_id,
@@ -1474,22 +1539,39 @@ class ConsiliumDaemon:
                     )
                     return
 
-                self.connection.settimeout(10.0)
-                self.close_connection = True
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-                self.send_header("Cache-Control", "no-cache, no-store")
-                self.send_header("X-Content-Type-Options", "nosniff")
-                self.send_header("Referrer-Policy", "no-referrer")
-                self.send_header("Connection", "close")
-                self.end_headers()
+                def _stream_still_authorized() -> bool:
+                    if daemon._stop_event.is_set() or sub.closed_event.is_set():
+                        return False
+                    _, cur_ver = daemon.get_auth_state()
+                    if daemon.require_token and cur_ver != stream_tok_ver:
+                        return False
+                    if stream_sess_id and daemon.session_store.get(stream_sess_id, cur_ver) is None:
+                        return False
+                    return True
 
-                sent_count = 0
-                last_ping = time.monotonic()
                 try:
+                    if not _stream_still_authorized():
+                        self._send_json(401, {"error": "Unauthorized"})
+                        return
+
+                    self.connection.settimeout(10.0)
+                    self.close_connection = True
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                    self.send_header("Cache-Control", "no-cache, no-store")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.send_header("Referrer-Policy", "no-referrer")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+
+                    sent_count = 0
+                    last_ping = time.monotonic()
                     ver0, initial = daemon.event_hub.snapshot_with_version(
                         lambda: daemon.get_dashboard_state(sync_quotas=False)
                     )
+                    # Re-check authorization after snapshot lock before writing initial frame (R012 P1 #2).
+                    if not _stream_still_authorized():
+                        return
                     last_sent_ver = ver0
                     last_fp = compute_state_fingerprint(initial)
                     last_waiters = dict(initial.get("active_waiters") or {})
@@ -1504,17 +1586,10 @@ class ConsiliumDaemon:
                     if max_events and sent_count >= max_events:
                         return
 
-                    while not daemon._stop_event.is_set() and not sub.closed_event.is_set():
-                        # Check live token rotation and session revocation even during idle loops.
-                        _, cur_tok_ver = daemon.get_auth_state()
-                        if daemon.require_token and cur_tok_ver != sub.token_version:
-                            break
-                        if stream_sess_id and daemon.session_store.get(stream_sess_id, cur_tok_ver) is None:
-                            break
-
+                    while _stream_still_authorized():
                         try:
                             seq, ev_name, payload = sub.queue.get(timeout=0.5)
-                            if ev_name == "__close__" or sub.closed_event.is_set():
+                            if ev_name == "__close__" or not _stream_still_authorized():
                                 break
                             if seq <= last_sent_ver:
                                 continue
@@ -1534,29 +1609,33 @@ class ConsiliumDaemon:
                             if max_events and sent_count >= max_events:
                                 return
                         except queue.Empty:
-                            if sub.closed_event.is_set():
+                            if not _stream_still_authorized():
                                 break
                             cur_state = daemon.get_cached_dashboard_state(max_age_sec=0.35)
                             cur_fp = compute_state_fingerprint(cur_state)
                             if cur_fp != last_fp:
-                                cur_waiters = dict(cur_state.get("active_waiters") or {})
+                                # Re-read state under _publish_lock so a newer version cannot carry an older snapshot (R012 P2).
+                                ver_ext, stamped = daemon.event_hub.snapshot_with_version(
+                                    lambda: daemon.get_dashboard_state(sync_quotas=False)
+                                )
+                                if not _stream_still_authorized():
+                                    break
+                                stamped_fp = compute_state_fingerprint(stamped)
+                                stamped_waiters = dict(stamped.get("active_waiters") or {})
                                 reason = (
                                     "waiter_change"
-                                    if cur_waiters != last_waiters
+                                    if stamped_waiters != last_waiters
                                     else "external_change"
                                 )
-                                ver_ext, stamped = daemon.event_hub.snapshot_with_version(
-                                    lambda: dict(cur_state)
-                                )
-                                last_fp = cur_fp
-                                last_waiters = cur_waiters
+                                last_fp = stamped_fp
+                                last_waiters = stamped_waiters
                                 if ver_ext <= last_sent_ver:
                                     continue
                                 last_sent_ver = ver_ext
                                 ext_frame = (
                                     f"id: {ver_ext}\n"
                                     f"event: update\n"
-                                    f"data: {json.dumps({'reason': reason, 'active_waiters': cur_waiters, 'version': ver_ext, 'state': stamped}, ensure_ascii=False)}\n\n"
+                                    f"data: {json.dumps({'reason': reason, 'active_waiters': stamped_waiters, 'version': ver_ext, 'state': stamped}, ensure_ascii=False)}\n\n"
                                 ).encode("utf-8")
                                 self.wfile.write(ext_frame)
                                 self.wfile.flush()
@@ -1573,6 +1652,7 @@ class ConsiliumDaemon:
                     daemon.event_hub.unsubscribe(sub)
 
             def do_GET(self) -> None:
+                self._body_consumed = True
                 parsed = urllib.parse.urlparse(self.path)
                 route = parsed.path
                 if route in ("/", "/ui", "/ui/auth"):
@@ -1619,7 +1699,7 @@ class ConsiliumDaemon:
                     return
 
                 if route == "/api/state":
-                    ok_sec, _, session_rec = self._check_security(allow_cookie=True)
+                    ok_sec, _, session_rec, _ = self._check_security(allow_cookie=True)
                     if not ok_sec:
                         return
                     ver_before = daemon.event_hub.current_version()
@@ -1631,13 +1711,13 @@ class ConsiliumDaemon:
                     return
 
                 if route == "/api/stream":
-                    ok_sec, _, session_rec = self._check_security(allow_cookie=True)
+                    ok_sec, _, session_rec, auth_token_ver = self._check_security(allow_cookie=True)
                     if not ok_sec:
                         return
-                    self._handle_sse_stream(parsed, session_rec)
+                    self._handle_sse_stream(parsed, session_rec, auth_token_ver)
                     return
 
-                ok_sec, _, _ = self._check_security()
+                ok_sec, _, _, _ = self._check_security()
                 if not ok_sec:
                     return
                 if route == "/health":
@@ -1660,6 +1740,7 @@ class ConsiliumDaemon:
                 self._send_json(404, {"error": "Not found"})
 
             def do_POST(self) -> None:
+                self._body_consumed = False
                 route = urllib.parse.urlparse(self.path).path
 
                 if route == "/api/login":
@@ -1694,11 +1775,17 @@ class ConsiliumDaemon:
                     return
 
                 if route == "/api/ui-ticket":
-                    ok_sec, _, _ = self._check_security(allow_cookie=False)
+                    ok_sec, _, _, auth_token_ver = self._check_security(allow_cookie=False)
                     if not ok_sec:
                         return
-                    _, token_ver = daemon.get_auth_state()
-                    ticket = daemon.ticket_store.issue(token_version=token_ver, ttl_sec=30.0)
+                    if not self._consume_optional_body():
+                        return
+                    ticket = daemon.ticket_store.issue(token_version=auth_token_ver, ttl_sec=30.0)
+                    _, cur_ver = daemon.get_auth_state()
+                    if daemon.require_token and cur_ver != auth_token_ver:
+                        daemon.ticket_store.consume(ticket, auth_token_ver)
+                        self._send_json(401, {"error": "Unauthorized"})
+                        return
                     auth_url = f"http://{daemon.host}:{daemon.port}/ui/auth?ticket={ticket}"
                     self._send_json(
                         200,
@@ -1716,6 +1803,9 @@ class ConsiliumDaemon:
                     if existing_sess is not None:
                         if not self._check_cookie_write_csrf("cookie", existing_sess):
                             return
+                    if not self._consume_optional_body():
+                        return
+                    if existing_sess is not None:
                         daemon.session_store.revoke(existing_sess.session_id)
                         daemon.event_hub.close_for_session(existing_sess.session_id)
                     self._send_json(
@@ -1731,7 +1821,7 @@ class ConsiliumDaemon:
                     return
 
                 if route.startswith("/api/missions/") and route.endswith("/close"):
-                    ok_sec, auth_mode, session_rec = self._check_security(allow_cookie=True)
+                    ok_sec, auth_mode, session_rec, _ = self._check_security(allow_cookie=True)
                     if not ok_sec or auth_mode is None:
                         return
                     if not self._check_cookie_write_csrf(auth_mode, session_rec):
@@ -1758,12 +1848,13 @@ class ConsiliumDaemon:
                             caller_scope="dashboard",
                         )
                         if res.get("idempotent_replay"):
+                            replay_delivery = _replay_delivery_payload(res, multi=True)
                             self._send_json(
                                 200,
                                 {
                                     "committed": True,
                                     "result": res,
-                                    "delivery": {"delivery": "replayed", "idempotent_replay": True, "deliveries": []},
+                                    "delivery": replay_delivery,
                                 },
                             )
                             return
@@ -1807,6 +1898,9 @@ class ConsiliumDaemon:
                             all_warnings.append(f"publish_state_update: {pub_exc}")
                         if all_warnings:
                             delivery_summary["warnings"] = all_warnings
+                        _safe_save_idempotency_delivery(
+                            daemon.dispatcher.store, client_req_id, delivery_summary
+                        )
                         self._send_json(
                             200,
                             {
@@ -1824,7 +1918,7 @@ class ConsiliumDaemon:
                     return
 
                 if route.startswith("/api/tasks/") and route.endswith("/requeue"):
-                    ok_sec, auth_mode, session_rec = self._check_security(allow_cookie=True)
+                    ok_sec, auth_mode, session_rec, _ = self._check_security(allow_cookie=True)
                     if not ok_sec or auth_mode is None:
                         return
                     if not self._check_cookie_write_csrf(auth_mode, session_rec):
@@ -1847,12 +1941,13 @@ class ConsiliumDaemon:
                             caller_scope="dashboard",
                         )
                         if res.get("idempotent_replay"):
+                            replay_delivery = _replay_delivery_payload(res)
                             self._send_json(
                                 200,
                                 {
                                     "committed": True,
                                     "result": res,
-                                    "delivery": {"delivery": "replayed", "idempotent_replay": True},
+                                    "delivery": replay_delivery,
                                 },
                             )
                             return
@@ -1884,6 +1979,9 @@ class ConsiliumDaemon:
                             all_warnings.append(f"publish_state_update: {pub_exc}")
                         if all_warnings:
                             delivery["warnings"] = all_warnings
+                        _safe_save_idempotency_delivery(
+                            daemon.dispatcher.store, client_req_id, delivery
+                        )
                         self._send_json(
                             200,
                             {"committed": True, "result": res, "delivery": delivery},
@@ -1896,7 +1994,7 @@ class ConsiliumDaemon:
                         self._send_json(400, {"error": str(exc)})
                     return
 
-                ok_sec, _, _ = self._check_security()
+                ok_sec, _, _, _ = self._check_security()
                 if not ok_sec:
                     return
                 if route != "/mcp":
