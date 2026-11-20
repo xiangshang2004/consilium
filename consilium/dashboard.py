@@ -2210,11 +2210,19 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       (t.status === "queued" && !standby ? "" : '<span class="pend-dots"><i></i><i></i><i></i></span>') + openBtn + '</div>';
   }
 
+  // Keep the newest message in view: always after you send or open a conversation,
+  // and for incoming replies as long as you have not scrolled up to read earlier ones.
+  let scrollToLatest = false;
+  let lastShownMission = null;
+  let lastShownCount = -1;
   function renderConversation(state) {
     const container = document.getElementById("chat-container");
+    const scroller = document.getElementById("chat-scroll");
     const m = getActiveMission(state);
     document.querySelector(".chat-column").classList.toggle("is-new", !m);
     if (!m) {
+      lastShownMission = null;
+      lastShownCount = -1;
       const markEl = document.querySelector(".brand-mark");
       container.innerHTML = '<div class="chat-hero">' + (markEl ? markEl.innerHTML : "") + '<h2>今天会诊什么？</h2></div>';
       return;
@@ -2250,7 +2258,19 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     const closed = m.status === "completed" || m.status === "cancelled" || m.status === "failed";
     const pending = closed ? [] : tasks.filter(t => t.status === "queued" || t.status === "claimed" || t.status === "running");
     const head = "";
+    const wasAtBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
+    const switched = lastShownMission !== m.mission_id;
+    const count = items.length + pending.length;
+    const grew = count !== lastShownCount;
     container.innerHTML = head + items.map(i => i.html).join("") + pending.map(t => renderPending(t, state)).join("");
+    if (scrollToLatest || switched || (grew && wasAtBottom)) {
+      scroller.scrollTop = scroller.scrollHeight;
+      // Once more after layout settles (the composer and banners can still change height).
+      requestAnimationFrame(() => { scroller.scrollTop = scroller.scrollHeight; });
+      scrollToLatest = false;
+    }
+    lastShownMission = m.mission_id;
+    lastShownCount = count;
   }
 
   function renderRightDrawer(state) {
@@ -2649,6 +2669,10 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     const open = cur && !(cur.status === "completed" || cur.status === "cancelled" || cur.status === "failed");
     const path = open ? "/api/missions/" + encodeURIComponent(cur.mission_id) + "/message" : "/api/conversations";
     sending = true;
+    let accepted = false;
+    inp.value = "";
+    inp.style.height = "";
+    const restoreDraft = () => { if (!inp.value) { inp.value = text; inp.dispatchEvent(new Event("input")); } };
     renderComposerBar(appState);
     try {
       const res = await fetch(path, {
@@ -2658,11 +2682,11 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
         body: JSON.stringify(cur ? { text: text, targets: sendTargets.slice() }
                                  : { text: text, targets: sendTargets.slice(), workspace: composeWorkspace, tier: composeTier })
       });
-      if (res.status === 401) { showLogin(true); return; }
+      if (res.status === 401) { restoreDraft(); showLogin(true); return; }
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { showToast(data.error || ("发送失败（HTTP " + res.status + "）")); return; }
-      inp.value = "";
-      inp.style.height = "";
+      if (!res.ok) { restoreDraft(); showToast(data.error || ("发送失败（HTTP " + res.status + "）")); return; }
+      accepted = true;
+      scrollToLatest = true;
       composingNew = false;
       selectedMissionId = data.result.mission_id;
       if (!cur) rememberFolder(composeWorkspace);
@@ -2675,7 +2699,10 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       }
       await fetchState();
     } catch (err) {
-      showToast("发送失败：" + err);
+      // A failure after the server accepted the message must not put the text back,
+      // or pressing Enter again would send it twice.
+      if (!accepted) restoreDraft();
+      showToast(accepted ? "已发送，但刷新界面时出错：" + err : "发送失败：" + err);
     } finally {
       sending = false;
       renderComposerBar(appState);
@@ -2683,8 +2710,18 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   }
 
   document.getElementById("btn-send").addEventListener("click", sendMessage);
+  // Input methods (pinyin etc.) use Enter to confirm a candidate. WebKit reports that
+  // Enter with isComposing=false right after compositionend, so also check keyCode 229
+  // and the time since the composition ended; otherwise confirming a word sends the message.
+  let imeComposing = false;
+  let imeEndedAt = 0;
+  function isImeEnter(ev) {
+    return ev.isComposing || ev.keyCode === 229 || imeComposing || (Date.now() - imeEndedAt) < 150;
+  }
+  document.getElementById("composer-input").addEventListener("compositionstart", () => { imeComposing = true; });
+  document.getElementById("composer-input").addEventListener("compositionend", () => { imeComposing = false; imeEndedAt = Date.now(); });
   document.getElementById("composer-input").addEventListener("keydown", ev => {
-    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
+    if (ev.key === "Enter" && !ev.shiftKey && !isImeEnter(ev)) {
       const pal = document.getElementById("slash-palette");
       if (!pal.classList.contains("hidden")) return;
       ev.preventDefault();

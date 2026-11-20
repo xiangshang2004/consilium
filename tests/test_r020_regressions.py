@@ -141,6 +141,21 @@ class R020RegressionsTests(unittest.TestCase):
         self.assertEqual(html.count('scope=\\"consilium\\"'), 3, "all three standby prompts pick up only the window's work")
         self.assertNotIn("<button type=\"button\" class=\"mission-item", html, "no button nested inside a button")
 
+    def test_composer_ignores_ime_enter_clears_on_send_and_follows_the_latest_message(self) -> None:
+        html = render_dashboard_html("0.1.0")
+        # Enter that confirms an input-method candidate must not send (WebKit reports isComposing=false).
+        self.assertIn("ev.keyCode === 229", html)
+        self.assertIn('addEventListener("compositionend"', html)
+        self.assertIn('ev.key === "Enter" && !ev.shiftKey && !isImeEnter(ev)', html)
+        # The box is emptied when the message leaves, and only restored when it was not accepted.
+        send = html[html.index("async function sendMessage()"):html.index('getElementById("btn-send").addEventListener')]
+        self.assertLess(send.index('inp.value = "";'), send.index("await fetch(path"))
+        self.assertIn("if (!accepted) restoreDraft();", send)
+        self.assertEqual(send.count('inp.value = "";'), 1)
+        # The conversation scrolls to the newest message after sending and for replies while at the bottom.
+        self.assertIn("scrollToLatest = true;", send)
+        self.assertIn("if (scrollToLatest || switched || (grew && wasAtBottom))", html)
+        self.assertIn("scroller.scrollTop = scroller.scrollHeight;", html)
 
 if __name__ == "__main__":
     unittest.main()
