@@ -1,0 +1,50 @@
+name: Bug Report
+description: Report a bug in Consilium.app, MCP daemon, or installer
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Clear description of the bug and what you expected to happen.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Consilium Version
+      placeholder: e.g. v0.7.4 (DMG / source build)
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS Version & Architecture
+      placeholder: e.g. macOS 15.3 (Apple Silicon M3)
+    validations:
+      required: true
+  - type: checkboxes
+    id: apps
+    attributes:
+      label: Connected Desktop Apps
+      options:
+        - label: Claude Desktop / Claude Code
+        - label: ChatGPT / Codex Desktop
+        - label: Antigravity
+        - label: Cockpit Tools (local quota sync)
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted Output / Logs
+      description: Please remove any local auth.token, emails, or private file paths before pasting.
+      render: text

@@ -2,7 +2,7 @@
 
 - **作者**：Claude（只读审核）
 - **日期**：2026-11-19
-- **审核对象**：`ce2c882`、`9ced8af`、`10939b2`、`de2883b`（作者均为 `2084413277`，未推送）；[R010](./R010-antigravity-r009-fixes.md)；Antigravity 的独立原型 `~/.gemini/antigravity/brain/c6d5fd4a-…/consilium_chat_ui_prototype.html`
+- **审核对象**：`ce2c882`、`9ced8af`、`10939b2`、`de2883b`（作者均为 `2084413277`，未推送）；[R010](./R010-antigravity-r009-fixes.md)；Antigravity 的独立原型 `<local-scratch>/consilium_chat_ui_prototype.html`
 - **未做的事**：没有改实时家目录配置，没有推送，没有改仓库代码。探针都在会话临时目录里起的隔离 daemon（端口 18977）上跑，跑完已停掉。
 
 ---

@@ -11,13 +11,13 @@
 
 | R002 条目 | 级别 | 整改落地与关键实现 | 对应文件 |
 |---|---|---|---|
-| (1) `/tmp` 3 天清理导致 `bus.db`/`auth.token` 丢失与 launchd 日志失败 | **P0** | 拆分持久状态目录 `~/Library/Application Support/deskbell/`（`bus.db`、`auth.token`、`backups/`）与临时会合目录 `/tmp/deskbell-<uid>/`（`signals/<peer>.{sig,seq}`、`waiters/<peer>/*.lease`、`wake.sock`）；launchd 日志迁到 `~/Library/Logs/deskbell/`，加 `ThrottleInterval = 10`；`wait_for_doorbell` 改读 `.seq` 文件完全不碰 `bus.db`；长路径 `wake.sock` 收敛至 `/tmp/deskbell-<uid>/sock/` 私密子目录 | `deskbell/models.py`、`deskbell/wakeup.py`、`deskbell/store.py`、`deskbell/cli.py`、`adapters/launchd/com.up.deskbell.plist.tmpl` |
+| (1) `/tmp` 3 天清理导致 `bus.db`/`auth.token` 丢失与 launchd 日志失败 | **P0** | 拆分持久状态目录 `~/Library/Application Support/deskbell/`（`bus.db`、`auth.token`、`backups/`）与临时会合目录 `/tmp/deskbell-<uid>/`（`signals/<peer>.{sig,seq}`、`waiters/<peer>/*.lease`、`wake.sock`）；launchd 日志迁到 `~/Library/Logs/deskbell/`，加 `ThrottleInterval = 10`；`wait_for_doorbell` 改读 `.seq` 文件完全不碰 `bus.db`；长路径 `wake.sock` 收敛至 `/tmp/deskbell-<uid>/sock/` 私密子目录 | `deskbell/models.py`、`deskbell/wakeup.py`、`deskbell/store.py`、`deskbell/cli.py`、`adapters/launchd/com.consilium.daemon.plist.tmpl` |
 | (2) `~/.claude.json` 并发写竞争、非原子写、重复 TOML 表 | **P0** | `install.py` 对 `~/.claude.json` 改用 `claude mcp add -s user -t http ... -H "Authorization: Bearer ..."` 与 `claude mcp remove -s user deskbell`；全部 JSON/TOML/Skill/Agent/plist 写入统一改为 `tempfile.mkstemp` + `fsync` + `os.replace` 原子写；TOML 检测管理块外重复 `[mcp_servers.deskbell]`；新增 `Claude.app` 运行态检测与提示 | `scripts/install.py` |
 | (3) Codex TOML 表名、`tool_timeout_sec` 与令牌 | **P1** | 保留 `[mcp_servers.deskbell]` 并移除未核实注释；补充 `tool_timeout_sec = 330` 与静态 `http_headers = { Authorization = "Bearer <token>" }` | `scripts/install.py` |
 | (4) 深链参数与中文截断撕裂 | **P1** | Codex 改用 `codex://new?prompt=`（不传 `folder` 参数，将 `[cwd: ...]` 写入正文）；`build_deeplink` 去掉开头 `/`、优先保住 `folder`，并在编码前按 UTF-8 `%XX` 字节预算逐字截断（默认上限 `2000`） | `deskbell/wakeup.py` |
 | (5) PID 复用幽灵 lease 与 HTTP 默认令牌 | **P1** | lease 改用 `fcntl.flock(LOCK_EX | LOCK_NB)` 内核文件锁（进程退出自动释放，免疫 PID 复用）；`ring_peer` 对已发出热唤醒的事件启动后台 Timer（默认 `60s`）检查 `is_event_acked`，未 ack 自动补发冷通知；`DeskBellDaemon` 与 `serve` 默认启用 `--require-token`（支持 `Authorization: Bearer` 与 Antigravity 用 `?token=` 查询参数），`GET /mcp` 返回 `405 Allow: POST`，`initialize` 仅回显 `SUPPORTED_PROTOCOL_VERSIONS` | `deskbell/wakeup.py`、`deskbell/mcp_server.py`、`deskbell/cli.py` |
 | (6) 补 `deskbell_close_mission` 与状态机漏洞 | **P1/P2** | 新增第 10 个 MCP 工具 `deskbell_close_mission`（校验 `coordinator_peer`、`completed|cancelled|failed`、有未终态任务时默认拒绝除非 `force=True`）；`dispatch_task` 拒绝已关闭任务并把 `ready_to_report` 回切 `active`；`report_progress` 仅允许非终态并校验 `assignee_peer`；`complete_task` 校验 `assignee_peer` 并拒绝重复完成；增加 `claimed_at` 与 `release_stale_claims()` 超时回收 | `deskbell/store.py`、`deskbell/mcp_server.py` |
-| (7) `SKILL.md` 与 Claude 子代理模型规范 | **P1** | 删除 `sonnet-builder.md` 与 `haiku-scout.md`，替换为 `opus-builder.md` 与 `opus-scout.md`（`model: opus`，`opus-architect.md` 注明审方案可用 `fable`）；`SKILL.md` 置顶项目规范优先（`captalent-collab` 等认领表优先）、分支前缀映射（`claude/`、`codex/`、`gemini/`）、明确仅 Code 页签可后台常驻待命且 `wait` **不加 `--pickup`**、Chat 页签 `deskbell_wait <= 45s` | `adapters/claude/agents/*.md`、`adapters/skill/deskbell-collab/SKILL.md` |
+| (7) `SKILL.md` 与 Claude 子代理模型规范 | **P1** | 删除 `sonnet-builder.md` 与 `haiku-scout.md`，替换为 `opus-builder.md` 与 `opus-scout.md`（`model: opus`，`opus-architect.md` 注明审方案可用 `fable`）；`SKILL.md` 置顶项目规范优先（`project-collab` 等认领表优先）、分支前缀映射（`claude/`、`codex/`、`gemini/`）、明确仅 Code 页签可后台常驻待命且 `wait` **不加 `--pickup`**、Chat 页签 `deskbell_wait <= 45s` | `adapters/claude/agents/*.md`、`adapters/skill/deskbell-collab/SKILL.md` |
 | 其它 (P2) | **P2** | `--uninstall` 对用户修改过的 skill/agent 文件报告 `skipped_modified` 不删除；`/health` 不再泄露 `home_dir` 与 `socket_path` 原始路径 | `scripts/install.py`、`deskbell/mcp_server.py` |
 
 ---
@@ -26,7 +26,7 @@
 
 ### 2.1 单元测试（全套 18 项通过）
 ```bash
-cd /Users/up/code/github/deskbell
+cd <repo-root>
 DESKBELL_DRY_RUN=1 /usr/bin/python3 -m unittest discover -s tests -v
 # Ran 18 tests in 2.352s — OK
 ```

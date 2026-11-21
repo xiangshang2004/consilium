@@ -11,7 +11,7 @@
 ## 0. 用户原话与 AI 建议区分
 
 - **用户原话**：
-  - 要求把 Consilium（deskbell 三端协作）做成「完善且美丽」、可以日常使用的版本，按 `/Users/up/code/13_Consilium/路线图.md` 第四节顺序推进；阶段 2 看板与阶段 1 分开提交，带 `★` 的关口停下来等用户确认或复核，不越过；严格遵守第六节约束。
+  - 要求把 Consilium（deskbell 三端协作）做成「完善且美丽」、可以日常使用的版本，按 `<external-demo-dir>/路线图.md` 第四节顺序推进；阶段 2 看板与阶段 1 分开提交，带 `★` 的关口停下来等用户确认或复核，不越过；严格遵守第六节约束。
 - **对路线图第三节建议的落实与微调**：
   1. **保留全部克制视觉与交互要求**：不引任何外网 CDN/字体/图表库；原生系统字体栈 + `tabular-nums`；浅色/深色/跟随系统三态（`prefers-color-scheme` + `localStorage`）；三端以柔和主题色区分（Claude 暖陶土、ChatGPT/Codex 翠绿、Antigravity 靛蓝）不放品牌 Logo；四态状态灯（待命绿、工作中蓝、离线灰、陈旧橙）；缺失配额严格显示 `未知` 而非 `100%`；交互只保留「关闭 Mission」和「任务重新入队」两项且均有二次确认弹窗。
   2. **补充了两项可观测性增强**：
@@ -20,7 +20,7 @@
   3. **回应用户实测反馈「不要让我手动找令牌」——新增 `deskbell ui` 一键免密直达**：
      - 新增 `POST /api/ui-ticket`（需 Bearer 令牌认证，签发 30 秒有效、用一次即焚的随机登录票据）与 `GET /ui/auth?ticket=...`（消耗票据 -> 签发 `HttpOnly; SameSite=Strict` 会话 Cookie + `Cache-Control: no-store` -> 302 跳转到干净 `/ui`）。
      - 新增 `python3 -m deskbell.cli ui` 子命令自动读取本机 `auth.token` 换取一次性票据并在浏览器打开已登录的 `/ui`；A 级演示脚本同步新增 `--open-ui` 参数一键拉起已登录看板。长效 `auth.token` 依然绝不进入 URL，且浏览器首次登录一次后刷新免密保持。
-  4. **演示脚本配套增强**（在 `13_Consilium/01_演示脚本/run_demo_a.py`，不污染 `github/deskbell` 核心逻辑）：增加 `--open-ui`、`--start-delay-sec`、`--hold-sec`、`--token-file`、`--seed-demo-ui` 可选参数，默认无参数运行行为与原 A 级演示完全一致，同时支持配合看板现场演练与截图录屏。
+  4. **演示脚本配套增强**（在 `<external-demo-dir>/01_演示脚本/run_demo_a.py`，不污染 `github/deskbell` 核心逻辑）：增加 `--open-ui`、`--start-delay-sec`、`--hold-sec`、`--token-file`、`--seed-demo-ui` 可选参数，默认无参数运行行为与原 A 级演示完全一致，同时支持配合看板现场演练与截图录屏。
 
 ---
 
@@ -56,14 +56,14 @@
 
 ## 3. 视觉交付物（★ 请用户过目）
 
-全部截图与录屏已存放在 `13_Consilium/03_演示记录/`（未引入临时产物进仓库）：
+全部截图与录屏已存放在 `<external-demo-dir>/03_演示记录/`（未引入临时产物进仓库）：
 
 | 交付物 | 路径 | 说明 |
 |---|---|---|
-| 浅色模式截图 | [dashboard_light.png](../../../13_Consilium/03_演示记录/dashboard_light.png) | `1440×2029 @2x`：三端卡片（Claude 绿灯待命 78%、ChatGPT 蓝灯工作中 44%、Antigravity 蓝灯工作中 + 未知配额）、已完成与进行中双 Mission、单行 4 列任务看板、Markdown 最终汇总、倒序事件时间线与 `1.51–7.18 ms` 热唤醒徽章 |
-| 深色模式截图 | [dashboard_dark.png](../../../13_Consilium/03_演示记录/dashboard_dark.png) | `1440×2029 @2x`：同页面切换深色模式后的高对比度低眩光配色效果 |
-| SSE 实时演进录屏 | [dashboard_live_demo.mp4](../../../13_Consilium/03_演示记录/dashboard_live_demo.mp4) | 30 帧动态录屏，展示 A 级脚本驱动三端协作时，页面无需手动刷新、通过 SSE 实时出现 Mission、任务流转、3 轮交叉审核与触发轮次上限的全过程 |
-| A 级时间线记录 | [demo_a_timeline.md](../../../13_Consilium/03_演示记录/demo_a_timeline.md) | 纯标准库端到端跑通时间线（`1981.43 ms`，退出码 0，无残留临时目录） |
+| 浅色模式截图 | `dashboard_light.png`（早期外部演示归档） | `1440×2029 @2x`：三端卡片（Claude 绿灯待命 78%、ChatGPT 蓝灯工作中 44%、Antigravity 蓝灯工作中 + 未知配额）、已完成与进行中双 Mission、单行 4 列任务看板、Markdown 最终汇总、倒序事件时间线与 `1.51–7.18 ms` 热唤醒徽章 |
+| 深色模式截图 | `dashboard_dark.png`（早期外部演示归档） | `1440×2029 @2x`：同页面切换深色模式后的高对比度低眩光配色效果 |
+| SSE 实时演进录屏 | `dashboard_live_demo.mp4`（早期外部演示归档） | 30 帧动态录屏，展示 A 级脚本驱动三端协作时，页面无需手动刷新、通过 SSE 实时出现 Mission、任务流转、3 轮交叉审核与触发轮次上限的全过程 |
+| A 级时间线记录 | `demo_a_timeline.md`（早期外部演示归档） | 纯标准库端到端跑通时间线（`1981.43 ms`，退出码 0，无残留临时目录） |
 
 ---
 
@@ -72,7 +72,7 @@
 ### 4.1 单元测试（40 项全部通过，0 warning）
 
 ```text
-$ cd /Users/up/code/github/deskbell && env -u CLAUDE_CONFIG_DIR DESKBELL_DRY_RUN=1 /usr/bin/python3 -B -W default -m unittest discover -s tests -v
+$ cd <repo-root> && env -u CLAUDE_CONFIG_DIR DESKBELL_DRY_RUN=1 /usr/bin/python3 -B -W default -m unittest discover -s tests -v
 test_cookie_login_api_state_shape_and_logout (test_dashboard_and_sse.DashboardAndSSETests) ... ok
 test_dashboard_requeue_and_close_actions (test_dashboard_and_sse.DashboardAndSSETests) ... ok
 test_sse_detects_waiter_change_and_latency_only_stamps_unacked (test_dashboard_and_sse.DashboardAndSSETests) ... ok

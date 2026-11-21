@@ -19,7 +19,7 @@
   - `11` 模块共 `79` 项 Python 单元测试（隔离环境变量模式 `17.050s` 与默认未设模式 `18.990s`）全绿（`0` 失败/`0` 跳过）；
   - `openspec validate consilium-v1 --strict` 返回 `Change 'consilium-v1' is valid`；
   - 已采得 2026-11-20 菜单栏下拉与窗口浅色/深色 3 张截图（零录屏、保留全部既有截图）。
-- **范围说明**：因本轮先执行用户“做成app”及关口 1 补充修复 4 项，[R014](./R014-claude-r013-review.md) §4 UI 细节微调（`390px` 窄屏顶部折叠、`Mission` 文案改`会诊`、非 dry-run 徽章）与 §6 阶段 3 方案文档（`13_Consilium/04_B级试跑/`）仍留在待办队列，等待本轮 R015 经 Claude 与 Codex 复核后安排。
+- **范围说明**：因本轮先执行用户“做成app”及关口 1 补充修复 4 项，[R014](./R014-claude-r013-review.md) §4 UI 细节微调（`390px` 窄屏顶部折叠、`Mission` 文案改`会诊`、非 dry-run 徽章）与 §6 阶段 3 方案文档（`<external-demo-dir>/04_B级试跑/`）仍留在待办队列，等待本轮 R015 经 Claude 与 Codex 复核后安排。
 
 ---
 
@@ -46,10 +46,10 @@
 ### 3.1 `scripts/build_app.sh` 与 `scripts/smoke_test_app.sh`
 
 ```text
-/Users/up/code/github/consilium/build/Consilium.app: replacing existing signature
-Built and signed: /Users/up/code/github/consilium/build/Consilium.app
--rwxr-xr-x@ 1 up  staff   480K Nov 20 14:26 /Users/up/code/github/consilium/build/Consilium.app/Contents/MacOS/Consilium
--rw-r--r--@ 1 up  staff   151K Nov 20 14:26 /Users/up/code/github/consilium/build/Consilium.app/Contents/Resources/AppIcon.icns
+<repo-root>/build/Consilium.app: replacing existing signature
+Built and signed: <repo-root>/build/Consilium.app
+-rwxr-xr-x@ 1 <user>  staff   480K Nov 20 14:26 <repo-root>/build/Consilium.app/Contents/MacOS/Consilium
+-rw-r--r--@ 1 <user>  staff   151K Nov 20 14:26 <repo-root>/build/Consilium.app/Contents/Resources/AppIcon.icns
 
 [smoke] Case 1: Consilium.app managed daemon lifecycle on 127.0.0.1:54997
 [smoke] Case 1 OK: managed daemon started, auto-logged in, served SSE, and stopped cleanly on exit.
@@ -86,9 +86,9 @@ OK
 
 ### 3.4 `2026-11-20` `Consilium.app` 截图（仅截图，无录屏）
 
-- 菜单栏模板图标与实时下拉菜单：[app_menubar_2026-11-20.png](../../../13_Consilium/03_%E6%BC%94%E7%A4%BA%E8%AE%B0%E5%BD%95/app_menubar_2026-11-20.png)（`65K`）
-- 原生 App 窗口浅色模式（免令牌直入 + `SSE 实时`）：[app_window_light_2026-11-20.png](../../../13_Consilium/03_%E6%BC%94%E7%A4%BA%E8%AE%B0%E5%BD%95/app_window_light_2026-11-20.png)（`513K`）
-- 原生 App 窗口深色模式（免令牌直入 + `SSE 实时`）：[app_window_dark_2026-11-20.png](../../../13_Consilium/03_%E6%BC%94%E7%A4%BA%E8%AE%B0%E5%BD%95/app_window_dark_2026-11-20.png)（`518K`）
+- 菜单栏模板图标与实时下拉菜单：`app_menubar_2026-11-20.png`（早期外部演示归档）（`65K`）
+- 原生 App 窗口浅色模式（免令牌直入 + `SSE 实时`）：`app_window_light_2026-11-20.png`（早期外部演示归档）（`513K`）
+- 原生 App 窗口深色模式（免令牌直入 + `SSE 实时`）：`app_window_dark_2026-11-20.png`（早期外部演示归档）（`518K`）
 
 ---
 

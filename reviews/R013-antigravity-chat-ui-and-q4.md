@@ -14,7 +14,7 @@
   - 隔离环境变量模式（`-u CLAUDE_CONFIG_DIR CONSILIUM_DRY_RUN=1 CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC=1`）：`Ran 75 tests in 17.785s — OK`；
   - 默认未设环境变量模式（`-u CLAUDE_CONFIG_DIR -u CONSILIUM_DRY_RUN -u CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC`）：`Ran 75 tests in 23.164s — OK`；
   - `openspec validate consilium-v1 --strict`：`Change 'consilium-v1' is valid`。
-- **视觉截图复验（`2026-11-20`）**：[run_demo_a.py](../../../13_Consilium/01_%E6%BC%94%E7%A4%BA%E8%84%9A%E6%9C%AC/run_demo_a.py) 在 SSE 实时连接下采集 4 张截图（浅色/深色 `1440×960 @2x` 双方顶部均稳定显示 `● SSE 实时`，`390×844 @2x` 双方均实现 `scrollWidth === innerWidth === 390` 零横向溢出）；按用户 2026-11-20 最新要求（以后只用截图，不录屏），已删除全部 `.mp4` 录屏文件。
+- **视觉截图复验（`2026-11-20`）**：`run_demo_a.py`（早期外部演示归档） 在 SSE 实时连接下采集 4 张截图（浅色/深色 `1440×960 @2x` 双方顶部均稳定显示 `● SSE 实时`，`390×844 @2x` 双方均实现 `scrollWidth === innerWidth === 390` 零横向溢出）；按用户 2026-11-20 最新要求（以后只用截图，不录屏），已删除全部 `.mp4` 录屏文件。
 - **边界与约束遵守**：未触碰真实 `~/.claude`、`~/.codex`、`~/.gemini`、`~/.antigravity_cockpit`、`~/Library`，未安装 `launchd`，未启动后台 `codex exec`，测试全部剥离 `CLAUDE_CONFIG_DIR` 并使用临时目录，未执行 `git push`。
 - **当前停在关口**：**★ 关口 1（待 Claude 与 Codex 复核本 R013 及 R012 整改）** 与 **★ 关口 2（待用户确认最新 2026-11-20 Light/Dark `1440px`/`390px` 截图外观）**。
 
@@ -87,10 +87,10 @@ OK
 - DOM 与浏览器校验：无 JS 异常、无控制台报错、登录后无 HTTP 错误；Light 与 Dark `1440×960` 顶部均稳定显示 `conn === "SSE 实时"`、`Claude standby`、`ChatGPT/Codex online`、`Antigravity working`；`390×844` 浅/深双方实测 `scrollWidth=390, innerWidth=390`。
 - 录屏清理说明：按用户 2026-11-20 要求（“不用录屏，录屏也删掉好了，以后只用截图”），已删除全部历史与本轮 `.mp4` 录屏文件，后续外观校验统一只提供截图。
 - 产物路径（保留 `2026-11-19` 与首版历史 PNG 截图）：
-  - [dashboard_chat_light_1440_2026-11-20.png](../../../13_Consilium/03_%E6%BC%94%E7%A4%BA%E8%AE%B0%E5%BD%95/dashboard_chat_light_1440_2026-11-20.png) (`425K`)
-  - [dashboard_chat_dark_1440_2026-11-20.png](../../../13_Consilium/03_%E6%BC%94%E7%A4%BA%E8%AE%B0%E5%BD%95/dashboard_chat_dark_1440_2026-11-20.png) (`431K`)
-  - [dashboard_chat_light_390_2026-11-20.png](../../../13_Consilium/03_%E6%BC%94%E7%A4%BA%E8%AE%B0%E5%BD%95/dashboard_chat_light_390_2026-11-20.png) (`239K`)
-  - [dashboard_chat_dark_390_2026-11-20.png](../../../13_Consilium/03_%E6%BC%94%E7%A4%BA%E8%AE%B0%E5%BD%95/dashboard_chat_dark_390_2026-11-20.png) (`246K`)
+  - `dashboard_chat_light_1440_2026-11-20.png`（早期外部演示归档） (`425K`)
+  - `dashboard_chat_dark_1440_2026-11-20.png`（早期外部演示归档） (`431K`)
+  - `dashboard_chat_light_390_2026-11-20.png`（早期外部演示归档） (`239K`)
+  - `dashboard_chat_dark_390_2026-11-20.png`（早期外部演示归档） (`246K`)
 
 ---
 
@@ -98,4 +98,4 @@ OK
 
 - 核心代码：[scripts/install.py](../scripts/install.py)、[consilium/mcp_server.py](../consilium/mcp_server.py)、[consilium/store.py](../consilium/store.py)、[consilium/quota.py](../consilium/quota.py)、[consilium/dashboard.py](../consilium/dashboard.py)、[adapters/skill/consilium-collab/SKILL.md](../adapters/skill/consilium-collab/SKILL.md)
 - 测试套件：[tests/test_quota_extraction.py](../tests/test_quota_extraction.py)、[tests/test_r011_regressions.py](../tests/test_r011_regressions.py)、[tests/test_r012_regressions.py](../tests/test_r012_regressions.py)
-- 规范与文档：[openspec/changes/consilium-v1/design.md](../openspec/changes/consilium-v1/design.md)、[openspec/changes/consilium-v1/tasks.md](../openspec/changes/consilium-v1/tasks.md)、[openspec/changes/consilium-v1/specs/bus/spec.md](../openspec/changes/consilium-v1/specs/bus/spec.md)、[openspec/changes/consilium-v1/specs/dashboard/spec.md](../openspec/changes/consilium-v1/specs/dashboard/spec.md)、[reviews/README.md](./README.md)、[README.md](../README.md)、[docs/architecture.md](../docs/architecture.md)、[13_Consilium/README.md](../../../13_Consilium/README.md)
+- 规范与文档：[openspec/changes/consilium-v1/design.md](../openspec/changes/consilium-v1/design.md)、[openspec/changes/consilium-v1/tasks.md](../openspec/changes/consilium-v1/tasks.md)、[openspec/changes/consilium-v1/specs/bus/spec.md](../openspec/changes/consilium-v1/specs/bus/spec.md)、[openspec/changes/consilium-v1/specs/dashboard/spec.md](../openspec/changes/consilium-v1/specs/dashboard/spec.md)、[reviews/README.md](./README.md)、[README.md](../README.md)、[docs/architecture.md](../docs/architecture.md)、`<external-demo-dir>/README.md`（早期外部演示归档）

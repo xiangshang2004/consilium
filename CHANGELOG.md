@@ -2,6 +2,20 @@
 
 每个版本对应一个 GitHub Release。0.7 系列从 `0.7.1` 开始，后续小更新递增第三段。
 
+## [0.7.4] - 2026-11-22
+
+### 安全与稳定性修复
+
+- **macOS 原生端加固**：`AuthAndStreamClient.swift` 注入 Cookie 时完整保留 `HttpOnly` 与 `SameSite=Strict` 属性，并修复重连/读状态竞态、SSE 取消后迟到回调与串行解码；`DaemonManager.swift` 使用锁同步生命周期、增加 `python3` 回退查找与符号链接检查；`MainWindowController.swift` 对 JS 桥接统一校验 `isMainFrame` 与本地源并补全加载失败回调；Claude 通知深链支持附带 `folder=` 参数。
+- **HTTP、附件与后端**：强制单张图片上传上限 `20 MB`、权限与防符号链接检查、清理残留临时目录及报错路径脱敏；补齐 `HEAD`/`OPTIONS`/`PUT`/`DELETE`/`PATCH` 响应头与关连接处理；严格校验重复 `Host` 头与非法端口；优化 SSE 空闲重建缓存；修复 `cli.py` `SIGTERM` 重入与跨目录 `rotate-token` 导入、`store.py` 过期认领重入队目标与元数据重置、`wakeup.py` `WakeBrokerServer` 锁/`selectors`/作用域 `.seq` 保留与冷通知超时。
+- **配额与前端看板**：收紧 `_hash_account_ref` 账号哈希识别、显式关闭只读 SQLite 句柄、防护 `NaN`/`inf`/时间溢出与 Antigravity 单次上报归属；修复弹出卡「指定交接」按钮、统一写请求错误与 401 处理、`#title-input` 失焦保存与指纹覆盖范围。
+
+### 开源准备与文档升级
+
+- 新增 [隐私协议（PRIVACY.md）](PRIVACY.md)、[安全政策（SECURITY.md）](SECURITY.md)、[贡献指南（CONTRIBUTING.md）](CONTRIBUTING.md) 与 Issue/PR 模板，并将 `PRIVACY.md` 打入 App Bundle Resources。
+- 全面改版 [README.md](README.md) 并新增英文版 [README.en.md](README.en.md)，增补 Mermaid 架构图、双栏特性概览、完整卸载步骤、全部本机只读路径披露，并修正 [docs/architecture.md](docs/architecture.md) 过时细节。
+- 通用化 `launchd` 模板与安装器为 `com.consilium.daemon`，清理适配器、文档与测试里的个人路径与宿主 CLI 硬依赖并扩充回归测试。
+
 ## [0.7.3] - 2026-11-21
 
 - 会话正文里已认领和执行中的任务恢复为无边框单行状态（接单端图标、「正在处理」和三个跳动小点）；排队等待、额度用完与进度过期等边缘状态继续保留回执卡，右侧「任务」详情和窄窗状态保持不变。

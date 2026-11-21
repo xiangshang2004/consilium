@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="156" height="22" role="img" aria-label="License CC BY-NC-SA 4.0">
+  <rect width="156" height="22" rx="4" fill="#b45309"/>
+  <path d="M4 0h48v22H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4Z" fill="#374151"/>
+  <g fill="white" font-family="system-ui, sans-serif" font-size="12" text-anchor="middle">
+    <text x="26" y="15">License</text>
+    <text x="104" y="15">CC BY-NC-SA 4.0</text>
+  </g>
+</svg>

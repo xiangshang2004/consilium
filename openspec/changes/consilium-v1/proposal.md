@@ -2,7 +2,7 @@
 
 ## Why
 
-The `init-deskbell` MVP proved the core bus and `kqueue` doorbell across 18 unit tests and the isolated Level-A terminal demonstration (`13_Consilium/03_演示记录/demo_a_timeline.md`). However, R005 identified 7 P1 reliability/security gaps (default auto-pickup on wait, `.seq` locking/rebuild/delete recovery, token placement in URLs/argv, unhooked stale-claim/running reaper, write/delivery error coupling without idempotency keys, cold notification deep links and `SKILL.md` wording, and non-atomic installer writes), and daily usability requires a clear, offline-capable live dashboard (`/ui`) before onboarding real desktop apps.
+The `init-deskbell` MVP proved the core bus and `kqueue` doorbell across 18 unit tests and the isolated Level-A terminal demonstration (historical external demo archive). However, R005 identified 7 P1 reliability/security gaps (default auto-pickup on wait, `.seq` locking/rebuild/delete recovery, token placement in URLs/argv, unhooked stale-claim/running reaper, write/delivery error coupling without idempotency keys, cold notification deep links and `SKILL.md` wording, and non-atomic installer writes), and daily usability requires a clear, offline-capable live dashboard (`/ui`) before onboarding real desktop apps.
 
 ## What Changes
 

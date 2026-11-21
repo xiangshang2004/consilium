@@ -34,7 +34,7 @@ To guarantee standby wakeup works reliably across sandboxed desktop terminals **
 
 ## 3. Verification Results (Pre-Audit)
 
-Ran in `/Users/up/code/github/deskbell`:
+Ran in `<repo-root>`:
 ```bash
 DESKBELL_DRY_RUN=1 /usr/bin/python3 -m unittest discover -s tests -v
 ```
@@ -58,7 +58,7 @@ Please review the repository critically and address these 7 points in `reviews/R
 5. **Cold Doorbell Deep-Link Limits & Special Characters**:
    - Verify `claude://code/new?q=...&folder=...` and `codex://new?q=...` lengths/escaping on the installed versions of `Claude.app` and `ChatGPT.app`.
 6. **Git Worktree Handover Convention**:
-   - Check `adapters/skill/deskbell-collab/SKILL.md` against the user's existing repo workflows (e.g. `captalent-collab` skill and `/Users/up/code/AGENTS.md`) to ensure branch naming and worktree cleanup conventions won't clash.
+   - Check `adapters/skill/deskbell-collab/SKILL.md` against the user's existing repo workflows (e.g. `project-collab` skill and `<workspace>/AGENTS.md`) to ensure branch naming and worktree cleanup conventions won't clash.
 7. **Real Local Quota Cache Parity (`deskbell/quota.py`)**:
    - Inspect (read-only) `~/.antigravity_cockpit/` (`platform-quota-history-v1.sqlite`, `codex-quota-history-v1.sqlite`, `*_accounts.json`), `~/.codex/sessions/**/rollout-*.jsonl`, and `~/.claude/` on this Mac to verify exact schema/field alignment and confirm whether Claude needs a lightweight `PostInvocation`/`Stop` hook to export `anthropic-ratelimit-unified-*` or Cockpit's `claude_accounts.json` already covers it.
 

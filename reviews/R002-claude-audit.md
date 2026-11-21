@@ -54,9 +54,9 @@ Ran 12 tests in 0.178s — OK   (Python 3.9.6, /usr/bin/python3)
 | `~/Library/Application Support/Claude/claude_desktop_config.json`（0600，15 KB） | 顶层只有 `coworkUserFilesPath`、`deploymentMode`、`preferences`，**没有 `mcpServers`** | Claude.app 运行时会写 `preferences`，存在写入竞争 |
 | `~/.claude.json`（0600，185 KB） | 顶层 50 多个键，**没有顶层 `mcpServers`**，各项目下也没有本地 `mcpServers` | 每个 Claude Code 会话都在频繁改写这个文件 |
 | `~/.gemini/config/mcp_config.json` | **空文件（0 字节）** | 安装器里 `raw.strip()==""→{}` 的分支能处理 |
-| `~/.gemini/config/skills/` | 已有 `captalent-collab` | 与 deskbell-collab 并存，见第 3.6 节 |
+| `~/.gemini/config/skills/` | 已有 `project-collab` | 与 deskbell-collab 并存，见第 3.6 节 |
 | `~/.claude/agents/`、`~/.codex/agents/` | **都不存在** | 安装器会新建 |
-| `~/Library/LaunchAgents/` | 没有 `com.up.deskbell*` | — |
+| `~/Library/LaunchAgents/` | 没有 `com.consilium.daemon*` | — |
 
 ---
 
@@ -166,16 +166,16 @@ Node: decodeURIComponent → URIError: URI malformed；searchParams.get("q") 末
 **现状**：`deskbell-collab/SKILL.md` 里**完全没有**分支命名、worktree 放在哪、谁负责清理这些规定，`worktree_branch` 就是一个自由文本字段。
 
 **和现有约定的对照**：
-- `captalent-collab`：代码分支从最新 `origin/main` 拉出，命名 `<前缀>/<主题>-<日期>`，前缀 Claude 用 `claude/`、Codex 用 `codex/`、Gemini 用 `gemini/`；**开工前要先在 collab 分支的认领表登记**，写入热点文件也要先登记；“没写进 collab 的工作视为没开始”。
+- `project-collab`：代码分支从最新 `origin/main` 拉出，命名 `<前缀>/<主题>-<日期>`，前缀 Claude 用 `claude/`、Codex 用 `codex/`、Gemini 用 `gemini/`；**开工前要先在 collab 分支的认领表登记**，写入热点文件也要先登记；“没写进 collab 的工作视为没开始”。
 - deskbell 的 peer id 是 `chatgpt` / `antigravity`，和上面的分支前缀 `codex/` / `gemini/` 不一样，要有一张映射表。
-- `/Users/up/code/AGENTS.md`：新建、移动目录前要先读 `/Users/up/code/README.md`，不合规的目录名会被 hook 拒绝；一次性产物放会话临时目录。
+- `<workspace>/AGENTS.md`：新建、移动目录前要先读 `<workspace>/README.md`，不合规的目录名会被 hook 拒绝；一次性产物放会话临时目录。
 
 **建议写进 SKILL.md**：
-1. **项目规范优先**：项目有自己的协作流程（比如 CapTalent 的 `captalent-collab` / collab 分支）时，按项目流程登记、命名、合并，deskbell 只负责传话和叫醒，**不能替代认领表**。协调者建 mission 之前，先看目标仓库有没有这类规范。
+1. **项目规范优先**：项目有自己的协作流程（比如 ExampleProject 的 `project-collab` / collab 分支）时，按项目流程登记、命名、合并，deskbell 只负责传话和叫醒，**不能替代认领表**。协调者建 mission 之前，先看目标仓库有没有这类规范。
 2. 默认分支名 `<前缀>/<主题>-<YYYYMMDD>`，映射关系 `claude→claude/`、`chatgpt→codex/`、`antigravity→gemini/`。协调者派活时填 `worktree_branch`，worker 回报实际用的分支和完整提交号。
-3. worktree 优先用各 App 自带的机制（Claude Code、Codex 都有自己的 worktree 管理），不要在 `/Users/up/code` 下自建新目录；确实要建，先读 README 的命名规则。
+3. worktree 优先用各 App 自带的机制（Claude Code、Codex 都有自己的 worktree 管理），不要在 `<workspace>` 下自建新目录；确实要建，先读 README 的命名规则。
 4. 清理：worker 不删分支、不删 worktree、不 push、不合并；合并和清理由协调者在用户确认后执行。
-5. 触发词（“多端协作”“让 Claude/ChatGPT 一起看”）在 CapTalent 仓库里也会生效，所以第 1 条必须放在 SKILL.md 的最前面。
+5. 触发词（“多端协作”“让 Claude/ChatGPT 一起看”）在 ExampleProject 仓库里也会生效，所以第 1 条必须放在 SKILL.md 的最前面。
 
 **子代理模板与用户常设规则冲突（P1）**：用户对 Claude 子代理的规定是默认 `opus`，审方案、做 advisor 可以用 `fable`；**`sonnet` 禁用，`haiku` 未获准**。`sonnet-builder.md`、`haiku-scout.md` 和 SKILL.md 里的 “`sonnet` / `haiku`” 都要改：builder 和 scout 改成 `model: opus`（或者不写 `model`，直接继承），architect 保持 `opus`，可以注明审方案时用 `fable`。另外装到 `~/.claude/agents/` 是全局生效，会出现在所有项目里，安装前要告诉用户。
 

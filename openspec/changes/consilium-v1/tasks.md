@@ -15,14 +15,14 @@
 - [x] 1.6 Fix `ColdDoorbell.build_deeplink` (`claude://code/new`, `codex://new?prompt=...&path=...`) and update `SKILL.md` (R005 3.6).
 - [x] 1.7 Refactor `scripts/install.py` to two-phase validate-then-write with running Claude.app refusal, expanded Codex duplicate checks, Claude MCP rollback, `--rendezvous-dir`, and `CLAUDE_CONFIG_DIR` isolation (R005 3.7).
 - [x] 1.8 Fix R005 P2 items (closed-mission `request_review` guard, quota `null`/expired/`window_minutes`/`limit_id`/isolation) + A-level demo findings (`CONSILIUM_RENDEZVOUS_DIR` precedence, `peers` activity tracking).
-- [x] 1.9 Add regression tests for all 7 P1s + P2s, verify full test suite & `13_Consilium` Level-A demo pass, commit cleanly (author `2084413277`), and write `reviews/R006-antigravity-r005-fixes.md`.
+- [x] 1.9 Add regression tests for all 7 P1s + P2s, verify full test suite & isolated Level-A demo pass, commit cleanly (author `2084413277`), and write `reviews/R006-antigravity-r005-fixes.md`.
 - [x] ★ **Gate 1**: Submit R006 for Claude and Codex review approval. (Passed 2026-11-20 per [R014](../../../reviews/R014-claude-r013-review.md) and Codex independent review up to `6e308aa`.)
 
 ## Stage 2: Consilium Live Dashboard (Separate Commit)
 - [x] 2.1 Implement `consilium/dashboard.py` and mount `/ui`, `/api/login`, `/api/logout`, `/api/state`, `/api/stream` (SSE), `/api/missions/<id>/close`, `/api/tasks/<id>/requeue` in `ConsiliumDaemon`.
 - [x] 2.2 Record delivery/wakeup metadata on events so dashboard displays hot/cold badges and ms wakeup latency.
 - [x] 2.3 Write unit/wire tests for dashboard API shape, cookie auth, Host/Origin checks, write actions, and ordered SSE streaming.
-- [x] 2.4 Drive dashboard live with Level-A demo script, capture Light & Dark mode screenshots (and live progression evidence) into `13_Consilium/03_演示记录/`, commit cleanly (author `2084413277`), and write `reviews/R007-antigravity-dashboard.md`.
+- [x] 2.4 Drive dashboard live with Level-A demo script, capture Light & Dark mode screenshots (and live progression evidence) into external demo archive, commit cleanly (author `2084413277`), and write `reviews/R007-antigravity-dashboard.md`.
 - [ ] ★ **Gate 2**: User reviews Light & Dark screenshots and confirms dashboard appearance. (2026-11-20: awaiting Claude/Codex R013 re-check and final user sign-off on updated 2026-11-20 screenshots after R012 + drawer/command alignment; prior R011/chat draft approved at `fd89018` with direction to keep Claude looped in for subsequent optimizations.)
 
 ## Stage 2.5: R008/R009 Remediation & Closed-Loop Sync (R010, Before Crossing Gates 1 & 2)
@@ -54,12 +54,12 @@
 - [x] 2.9.1 Review R015 (79 tests, build, two-case app smoke, screenshots) and tighten `Consilium.app` deep links to the verified `claude://code/new` and `codex://new` only.
 - [x] 2.9.2 Replace user-facing “Mission” with “会诊”, embed the brand mark (inline SVG) and an offline data-URI favicon in `/ui`.
 - [x] 2.9.3 Narrow-screen (≤ 860px) layout: single-row top bar with a “⋯” menu for theme, drawer tabs and logout; single-row scrollable peer capsules; slimmer composer. Add `tests/test_r016_regressions.py` and capture 2026-11-20 “b” screenshots.
-- [x] 2.9.4 Prepare Stage 3 in `13_Consilium/04_B级试跑/` (trial plan, `.mcp.json` generator/cleaner, stand-in worker), self-tested on an isolated daemon; nothing executed against live apps.
+- [x] 2.9.4 Prepare Stage 3 trial scripts (trial plan, `.mcp.json` generator/cleaner, stand-in worker) in external demo workspace, self-tested on an isolated daemon; nothing executed against live apps.
 
 ## Stage 3: Level-B Real App Trial (Blocked on ★ Gate 2)
-- [ ] 3.1 Add project-scoped `.mcp.json` / `.gitignore` and B-level worker script in `13_Consilium/`.
-- [x] 3.1a Trial plan and scripts ready (`13_Consilium/04_B级试跑/试跑方案.md`); Codex project-local MCP requires project trust in `~/.codex/config.toml`, deferred to a separate user consent (B2).
-- [x] 3.2a 2026-11-20 Level-B1 trial passed: live Claude Code session in Claude.app coordinated mission `M-0736813C` with stand-in Codex/Antigravity workers (hot-wake claims 14–22 ms, 2/2 done, summary + close in 43 s); record in `13_Consilium/04_B级试跑/试跑记录_2026-11-20.md`. Consilium.app switched to a regular Dock app that opens its window on launch (menu-bar icons can hide behind the MacBook notch).
+- [ ] 3.1 Add project-scoped `.mcp.json` / `.gitignore` and B-level worker script in external demo workspace.
+- [x] 3.1a Trial plan and scripts ready (historical Level-B trial archive); Codex project-local MCP requires project trust in `~/.codex/config.toml`, deferred to a separate user consent (B2).
+- [x] 3.2a 2026-11-20 Level-B1 trial passed: live Claude Code session in Claude.app coordinated mission `M-0736813C` with stand-in Codex/Antigravity workers (hot-wake claims 14–22 ms, 2/2 done, summary + close in 43 s); archived in external trial notes. Consilium.app switched to a regular Dock app that opens its window on launch (menu-bar icons can hide behind the MacBook notch).
 - [ ] 3.2 Run live Claude Code (+ Codex if trusted) coordinator walkthrough with dashboard open; enable Q2 (composer live dispatch write API) and structured `report_progress(subagents=[...])` reporting after Gate 2 approval.
 - [x] ★ **Gate 3**: User confirms workflow smoothness. (Passed 2026-11-20: user said “通过” after the Level-B1 trial and seeing the Consilium.app window.)
 

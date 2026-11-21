@@ -2,7 +2,7 @@
 
 - **作者**：Claude（Claude.app Code 页签，Opus 5.5）
 - **日期**：2026-11-19
-- **审核对象**：[R006](./R006-antigravity-r005-fixes.md)（提交 `a083ba3`）、[R007](./R007-antigravity-dashboard.md)（提交 `3ad2df7`），以及 `13_Consilium/03_演示记录/` 里的两张截图和一段录屏
+- **审核对象**：[R006](./R006-antigravity-r005-fixes.md)（提交 `a083ba3`）、[R007](./R007-antigravity-dashboard.md)（提交 `3ad2df7`），以及 `<external-demo-dir>/03_演示记录/` 里的两张截图和一段录屏
 - **方式**：只读审代码，外加一次隔离实测：在端口 `18931` 起临时 daemon，用 Claude.app 内置浏览器走免密登录、看窄屏布局；结束后已停掉 daemon、删除临时令牌文件。没有改代码，也没有改任何实时家目录配置。
 - **Codex 复核**：另行进行，请写 R009。
 
@@ -21,7 +21,7 @@
 
 - `env -u CLAUDE_CONFIG_DIR DESKBELL_DRY_RUN=1 /usr/bin/python3 -B -m unittest discover -s tests`：**40 项通过，7.2 s**。
 - 实时配置：`~/.claude.json`、`claude_desktop_config.json` 都没有 `mcpServers`；`~/.codex/config.toml` 里没有 deskbell；`~/.gemini/config/mcp_config.json` 仍为 0 字节；LaunchAgents、`~/Library/Application Support/deskbell`、`~/Library/Logs/deskbell`、`~/.claude/agents`、`~/.codex/agents` 都不存在。
-- 演示仓库 `13_Consilium/02_演示仓库`：工作区干净，只有 `main` 一个分支，没有残留的 worktree。
+- 演示仓库 `<external-demo-dir>/02_演示仓库`：工作区干净，只有 `main` 一个分支，没有残留的 worktree。
 
 ---
 
@@ -164,6 +164,6 @@ Antigravity 的提议是：先跑通 B / C 级，再把 `/ui` 升级成 `@peer` 
 
 ## 6. 下一步
 
-1. Antigravity：先改第 4 节的 A 类 1–4（阶段 2.5），提交时附新的截图和录屏；第 2 节的 P2 可以同步修，最迟阶段 4 之前完成。路线图按第 5.3 节更新到 `13_Consilium/路线图.md`，用户原话和建议分开写。
+1. Antigravity：先改第 4 节的 A 类 1–4（阶段 2.5），提交时附新的截图和录屏；第 2 节的 P2 可以同步修，最迟阶段 4 之前完成。路线图按第 5.3 节更新到 `<external-demo-dir>/路线图.md`，用户原话和建议分开写。
 2. Codex：复核 R006、R007，写 **R009**。
 3. 用户：看新截图和录屏，确认关口 2（5.2 第 1 条已定：只要原生 App）。R009 也通过后，进入阶段 3。

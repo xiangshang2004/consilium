@@ -2,7 +2,7 @@
 
 - **作者**：Antigravity（Gemini）
 - **日期**：2026-11-19
-- **范围**：`consilium-v1` 阶段 0（OpenSpec 落盘，提交 `9cc0435`）与阶段 1（本提交，按 [R005](./R005-claude-recheck.md) 第 3、4、6 节与 [Consilium 路线图](../../../13_Consilium/路线图.md) 第二节完成全部修复及回归测试）
+- **范围**：`consilium-v1` 阶段 0（OpenSpec 落盘，提交 `9cc0435`）与阶段 1（本提交，按 [R005](./R005-claude-recheck.md) 第 3、4、6 节与 `Consilium 路线图`（早期外部演示归档） 第二节完成全部修复及回归测试）
 - **隔离核验**：未修改 `~/.claude.json`、`~/.codex/config.toml`、`~/.gemini/config/mcp_config.json`、`~/Library/LaunchAgents/`；未装 launchd；未在后台启动 `codex exec`；未 push。
 - **关口状态**：**★ 等待 Claude 与 Codex 复核通过**（按路线图要求，不越过关口；阶段 2 看板在独立提交 R007 中交付）。
 
@@ -10,7 +10,7 @@
 
 ## 0. 用户原话与 AI 建议区分
 
-- **用户原话**：要求尽快把 Consilium 做成“完善且美丽”、可日常使用的版本，按 `/Users/up/code/13_Consilium/路线图.md` 第四节顺序推进（先阶段 0 与阶段 1，阶段 2 分开提交，带 ★ 关口停下来等复核/用户确认），并严格遵守第六节全部隔离与提交约束。
+- **用户原话**：要求尽快把 Consilium 做成“完善且美丽”、可日常使用的版本，按 `<external-demo-dir>/路线图.md` 第四节顺序推进（先阶段 0 与阶段 1，阶段 2 分开提交，带 ★ 关口停下来等复核/用户确认），并严格遵守第六节全部隔离与提交约束。
 - **对路线图/建议的兼容性调整**：路线图第二节约定写操作返回 `{"committed": bool, "result": {...}, "delivery": {...}}`。为避免破坏既有调用方与 A 级脚本，本轮所有写工具在返回标准 `committed` / `result` / `delivery` 信封的同时，保留了顶层领域字段（如 `mission`、`tasks`、`task`、`deliveries`、`allowed`、`round`、`status`），做到严格满足新契约且 100% 向后兼容。
 
 ---
@@ -69,7 +69,7 @@
 ### 4.1 单元测试（34 项全部通过，0 warning）
 
 ```text
-$ cd /Users/up/code/github/deskbell && env -u CLAUDE_CONFIG_DIR DESKBELL_DRY_RUN=1 /usr/bin/python3 -B -m unittest discover -s tests -v
+$ cd <repo-root> && env -u CLAUDE_CONFIG_DIR DESKBELL_DRY_RUN=1 /usr/bin/python3 -B -m unittest discover -s tests -v
 test_apply_idempotency_token_paths_and_safe_uninstall (test_installer_dry_run.InstallerTests) ... ok
 test_dry_run_does_not_mutate_files (test_installer_dry_run.InstallerTests) ... ok
 test_duplicate_codex_toml_table_outside_block_rejected (test_installer_dry_run.InstallerTests) ... ok
@@ -111,7 +111,7 @@ Ran 34 tests in 6.034s
 OK
 ```
 
-### 4.2 A 级端到端回归（`13_Consilium/01_演示脚本/run_demo_a.py`）
+### 4.2 A 级端到端回归（`<external-demo-dir>/01_演示脚本/run_demo_a.py`）
 
 - 退出码 `0`，总耗时 `1970.58 ms`，临时目录自动清理。
 - 热唤醒延迟 `5.41 ~ 12.41 ms`（7 次 `kqueue` 全部命中），冷通知 1 次（`dry_run=True`），轮次上限在第 4 次 `request_review` 精确生效（`3/3`），`close_mission` 正常流转至 `completed`。
@@ -124,4 +124,4 @@ OK
 2. **Claude CLI 安装/轮换瞬态 argv**：`claude mcp add-json` 调用瞬间参数含 Bearer 令牌（仅同一本机用户可见）。
 3. **补发冷通知定时器（R005 P2.6）**：`threading.Timer` 为守护线程，仅在常驻 `serve` / `mcp-stdio` 进程存活期间有效。
 4. **Antigravity 冷通知深链**：目前固定为 `antigravity://`，暂未验证可传 prompt/workspace 参数的原生深链格式。
-5. **实时配置核验**：`~/.claude.json` 不含 `deskbell`，`~/.codex/config.toml` 不含 `deskbell`，`~/.gemini/config/mcp_config.json` 仍为 0 字节，`~/Library/LaunchAgents/com.up.deskbell.plist` 不存在。
+5. **实时配置核验**：`~/.claude.json` 不含 `deskbell`，`~/.codex/config.toml` 不含 `deskbell`，`~/.gemini/config/mcp_config.json` 仍为 0 字节，`~/Library/LaunchAgents/com.consilium.daemon.plist` 不存在。

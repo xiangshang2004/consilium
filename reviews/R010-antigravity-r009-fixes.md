@@ -2,8 +2,8 @@
 
 - **作者**：Antigravity（Gemini）
 - **日期**：2026-11-19
-- **范围**：全面回应 [R008（Claude 复核）](./R008-claude-r006-r007-review.md) 与 [R009（Codex 复核）](./R009-codex-review.md) 全部审查项（含 R008 §2 P2-1..3、§3 P3、§4 A1–A4 & B5–B10、§5 用户原话与 R009 §1–§5 / 15 项整改清单），同步 `consilium-v1` OpenSpec、仓库与演示文档及 `13_Consilium` 复录媒体。
-- **隔离核验**：未修改 `~/.claude.json`、`~/.claude/`、`~/.codex/config.toml`、`~/.gemini/config/mcp_config.json`、`~/Library/LaunchAgents/`、`~/Library/Application Support/consilium/`、`~/Library/Logs/consilium/` 或 `~/.gitconfig`；未安装 `launchd`；未在后台启动 `codex exec`；未执行 `git push`（仅按显式指令更新了独立截屏脚本 `/Users/up/.gemini/antigravity/brain/c6d5fd4a-20a9-43e9-a51a-ff53727ba9fe/scratch/capture_dashboard.mjs`）。
+- **范围**：全面回应 [R008（Claude 复核）](./R008-claude-r006-r007-review.md) 与 [R009（Codex 复核）](./R009-codex-review.md) 全部审查项（含 R008 §2 P2-1..3、§3 P3、§4 A1–A4 & B5–B10、§5 用户原话与 R009 §1–§5 / 15 项整改清单），同步 `consilium-v1` OpenSpec、仓库与演示文档及 `<external-demo-dir>` 复录媒体。
+- **隔离核验**：未修改 `~/.claude.json`、`~/.claude/`、`~/.codex/config.toml`、`~/.gemini/config/mcp_config.json`、`~/Library/LaunchAgents/`、`~/Library/Application Support/consilium/`、`~/Library/Logs/consilium/` 或 `~/.gitconfig`；未安装 `launchd`；未在后台启动 `codex exec`；未执行 `git push`（仅按显式指令更新了独立截屏脚本 `<local-scratch>/capture_dashboard.mjs`）。
 - **关口状态**：**★ 关口 1 与 ★ 关口 2 保持未越过（`openspec/changes/consilium-v1/tasks.md` 中两项均维持 `- [ ]`，等待 Claude / Codex 复核通过及用户最终拍板）**
 
 ---
@@ -15,7 +15,7 @@
 1. **停在 ★ 关口 1 与 ★ 关口 2**：完成 R010 闭环整改、复录、OpenSpec/文档同步与本地主题式提交后，**严格停在 ★ 关口 1 与 ★ 关口 2**，不进入阶段 3（B 级真 App 试跑）或阶段 4（`install.py --apply` 正式安装）。
 2. **「只要原生 App」**（2026-11-19，见 [R008 §5.2](./R008-claude-r006-r007-review.md#5-新产品方向评估)）：群聊 / 会诊参与者严格限定为三个官方原生桌面 App（`Claude.app`、`ChatGPT.app / Codex Desktop`、`Antigravity.app`），不接直接模型 API 参与者。
 3. **不想手动折腾令牌，希望后续封装 macOS 菜单栏 App**：作为产品方向与 `consilium ui` 一键免密入口的依据；阶段 4.5 菜单栏 App 仍属后续待确认规划。
-4. **目录与历史产物约束**：`13_Consilium/` 顶层英文名经用户授权单开，子目录严格保持 `NN_中文名`（`01_演示脚本/`、`02_演示仓库/`、`03_演示记录/`）；保留既有首版截图与录屏，新增带日期的 `*_2026-11-19.*` 复录文件；`/Users/up/code` 内不留 `.agents/teamwork/` 或临时产物。
+4. **目录与历史产物约束**：`<external-demo-dir>/` 顶层英文名经用户授权单开，子目录严格保持 `NN_中文名`（`01_演示脚本/`、`02_演示仓库/`、`03_演示记录/`）；保留既有首版截图与录屏，新增带日期的 `*_2026-11-19.*` 复录文件；`<workspace>` 内不留 `.agents/teamwork/` 或临时产物。
 
 ### AI 建议与本轮契约内技术选择（待关口复核，未越过关口提前实施）
 
@@ -31,7 +31,7 @@
 
 ## 1. 改动文件清单
 
-### 1.1 `/Users/up/code/github/consilium` 仓库文件
+### 1.1 `<repo-root>` 仓库文件
 
 | 文件 | 改动摘要 |
 |---|---|
@@ -48,14 +48,14 @@
 | `openspec/changes/consilium-v1/{proposal.md,design.md,specs/bus/spec.md,specs/dashboard/spec.md,tasks.md}` | 同步全部 13 处代码契约更新，新增 `Stage 2.5` 已完成记录，**保持 `★ Gate 1`、`★ Gate 2`、`★ Gate 3` 与 `★ User consent` 未勾选 (`- [ ]`)** |
 | `reviews/R010-antigravity-r009-fixes.md`、`reviews/README.md`、`README.md`、`docs/architecture.md`、`docs/README.md` | 新增 R010 闭环验证报告并同步全部仓库文档与索引 |
 
-### 1.2 `/Users/up/code/13_Consilium` 与配套演示脚本（仓外独立）
+### 1.2 `<external-demo-dir>` 与配套演示脚本（仓外独立）
 
 | 文件 | 改动摘要 |
 |---|---|
-| `/Users/up/code/13_Consilium/01_演示脚本/run_demo_a.py` | 补齐 `import urllib.request` 与无代理 `--open-ui` 检查；子环境强制 `CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC=1` 并剥离真实家目录变量；3 处派发/认领/入库均校验并传递 `attempt_id`；演示配额写入 `source="demo"`；新增 `--step-delay-sec` 及跨步骤缩放超时与早退 `SIGTERM` 清理 |
-| `/Users/up/.gemini/antigravity/brain/c6d5fd4a-20a9-43e9-a51a-ff53727ba9fe/scratch/capture_dashboard.mjs` | 由 `DESKBELL_REPO` 迁为 `CONSILIUM_REPO` 并隔离环境变量；以 `--step-delay-sec 1.5 --hold-sec 30` 驱动实时看板并按 `10 fps` 截录 350 帧（`35.0s`），输出带日期 `*_2026-11-19.*` 文件并保留原版媒体 |
-| `/Users/up/code/13_Consilium/03_演示记录/dashboard_light_2026-11-19.png`、`dashboard_dark_2026-11-19.png`、`dashboard_live_demo_2026-11-19.mp4`、`demo_a_timeline.md` | 重新生成 Retina 浅色/深色截图（`2880×5596`）、`10 fps` `35.0s` 录屏与新时间线（`M-614BAB20`、`2109.00 ms`），同时字节级完整保留首版三件套 |
-| `/Users/up/code/13_Consilium/README.md` | 更新 59 项单测与 R010 状态、移除过时的 R005 `consilium_wait` 警告、补充 `--step-delay-sec` 与 `2026-11-19` 媒体链接（保留旧版链接）、重申 `NN_中文名` 与「只要原生 App」规则，保持 `★ 关口 1 & 2` 待审 |
+| `<external-demo-dir>/01_演示脚本/run_demo_a.py` | 补齐 `import urllib.request` 与无代理 `--open-ui` 检查；子环境强制 `CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC=1` 并剥离真实家目录变量；3 处派发/认领/入库均校验并传递 `attempt_id`；演示配额写入 `source="demo"`；新增 `--step-delay-sec` 及跨步骤缩放超时与早退 `SIGTERM` 清理 |
+| `<local-scratch>/capture_dashboard.mjs` | 由 `DESKBELL_REPO` 迁为 `CONSILIUM_REPO` 并隔离环境变量；以 `--step-delay-sec 1.5 --hold-sec 30` 驱动实时看板并按 `10 fps` 截录 350 帧（`35.0s`），输出带日期 `*_2026-11-19.*` 文件并保留原版媒体 |
+| `<external-demo-dir>/03_演示记录/dashboard_light_2026-11-19.png`、`dashboard_dark_2026-11-19.png`、`dashboard_live_demo_2026-11-19.mp4`、`demo_a_timeline.md` | 重新生成 Retina 浅色/深色截图（`2880×5596`）、`10 fps` `35.0s` 录屏与新时间线（`M-614BAB20`、`2109.00 ms`），同时字节级完整保留首版三件套 |
+| `<external-demo-dir>/README.md` | 更新 59 项单测与 R010 状态、移除过时的 R005 `consilium_wait` 警告、补充 `--step-delay-sec` 与 `2026-11-19` 媒体链接（保留旧版链接）、重申 `NN_中文名` 与「只要原生 App」规则，保持 `★ 关口 1 & 2` 待审 |
 
 ---
 
@@ -116,15 +116,15 @@
 
 ## 3. 视觉与演示交付物（2026-11-19 复录）
 
-在 `/Users/up/code/13_Consilium/03_演示记录/` 中**完整保留**了 R007 首版未加日期文件，并生成验证通过的 `2026-11-19` 复录产物：
+在 `<external-demo-dir>/03_演示记录/` 中**完整保留**了 R007 首版未加日期文件，并生成验证通过的 `2026-11-19` 复录产物：
 
 | 交付物 | 路径 | 实测规格与核验指标 |
 |---|---|---|
-| 浅色模式截图（复录） | [dashboard_light_2026-11-19.png](../../../13_Consilium/03_演示记录/dashboard_light_2026-11-19.png) | `2880×5596` Retina (`1,060,120` bytes)；实图可见 `SSE 实时`、`3 / 3 端活跃`、5 态指示灯（`待命` / `在线` / `工作中`）、`演示数据` 标签、`⏱ 认领 1522.72 ms`、`🔔 冷通知 · dry-run` + `✓ 对方已确认`、空列折叠、100% 绿条及 `.timeline-fade` `显示更多` |
-| 深色模式截图（复录） | [dashboard_dark_2026-11-19.png](../../../13_Consilium/03_演示记录/dashboard_dark_2026-11-19.png) | `2880×5596` Retina (`1,078,403` bytes)；高对比深色配色无裁剪、无 JS/HTTP 报错 |
-| 实时演示录屏（复录） | [dashboard_live_demo_2026-11-19.mp4](../../../13_Consilium/03_演示记录/dashboard_live_demo_2026-11-19.mp4) | `ffprobe` 实测：`codec_name=h264`、`pix_fmt=yuv420p`、`1440×1000`、`r_frame_rate=10/1`、`avg_frame_rate=10/1`、`nb_frames=350`、`duration=35.000000s`、`size=492,110` bytes；`ffmpeg -f framemd5` 验证 `319/350` 帧哈希唯一（`336` 次帧间真实变化），完整呈现登录、`0/3 -> 3/3` 状态流转、轮次推进、切换深色模式及实时计时 |
-| A 级演示时间线 | [demo_a_timeline.md](../../../13_Consilium/03_演示记录/demo_a_timeline.md) | 退出码 `0`（`M-614BAB20`，`completed`，`3/3`，总耗时 `2109.00 ms`，7 次 `kqueue` 唤醒 `8.18–17.89 ms`，`tmp_cleaned=True`，`0` 处 `deskbell` 残留） |
-| 保留的首版媒体 | [dashboard_light.png](../../../13_Consilium/03_演示记录/dashboard_light.png)、[dashboard_dark.png](../../../13_Consilium/03_演示记录/dashboard_dark.png)、[dashboard_live_demo.mp4](../../../13_Consilium/03_演示记录/dashboard_live_demo.mp4) | 原封保留、字节级 SHA-256 未改 |
+| 浅色模式截图（复录） | `dashboard_light_2026-11-19.png`（早期外部演示归档） | `2880×5596` Retina (`1,060,120` bytes)；实图可见 `SSE 实时`、`3 / 3 端活跃`、5 态指示灯（`待命` / `在线` / `工作中`）、`演示数据` 标签、`⏱ 认领 1522.72 ms`、`🔔 冷通知 · dry-run` + `✓ 对方已确认`、空列折叠、100% 绿条及 `.timeline-fade` `显示更多` |
+| 深色模式截图（复录） | `dashboard_dark_2026-11-19.png`（早期外部演示归档） | `2880×5596` Retina (`1,078,403` bytes)；高对比深色配色无裁剪、无 JS/HTTP 报错 |
+| 实时演示录屏（复录） | `dashboard_live_demo_2026-11-19.mp4`（早期外部演示归档） | `ffprobe` 实测：`codec_name=h264`、`pix_fmt=yuv420p`、`1440×1000`、`r_frame_rate=10/1`、`avg_frame_rate=10/1`、`nb_frames=350`、`duration=35.000000s`、`size=492,110` bytes；`ffmpeg -f framemd5` 验证 `319/350` 帧哈希唯一（`336` 次帧间真实变化），完整呈现登录、`0/3 -> 3/3` 状态流转、轮次推进、切换深色模式及实时计时 |
+| A 级演示时间线 | `demo_a_timeline.md`（早期外部演示归档） | 退出码 `0`（`M-614BAB20`，`completed`，`3/3`，总耗时 `2109.00 ms`，7 次 `kqueue` 唤醒 `8.18–17.89 ms`，`tmp_cleaned=True`，`0` 处 `deskbell` 残留） |
+| 保留的首版媒体 | `dashboard_light.png`（早期外部演示归档）、`dashboard_dark.png`（早期外部演示归档）、`dashboard_live_demo.mp4`（早期外部演示归档） | 原封保留、字节级 SHA-256 未改 |
 
 ---
 
@@ -133,7 +133,7 @@
 ### 4.1 单元测试（59 项全部通过，0 warning）
 
 ```text
-$ cd /Users/up/code/github/consilium && env -u CLAUDE_CONFIG_DIR CONSILIUM_DRY_RUN=1 CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC=1 /usr/bin/python3 -B -W default -m unittest discover -s tests -v
+$ cd <repo-root> && env -u CLAUDE_CONFIG_DIR CONSILIUM_DRY_RUN=1 CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC=1 /usr/bin/python3 -B -W default -m unittest discover -s tests -v
 test_cookie_login_api_state_shape_and_logout (test_dashboard_and_sse.DashboardAndSSETests) ... ok
 test_dashboard_requeue_and_close_actions (test_dashboard_and_sse.DashboardAndSSETests) ... ok
 test_sse_detects_waiter_change_and_latency_only_stamps_unacked (test_dashboard_and_sse.DashboardAndSSETests) ... ok
@@ -203,7 +203,7 @@ OK
 ### 4.2 OpenSpec 严格校验与关口核查
 
 ```text
-$ cd /Users/up/code/github/consilium && openspec validate consilium-v1 --strict && openspec validate consilium-v1
+$ cd <repo-root> && openspec validate consilium-v1 --strict && openspec validate consilium-v1
 Change 'consilium-v1' is valid
 Change 'consilium-v1' is valid
 ```

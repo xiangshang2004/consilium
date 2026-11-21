@@ -20,7 +20,7 @@ R004 把 R002 的 7 项都落了地，R003 的复核也很扎实。**但还不�
 |---|---|
 | 测试 | `env -u CLAUDE_CONFIG_DIR DESKBELL_DRY_RUN=1 /usr/bin/python3 -m unittest discover -s tests`：**18 项通过，1.8 s** |
 | 安装器测试是否会写到实时配置 | 不会。`scripts/install.py:165–166` 调 `claude` 前只把 `HOME` 换成临时目录，本机 `CLAUDE_CONFIG_DIR` 没有设置，所以写进的是临时目录。测试跑完后，实时 `~/.claude.json` 的顶层 `mcpServers` 仍然为空。**注意**：如果以后有人设置了 `CLAUDE_CONFIG_DIR`，这套测试就会写进真实配置。R006 里应在测试和安装器中显式清掉（或指定）这个变量。 |
-| 实时配置 | `~/.claude.json`、`claude_desktop_config.json` 都没有 `mcpServers`；`~/.codex/config.toml` 的修改时间仍是 11-16、内容不含 deskbell；`~/.gemini/config/mcp_config.json` 仍为 0 字节；`~/.claude/agents`、`~/.codex/agents`、三处 `deskbell-collab` skill、`~/Library/LaunchAgents/com.up.deskbell.plist`、`~/Library/Application Support/deskbell`、`~/Library/Logs/deskbell` 都不存在 |
+| 实时配置 | `~/.claude.json`、`claude_desktop_config.json` 都没有 `mcpServers`；`~/.codex/config.toml` 的修改时间仍是 11-16、内容不含 deskbell；`~/.gemini/config/mcp_config.json` 仍为 0 字节；`~/.claude/agents`、`~/.codex/agents`、三处 `deskbell-collab` skill、`~/Library/LaunchAgents/com.consilium.daemon.plist`、`~/Library/Application Support/deskbell`、`~/Library/Logs/deskbell` 都不存在 |
 | 意外产物 | `/tmp/deskbell-501` 已存在（应是某一方跑 CLI 或测试时建的），属于临时会合目录，无害 |
 
 ---

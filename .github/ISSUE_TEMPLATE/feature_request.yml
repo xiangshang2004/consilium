@@ -1,0 +1,23 @@
+name: Feature Request
+description: Suggest an improvement for Consilium
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Workflow Need
+      description: Describe the multi-desktop collaboration workflow or UX gap you want to solve.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Local-First & Privacy Considerations
+      description: Does this require reading new local files or adding desktop deep links/adapters?

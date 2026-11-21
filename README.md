@@ -1,85 +1,153 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/consilium-lockup-dark.svg">
-    <img src="docs/brand/consilium-lockup-light.svg" alt="Consilium" width="320">
-  </picture>
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/consilium-lockup-dark.svg">
+  <img src="docs/brand/consilium-lockup-light.svg" alt="Consilium" width="340">
+</picture>
+
+<h3>一个窗口，指挥你 Mac 上的 Claude、Codex 和 Antigravity</h3>
+
+<p>
+  <strong>简体中文</strong> &nbsp;|&nbsp; <a href="README.en.md">English</a>
 </p>
 
-<p align="center">一个窗口，指挥你 Mac 上的 Claude、Codex 和 Antigravity。</p>
-
-<p align="center">
-  <a href="https://github.com/xiangshang2004/consilium/releases/latest"><img alt="下载最新版本" src="docs/brand/badge-release.svg"></a>
-  <a href="#需要什么"><img alt="最低系统版本 macOS 13" src="docs/brand/badge-macos.svg"></a>
-  <a href="#安装"><img alt="预编译包适用于 Apple Silicon" src="docs/brand/badge-arm64.svg"></a>
+<p>
+  <a href="https://github.com/xiangshang2004/consilium/releases/latest"><img alt="Release 下载" src="docs/brand/badge-release.svg"></a>
+  <a href="#环境要求"><img alt="macOS 13+" src="docs/brand/badge-macos.svg"></a>
+  <a href="#安装与接入"><img alt="Apple Silicon arm64" src="docs/brand/badge-arm64.svg"></a>
+  <a href="PRIVACY.md"><img alt="Privacy Local-Only" src="docs/brand/badge-privacy.svg"></a>
+  <a href="#开发与目录结构"><img alt="Python Stdlib Only" src="docs/brand/badge-deps.svg"></a>
+  <a href="LICENSE"><img alt="License CC BY-NC-SA 4.0" src="docs/brand/badge-license.svg"></a>
 </p>
+
+<p>
+  <a href="#核心能力">核心能力</a> ·
+  <a href="#界面预览">界面预览</a> ·
+  <a href="#工作原理">工作原理</a> ·
+  <a href="#安装与接入">快速开始</a> ·
+  <a href="#使用指南">使用指南</a> ·
+  <a href="PRIVACY.md">隐私协议</a> ·
+  <a href="SECURITY.md">安全说明</a>
+</p>
+
+</div>
 
 ---
 
-Consilium 是一个本地的 macOS 应用。你在它的窗口里说一句话，它把这句话交给你电脑上已经装好的三个官方桌面应用（Claude、ChatGPT/Codex、Antigravity）去做，三家的回复都回到同一个窗口。
+**Consilium**（拉丁语“会诊、议事会”）是一个 **100% 本机运行的 macOS 应用与协作总线**。你在它的单一窗口里像平时聊天一样说一句话，Consilium 会把任务交给你 Mac 上**已经装好的三个官方桌面应用**（**Claude**、**ChatGPT / Codex**、**Antigravity**）去完成，并把三家的过程摘要、文件产物与最终答复汇合回同一个会诊界面。
 
-它自己不调用任何模型接口，也不包装命令行工具：干活的始终是那三个应用里你自己的账号和额度。
+> **无代理费用、无密钥托管、零云端中转**  
+> Consilium 自己不调用任何大模型 API，也不包装 CLI；干活的始终是你桌面应用里自己的账号和额度。后端零第三方 `pip` 依赖，前端零外部 CDN 资源。
 
-![对话界面](docs/screenshots/chat-light.png)
+![Consilium 对话界面（浅色模式）](docs/screenshots/chat-light.png)
 
-## 能做什么
+---
 
-- **在一个窗口里发消息。** 可以点名发给某一家或几家，也可以选“自动”，由 Consilium 挑一家当协调者，协调者决定自己做还是拆给别人，最后把结果汇总给你。
-- **档位自动定。** 不用你选模型和推理强度：处理的一端按难度自己定“快 / 均衡 / 深度”并照做，回复前面写明用了哪一档、为什么。想自己定时，输入框旁边随时可以改。
-- **自动分配看得见理由。** 选“自动”时，你那条消息下面会写明交给了谁、为什么：优先选正在待命、当前账号余量充足的一家，余量耗尽的不选。
-- **待命，零点几秒送达。** 三家都可以开一个待命会话，消息一到就被叫醒。没有待命的一家会收到系统通知；点开应用通知可拉起 Claude 或 Codex 的深链会话，Antigravity 则复制取件指令并切回 Consilium 窗口。
-- **按文件夹工作。** 新会诊时从“最近用过”里选文件夹，或用系统窗口选。文件夹在会诊开始后固定，侧边栏按文件夹分组。
-- **记住你的习惯。** 某一家看出你稳定的偏好（例如“代码审查都给 Codex”）会记成一条偏好，以后自动分配时参考。每一条都看得见、删得掉。
-- **额度不够时交接。** 某一家的额度快用完时，可以把任务连同进度说明交给另一家。切换账号始终由你手动完成。
-- **账号和余量一眼看到。** 对话顶部显示三端余量摘要，点开可看详情。左下角的卡片显示三家各自的状态、最近用的模型和推理强度、当前账号的余量。余量直接读 Cockpit Tools 本地的额度记录，不用各家自己去查；记录不是刚刷新的时会标明是多久前的。
-- **互不串线。** 窗口里只列出你在 Consilium 里发起的会诊。别的项目里的会话如果自己用了这条总线，不会出现在这里；归档只是在 Consilium 里收起，不动三个应用里的会话。
-- **全部在本机。** 数据在本机的 SQLite 里，服务只监听 `127.0.0.1`，界面不加载任何外部资源。
+## 核心能力
 
 <table>
   <tr>
-    <td><img src="docs/screenshots/new-conversation.png" alt="新会诊：选文件夹、档位和发给谁"></td>
-    <td><img src="docs/screenshots/chat-dark.png" alt="深色模式"></td>
+    <td width="50%" valign="top">
+      <strong>统一会诊与自动分配</strong><br>
+      支持点名某一家或多家协同，也可选「自动」：由 Consilium 结合待命状态、历史习惯与当前余量挑选协调者，并在消息下方写明分配理由；额度耗尽端不参与重任务分派。
+    </td>
+    <td width="50%" valign="top">
+      <strong>零轮询即时叫醒</strong><br>
+      三端各自保持轻量级只读 <code>kqueue</code> 门铃待命，消息一到零点几秒响应；无人待命时发送仅提示不抢焦的系统通知，点开通知可通过官方深链或剪贴板快速取件。
+    </td>
   </tr>
   <tr>
-    <td align="center">新会诊：选文件夹、档位和发给谁</td>
-    <td align="center">深色模式</td>
+    <td width="50%" valign="top">
+      <strong>按文件夹分组，绑定专属会话</strong><br>
+      新会诊时通过系统 <code>NSOpenPanel</code> 或最近记录选定工作目录，侧边栏自动按目录聚合；支持在各应用为重要会诊绑定延续上下文的专属原生会话。
+    </td>
+    <td width="50%" valign="top">
+      <strong>自动判断难度档位</strong><br>
+      无需每次手动挑模型，接收端按「快 / 均衡 / 深度」自行判断或使用指定档位执行，并在回复中明示实际所用模型、推理强度与档位理由。
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>本地额度余量感知与交接</strong><br>
+      只读读取 Cockpit Tools 与本地速率缓存，顶栏与左下角卡片直观展示三端余量、重置倒计时与历史账号池；余量偏低时可带上下文交接给另一端（切号仍由你手动完成）。
+    </td>
+    <td width="50%" valign="top">
+      <strong>习惯沉淀、图文与三页右栏</strong><br>
+      支持直接粘贴/拖拽 PNG、JPEG、WebP、GIF 截图（单张 ≤ 20 MB）；用 <code>/plan</code>、<code>/goal</code>、<code>/agents</code>、<code>/trace</code> 触发协作模式；可拖拽右栏集中查看任务、文件与分支；学会的偏好每条可见、随时可删。
+    </td>
   </tr>
 </table>
 
-## 它是怎么工作的
+---
 
-```text
-        你在 Consilium 窗口里说一句话
-                     │
-                     ▼
-      ┌──────────────────────────────┐
-      │  Consilium.app（本机服务）      │   SQLite 记录会诊、任务和事件
-      │  127.0.0.1:18920              │   门铃：文件信号 + kqueue，不轮询
-      └──────────────┬───────────────┘
-                     │  MCP（每个应用里装一个 consilium 连接）
-        ┌────────────┼────────────┐
-        ▼            ▼            ▼
-     Claude        Codex      Antigravity
-   （官方桌面应用，用你自己的账号和额度）
+## 界面预览
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/screenshots/new-conversation.png" alt="新会诊：选文件夹、档位与目标端">
+    </td>
+    <td width="50%">
+      <img src="docs/screenshots/chat-dark.png" alt="Consilium 深色模式">
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><strong>新会诊</strong> — 选定工作目录、难度档位与接单端（或自动）</td>
+    <td align="center"><strong>深色模式</strong> — 纸墨配色适配系统浅/深色外观</td>
+  </tr>
+</table>
+
+---
+
+## 工作原理
+
+```mermaid
+flowchart TB
+  UI["Consilium.app<br/>(WKWebView + NSStatusItem)"]
+  Daemon["本地守护进程 · 127.0.0.1:18920<br/>SQLite WAL + Attachments + SSE"]
+  RV["/tmp/consilium-&lt;uid&gt;/<br/>signals/*.seq · kqueue · wake.sock"]
+  Quota["本地只读采集 (零令牌消耗)<br/>Cockpit 历史 · Codex Rollouts · Claude 缓存 · Antigravity 记录"]
+
+  UI <-->|"POST /api/login (HttpOnly Cookie)<br/>SSE /api/stream + CSRF"| Daemon
+  Daemon -->|"写 .seq + 脉冲"| RV
+  Quota -.->|"只读白名单 / os.stat"| Daemon
+
+  Daemon <-->|"MCP (HTTP / stdio)"| Claude["Claude.app / Claude Code"]
+  Daemon <-->|"MCP HTTP + Bearer"| Codex["ChatGPT / Codex Desktop"]
+  Daemon <-->|"MCP HTTP + Bearer"| AG["Antigravity.app"]
+
+  RV -.->|"kqueue 零 CPU 唤醒"| Claude
+  RV -.->|"300s 只读长等待"| Codex
+  RV -.->|"300s 只读长等待"| AG
 ```
 
-- **总线**：一个本地服务，通过 MCP 提供协作工具（建会诊、派任务、取件、汇报进度、交付、交接、记偏好、查额度等）。三个应用通过各自的 MCP 配置连上它。
-- **门铃**：有任务时写一个信号文件，待命会话靠 kqueue 被叫醒，空等时不花额度（Codex 和 Antigravity 的待命是 5 分钟一轮的长等待，会用掉少量额度）。
-- **没人待命时**：发系统通知提醒取件（后台 `osascript` 冷通知仅弹窗提示，不抢焦或自动跳转）；点击 Consilium 应用通知时，Claude 和 Codex 通过 `claude://`、`codex://` 深链新开会话并预填取件提示，Antigravity 复制取件指令并切回 Consilium。
-- **协作技能**：安装时会给三个应用各放一份 `consilium-collab` 技能，告诉它们怎么取件、怎么回复、怎么交接。
+- **本地总线（SQLite WAL）**：保存会诊、消息、任务租约（`attempt_id` 围栏防过期覆盖）、事件流与幂等请求键（断线原样重试不重复建单）。
+- **门铃机制（`kqueue` + `.seq`）**：有新工作时写信号文件并按来源隔离（`scope="consilium"`），Consilium 会诊与其它项目的 MCP 会话**互不串线**。
+- **冷通知回退**：无人待命时可选弹系统通知；点击通知时对 Claude / Codex 唤起已核实的 `claude://code/new` 与 `codex://new?prompt=` 深链，Antigravity 复制取件指令并切回 Consilium。
 
-更细的设计见 [docs/architecture.md](docs/architecture.md)。
+更深入的协议与不变量设计请参阅 [docs/architecture.md](docs/architecture.md)。
 
-## 需要什么
+---
 
-- macOS 13 或更新。Releases 里的压缩包是 Apple 芯片版；Intel 机器可以自己构建，但没有测过。
-- Command Line Tools（提供 `/usr/bin/python3` 和 `swiftc`）：`xcode-select --install`。不需要完整的 Xcode，也不需要任何 pip 包。
-- 三个桌面应用里至少装了一个：Claude、ChatGPT（Codex）、Antigravity。
+## 环境要求
 
-## 安装
+| 组件 | 要求 |
+|---|---|
+| **系统** | macOS 13 (Ventura) 或更新版本；Releases 提供 **Apple Silicon (`arm64`)** 预编译包，Intel Mac 可从源码编译 |
+| **系统工具** | Apple Command Line Tools（系统自带 `/usr/bin/python3` 3.9+ 与 `swiftc`）：`xcode-select --install`；**无需 Xcode，无需 `pip install`** |
+| **桌面应用** | 已安装 Claude、ChatGPT (Codex)、Antigravity 中的任意一个或多个官方桌面应用 |
 
-**1. 拿到应用。** 从 [Releases](https://github.com/xiangshang2004/consilium/releases) 下载 Apple 芯片版 `.dmg`，双击打开，将 Consilium 拖入 Applications。也可以下载 `.zip`，解压后把应用拖入“应用程序”。应用没有做公证，第一次打开要在“系统设置 → 隐私与安全性”里点“仍要打开”。
+---
 
-也可以自己构建：
+## 安装与接入
+
+### 第 1 步：获取 Consilium.app
+
+- **推荐**：前往 [Releases](https://github.com/xiangshang2004/consilium/releases/latest) 下载最新的 `Consilium-<版本>-arm64.dmg`（或 `.zip`）及对应 `.sha256` 校验文件，将 `Consilium.app` 拖入「应用程序」。
+  > **提示**：预编译包目前使用本地 ad-hoc 签名（无 Apple 公证），首次打开若受 Gatekeeper 拦截，请在「系统设置 → 隐私与安全性」点击 **仍要打开**。
+
+<details>
+<summary>或从源码零依赖构建（约 5 秒完成）</summary>
 
 ```bash
 git clone https://github.com/xiangshang2004/consilium.git
@@ -88,89 +156,110 @@ cd consilium
 cp -R build/Consilium.app /Applications/
 ```
 
-**2. 把三个应用连上。** 先看一遍会改哪些文件，再执行：
+</details>
+
+### 第 2 步：连接桌面应用（仅在你确认后写入）
+
+先以只读演练（`--dry-run`）预览将要改动的文件，确认无误再应用：
 
 ```bash
+# 预览接入计划（不改动任何文件）
 python3 scripts/install.py --dry-run --targets claude_code codex antigravity
+
+# 写入本地 MCP 与 consilium-collab 技能（自动保留 0700/0600 时间戳备份）
 python3 scripts/install.py --apply --targets claude_code codex antigravity
 ```
 
-安装脚本会给每个被改的配置文件留带时间戳的备份。只想连其中一两家，就只写对应的目标。
+- 只用其中一两家时，仅保留对应 target（可选目标：`claude_code`、`codex`、`antigravity`、`claude_desktop`、`claude_agents`、`codex_agents`、`launchd`）。
+- 三个桌面应用只在**新开的会话**里才会加载新接入的 `consilium` 工具，已开着的旧会话需重开。
 
-**3. 打开 Consilium。** 后台服务随应用一起启动、一起退出。需要在离开窗口时收到任务提醒，可在 Mac 屏幕顶部的「Consilium」菜单点「开启任务提醒…」。系统已有决定时，同一菜单会显示授权状态，可从那里打开系统通知设置。
+### 第 3 步：启动 Consilium 并开启待命
 
-三个应用都只在**新开的会话**里才看得到新装的 consilium 工具，已经开着的会话要重开一次。
+1. 打开 **Consilium.app**（后台服务随应用自动启动与退出）。
+2. 若希望离开窗口时收到系统提醒，点击顶部菜单栏「Consilium → **开启任务提醒…**」按需授权。
+3. 点击左下角卡片里的 **「叫醒」**，即可让对应桌面应用开启只读待命会话。
 
-### 卸载
+### 完整卸载与清理
 
 ```bash
+# 1. 移除由安装器写入的受管配置条目
 python3 scripts/install.py --uninstall --targets claude_code codex antigravity
+
+# 2. 清理 App、本机状态库、日志与临时门铃目录
+rm -rf /Applications/Consilium.app \
+       "$HOME/Library/Application Support/consilium" \
+       "$HOME/Library/Logs/consilium" \
+       "/tmp/consilium-$(id -u)"
 ```
 
-然后把 Consilium.app 拖进废纸篓。会诊记录在 `~/Library/Application Support/consilium/`，要一并清掉就删这个目录。
+---
 
-## 使用
+## 使用指南
 
-1. 按 ⌘N 新开会诊，选文件夹，选发给谁，说要做的事。档位默认自动，想指定时点“档位”。
-2. 第一次用时，左下角卡片里没在待命的一家旁边有“叫醒”按钮：点一下会在那个应用里新开一个待命会话，你按一次发送就行（Antigravity 没有深链，会复制一段指令让你粘贴）。
-3. 回复出现在对话里，并显示处理端和实际模型。Antigravity 的规划、执行模型可从本机记录匹配到对应任务时会一并显示。继续在同一个会诊里输入就是追问。
-4. 鼠标移到左侧某个会诊上，右边出现归档按钮；归档的会诊收进列表底部的“已归档”。
-5. 右上角的图标打开右侧栏，看这个会诊的任务、文件和分支；拖左边缘调宽度，⌘\ 关闭。
-6. 缩窄窗口时，标题下会显示接单端和任务状态。同一会诊有多端并行时可以分别看到，点击摘要即可打开任务详情。
-7. 点标题或标题旁的“改名”按钮可以改名（回车保存、Esc 取消）；右上角“⋯”里也有“改名”、各端专属会话入口（“在 Claude / Codex 里开专属会话”与“复制 Antigravity 绑定指令”）、主题切换和“模型与账号”“偏好”两项设置。
+- **新建与发消息**：按 `⌘N` 新开会诊 → 选择工作目录（支持新建目录）→ 选定「自动」或点名发送；支持粘贴/拖入截图，可同时保留多个草稿。
+- **快捷指令 (`/`)**：在输入框键入 `/` 可快速选择 `/plan`、`/goal`、`/agents <数量>`（请求接收端内部启动原生子代理）、`/trace`（上报阶段证据摘要）、`/export`（导出 Markdown）或各端专属会话入口。
+- **右侧工作区与改名**：右上角按钮或 `⌘\` 开合右侧「任务 / 文件 / 分支」三栏（左边缘可拖宽）；点击顶部标题或「改名」编辑标题（回车/失焦保存，Esc 取消）；鼠标悬停左侧会诊条目可一键归档（只收起 Consilium 展示，不影响各应用原会话）。
+- **接入 Cockpit Tools 查看额度**：
+  1. 在同 macOS 用户下安装并打开 [Cockpit Tools](https://github.com/jlcodes99/cockpit-tools/releases)，登录并刷新 Codex / Antigravity 账号。
+  2. Consilium 自动只读 `~/.antigravity_cockpit/` 历史记录，并在左下角卡片、顶栏与 `/accounts` 设置中展示当前账号余量与重置倒计时；若记录过久会标注采样时间或提示待同步。Claude 无 Cockpit 额度时，Consilium 会继续读取可用的 `~/.claude/` 本地用量缓存。
 
-发送后若连接中断，保留相同内容重试可取回同一条消息的回执。恢复连接后，窗口会重新获取完整状态。接入方可查阅[重试与断线恢复](docs/architecture.md#重试与断线恢复)。
+---
 
-### 用 Cockpit Tools 查看额度
+## 隐私与安全
 
-1. 在同一个 macOS 用户下打开 Cockpit Tools，选择平常使用的 Codex 或 Antigravity 账号，并刷新一次额度。Consilium 会自动读取 `~/.antigravity_cockpit/` 中的额度历史和账号指针，无需在 Consilium 里填写 API 密钥。 [Cockpit Tools 下载](https://github.com/jlcodes99/cockpit-tools/releases)
-2. 打开 Consilium，点击会诊顶部的“额度”，或在输入框输入 `/accounts` 打开账号与余量设置。点左下角对应端的卡片，可看当前账号余量，以及样本提供的重置时间。
-3. 如果显示“待同步”“账号未知”或“暂无样本”，先在 Cockpit Tools 确认当前账号并刷新，再回 Consilium 查看。旧记录会显示采样时间。Cockpit Tools 的 Claude 账号记录没有额度，Consilium 可从可用的 Claude 本地用量缓存读取；缺少可用样本时显示未知。
+我们把隐私边界写进了代码和 [`PRIVACY.md`](PRIVACY.md) 协议中，核心承诺如下：
 
-## 安全与隐私
+| 维度 | 实现保障 |
+|---|---|
+| **零遥测、零外连** | 纯本机运行，daemon 仅绑定 `127.0.0.1`；`/ui` 实行 `default-src 'none'` 严格离线 CSP、`Referrer-Policy: no-referrer` 与 `Cache-Control: no-store`；`Consilium.app` 使用 `WKWebsiteDataStore.nonPersistent()` 并拦截非本机网页。 |
+| **认证与防护** | API/MCP 强制 `0600` 256 位 `auth.token`（拒绝 URL `?token=` 传参，支持 `consilium rotate-token` 轮换）；Cookie 写操作同时校验 `HttpOnly`、`SameSite=Strict`、精确 `Origin`、`Content-Type` 与 `X-Consilium-CSRF`；单张图片限制 ≤ 20 MB 并校验文件魔数与防符号链接目录权限。 |
+| **本机只读最小白名单** | 仅读取 Cockpit 工具白名单元数据与 `mode=ro` 历史数据库、Codex 会话日志末尾 128 KB 里的 `rate_limits`、Claude 本地用量缓存及 Antigravity 日志中匹配当前 `attempt_id` 的模型标识；**绝不打开 `codex_accounts.sqlite` 或任何加密凭证库**。 |
+| **账号隐私本机隔离** | 上游账号标识在入库时即 SHA-256 哈希为 `acct-<10-hex>`；`quota_account_names`（登录邮箱/展示名）**只在本机界面显示，永不通过 MCP 或提示词发送给三大桌面 AI**。 |
 
-- 服务只监听 `127.0.0.1`。MCP 请求要带本机的访问令牌（`auth.token`，权限 0600）；浏览器端用随机会话，写操作要同源、JSON 和 CSRF 令牌三样齐全。
-- 界面完全离线：内容安全策略以 `default-src 'none'` 为基线（仅放行页面内联样式/脚本、同源请求及同源/`data:`/`blob:` 图片，且 `frame-ancestors 'none'`），不加载任何外部链接、脚本或资源。
-- 打开桌面会话使用 Claude 和 Codex 的深链；通知授权由 macOS 管理。选定的工作目录会随任务交给接单端，实际文件访问仍由接单应用及系统权限决定。
-- 读 Cockpit Tools 的数据时只读额度记录和“当前是哪个账号”的指针，不打开它的账号库、密钥和加密文件；账号标识在 Consilium 里以哈希保存。窗口里显示的账号名（登录邮箱）只留在本机，发给三个应用的内容里用的是“账号 A / B”这样的代号。
-- 安装脚本默认只演示（`--dry-run`），`--apply` 才会写入，并且每个文件都留备份；Claude 桌面应用在运行时不会改它的配置。
+完整数据清单、第三方桌面应用（Anthropic / OpenAI / Google）边界说明与删除方式，请参阅 **[隐私协议（PRIVACY.md）](PRIVACY.md)** 与 **[安全政策（SECURITY.md）](SECURITY.md)**。
 
-## 目前的限制
+---
 
-- 只支持 macOS 的桌面使用，不做手机适配。
-- Consilium 自己不能替三个应用切换模型。档位靠各应用里的会话自己执行（例如把难的任务交给更高推理强度的子代理），做没做到以它上报的模型、effort 和档位为准。
-- Claude 桌面应用不允许被自动事件叫醒的那一轮自己开新会话，所以默认由待命会话直接处理；需要专属会话时由你点一下来开。
+## 已知边界
 
-## 开发
+- 仅针对 **macOS 桌面端** 设计与验证（最低 macOS 13）。
+- Consilium 不能从外部代各桌面应用切换底层主模型；模型与推理强度遵循各应用内部设置，由其执行后如实上报。
+- Claude Desktop 不允许被自动后台唤醒轮次擅自拉起新会话，因此默认由待命会话携带上下文处理；需独立连续会话时，可通过顶部 `⋯` 一键开启并绑定当前会诊。
 
-纯 Python 标准库（3.9 以上），没有第三方依赖。应用外壳是 Swift，用 Command Line Tools 自带的 `swiftc` 编译。
+---
+
+## 开发与目录结构
+
+全套工程零第三方依赖（Python 3.9+ 标准库 + CLT `swiftc`）：
 
 ```bash
-# 全部测试
+# 运行全套单元测试（隔离模式 / 本地同步模式）
 env -u CLAUDE_CONFIG_DIR CONSILIUM_DRY_RUN=1 CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC=1 \
-  /usr/bin/python3 -B -m unittest discover -s tests
+  /usr/bin/python3 -B -m unittest discover -s tests -p 'test_*.py'
 
-# 构建应用并冒烟测试
+# 构建与双场景冒烟测试
 ./scripts/build_app.sh && ./scripts/smoke_test_app.sh
 
-# 不开应用，直接起服务或看状态
+# 独立启动服务或查看状态
 python3 -m consilium.cli serve
 python3 -m consilium.cli status
 ```
 
-| 目录 | 内容 |
+| 目录 / 文件 | 说明 |
 |---|---|
-| `consilium/` | 总线、存储、门铃、额度、界面（单个离线网页） |
-| `app/macos/` | Consilium.app 的 Swift 源码 |
-| `adapters/` | 三个应用用的协作技能和子代理模板 |
-| `scripts/` | 构建、冒烟测试、安装、发布 |
-| `tests/` | 单元和回归测试 |
-| `openspec/` | 需求和设计记录 |
-| `reviews/` | 每一轮的评审和交接记录（R001 起） |
-| `docs/` | 架构说明、标志、截图 |
+| `consilium/` | 协作总线、SQLite 存储、kqueue 门铃、额度与模型提取、离线 UI |
+| `app/macos/` | `Consilium.app` 原生菜单栏与窗口 Swift 源码及图标资源 |
+| `adapters/` | 三端协作技能 `consilium-collab`、Claude/Codex 子代理与 `launchd` 模板 |
+| `scripts/` | App 构建、冒烟测试、双阶段安装器与版本发布脚本 |
+| `tests/` | 单元测试与安全性/并发/UI 回归测试 |
+| `openspec/` & `reviews/` | OpenSpec 契约规范与多端交叉审查归档 |
+| `docs/` | 架构详解（[docs/architecture.md](docs/architecture.md)）、品牌 SVG 与截图 |
 
-## 许可
+欢迎阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 参与改进！
 
-非商业使用可以复制、修改和分享；分享时须保留署名、附上许可链接并标明修改，分享改编作品时须按相同方式授权。商业使用须另获相应权利人的书面许可。[CC BY-NC-SA 4.0 许可全文](LICENSE)
+---
 
-仓库内 OpenSpec 技能保留各自的 MIT 声明，三个桌面应用的图标和商标归各自权利人。分发包随附许可和权属说明。[权属说明](NOTICE)
+## 许可与权属
+
+- Consilium 原创代码与文档基于 **CC BY-NC-SA 4.0** 协议开源：非商业用途可自由复制、修改与分享（须保留署名、附许可链接并保持相同方式共享）；商业使用须另获权利人书面许可。全文见 [LICENSE](LICENSE)。
+- 仓库内附带的 OpenSpec 工具模板遵循其 MIT 声明，三方桌面应用图标及商标归各自权利人所有。详见 [NOTICE](NOTICE)。
