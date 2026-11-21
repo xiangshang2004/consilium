@@ -183,6 +183,6 @@ python3 -m consilium.cli status
 
 ## 许可
 
-Consilium 原创代码、文档和美术采用与 Cockpit Tools 相同的 **CC BY-NC-SA 4.0**。非商业使用可以复制、修改和分享；分享时须保留署名、附上许可链接并标明修改，分享改编作品时须按相同方式授权。商业使用须另获相应权利人的书面许可。[许可全文](LICENSE) · [Cockpit Tools 的许可声明](https://github.com/jlcodes99/cockpit-tools/blob/v1.4.2/README.md#许可证)
+非商业使用可以复制、修改和分享；分享时须保留署名、附上许可链接并标明修改，分享改编作品时须按相同方式授权。商业使用须另获相应权利人的书面许可。[CC BY-NC-SA 4.0 许可全文](LICENSE) · [Cockpit Tools 的许可声明](https://github.com/jlcodes99/cockpit-tools/blob/v1.4.2/README.md#许可证)
 
 仓库内 OpenSpec 技能保留各自的 MIT 声明，三个桌面应用的图标和商标归各自权利人。分发包随附许可和权属说明。[权属说明](NOTICE)
