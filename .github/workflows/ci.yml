@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-tests:
+    name: Python Unit Tests (${{ matrix.python-version }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["system", "3.12"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        if: ${{ matrix.python-version != 'system' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run isolated unit test suite
+        env:
+          PYTHON_BIN: ${{ matrix.python-version == 'system' && '/usr/bin/python3' || 'python3' }}
+        run: |
+          "${PYTHON_BIN}" --version
+          env -u CLAUDE_CONFIG_DIR CONSILIUM_DRY_RUN=1 CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC=1 \
+            "${PYTHON_BIN}" -B -m unittest discover -s tests -p 'test_*.py'
+
+  macos-app:
+    name: Consilium.app Build & Smoke Test
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Consilium.app and verify signature
+        run: |
+          ./scripts/build_app.sh
+          codesign --verify --deep --strict build/Consilium.app
+
+      - name: Run two-case Consilium.app smoke test
+        run: ./scripts/smoke_test_app.sh
