@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="137" height="22" role="img" aria-label="Apple Silicon arm64">
+  <rect width="137" height="22" rx="4" fill="#475569"/>
+  <path d="M4 0h85v22H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4Z" fill="#374151"/>
+  <g fill="white" font-family="system-ui, sans-serif" font-size="12" text-anchor="middle">
+    <text x="44.5" y="15">Apple Silicon</text>
+    <text x="113" y="15">arm64</text>
+  </g>
+</svg>

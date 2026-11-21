@@ -7,6 +7,12 @@
 
 <p align="center">一个窗口，指挥你 Mac 上的 Claude、Codex 和 Antigravity。</p>
 
+<p align="center">
+  <a href="https://github.com/xiangshang2004/consilium/releases/latest"><img alt="下载最新版本" src="docs/brand/badge-release.svg"></a>
+  <a href="#需要什么"><img alt="最低系统版本 macOS 13" src="docs/brand/badge-macos.svg"></a>
+  <a href="#安装"><img alt="预编译包适用于 Apple Silicon" src="docs/brand/badge-arm64.svg"></a>
+</p>
+
 ---
 
 Consilium 是一个本地的 macOS 应用。你在它的窗口里说一句话，它把这句话交给你电脑上已经装好的三个官方桌面应用（Claude、ChatGPT/Codex、Antigravity）去做，三家的回复都回到同一个窗口。
