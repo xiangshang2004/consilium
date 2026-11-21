@@ -25,9 +25,50 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    func requestAuthorizationIfNeeded() {
-        guard let uc = center, !config.noNotifications, !config.dryRun else { return }
-        uc.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    enum ReminderPermission {
+        case availableToRequest, allowed, denied, unavailable
+
+        init(_ status: UNAuthorizationStatus) {
+            switch status {
+            case .notDetermined: self = .availableToRequest
+            case .authorized, .provisional: self = .allowed
+            case .denied: self = .denied
+            default: self = .unavailable
+            }
+        }
+
+        var menuTitle: String {
+            switch self {
+            case .availableToRequest: return "开启任务提醒…"
+            case .allowed: return "任务提醒已授权 · 通知设置…"
+            case .denied: return "任务提醒未获授权 · 通知设置…"
+            case .unavailable: return "任务提醒不可用"
+            }
+        }
+    }
+
+    func reminderPermission() async -> ReminderPermission {
+        guard let center, !config.dryRun else { return .unavailable }
+        let settings = await center.notificationSettings()
+        return ReminderPermission(settings.authorizationStatus)
+    }
+
+    @MainActor
+    func configureReminders() async {
+        switch await reminderPermission() {
+        case .availableToRequest:
+            do {
+                _ = try await center?.requestAuthorization(options: [.alert, .sound])
+            } catch {
+                NSAlert(error: error).runModal()
+            }
+        case .allowed, .denied:
+            if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") {
+                NSWorkspace.shared.open(url)
+            }
+        case .unavailable:
+            break
+        }
     }
 
     func processState(_ state: DashboardState) {

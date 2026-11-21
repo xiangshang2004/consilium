@@ -2,12 +2,13 @@ import Cocoa
 import Darwin
 import Foundation
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let config: AppConfig
     private let daemonManager: DaemonManager
     private let client: AuthAndStreamClient
     private let notifier: NotificationManager
 
+    private let reminderItem = NSMenuItem(title: "正在读取任务提醒权限…", action: nil, keyEquivalent: "")
     private var statusBarController: StatusBarController?
     private var mainWindowController: MainWindowController?
     private var sigtermSource: DispatchSourceSignal?
@@ -74,6 +75,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let openItem = NSMenuItem(title: "打开 Consilium", action: #selector(openMainWindowFromMenu), keyEquivalent: "o")
         openItem.target = self
         appMenu.addItem(openItem)
+        reminderItem.target = self
+        appMenu.addItem(reminderItem)
+        appMenu.delegate = self
+        refreshReminderItem()
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "隐藏 Consilium", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(NSMenuItem.separator())
@@ -104,6 +109,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.windowsMenu = windowMenu
 
         NSApp.mainMenu = mainMenu
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        refreshReminderItem()
+    }
+
+    private func refreshReminderItem() {
+        Task { @MainActor in
+            let permission = await notifier.reminderPermission()
+            reminderItem.title = permission.menuTitle
+            reminderItem.action = permission == .unavailable ? nil : #selector(configureTaskReminders)
+        }
+    }
+
+    @objc private func configureTaskReminders() {
+        Task { @MainActor in
+            await notifier.configureReminders()
+            refreshReminderItem()
+        }
     }
 
     @objc private func openMainWindowFromMenu() {
@@ -144,7 +168,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self = self else { return }
                 self.statusBarController?.updateState(initialState)
                 self.notifier.processState(initialState)
-                self.notifier.requestAuthorizationIfNeeded()
                 self.client.startSSE()
 
                 guard let win = self.mainWindowController else { return }
