@@ -15,6 +15,14 @@ The conversation and task drawer MUST display consistent status from one snapsho
 - **WHEN** the sidebar is closed or the window uses its narrow layout
 - **THEN** the conversation header MUST still show the current quota summary and offer access to account details. It MUST distinguish a known zero balance from an unconfirmed account or a missing sample.
 
+#### Scenario: The conversation uses a narrow window
+- **WHEN** the user views a conversation with tasks in a narrow window
+- **THEN** the title and current assignees with their task states MUST remain visible, with an action to open task details.
+
+#### Scenario: The user enables native task reminders
+- **WHEN** the native app starts or opens a conversation
+- **THEN** it MUST use existing notification authorization and request undecided access only after the user chooses the reminder action in the app menu. The menu MUST offer system notification settings when macOS has a prior decision.
+
 #### Scenario: Old progress is still on record
 - **WHEN** a task has a prior progress update but lacks a completion result
 - **THEN** the task card MUST show the last report time and use the authoritative lease status for an expiry indication.
