@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "consilium"
-version = "0.7.2"
+version = "0.7.3"
 description = "Local MCP collaboration bus and zero-CLI doorbell wakeup bridge for desktop AI apps on macOS"
 readme = "README.md"
 license = "CC-BY-NC-SA-4.0 AND LicenseRef-ThirdParty-App-Icons"
