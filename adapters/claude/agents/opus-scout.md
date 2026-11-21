@@ -1,6 +1,6 @@
 ---
 name: opus-scout
-description: Codebase search, log inspection, and lightweight verification scout routed to Opus for consilium tasks (replacing haiku per user policy).
+description: Codebase search, log inspection, and lightweight verification scout routed to Opus for consilium tasks.
 model: opus
 ---
 

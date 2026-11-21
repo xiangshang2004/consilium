@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import unittest
 
 from consilium.dashboard import render_dashboard_html
@@ -90,6 +91,7 @@ class R016RegressionsTests(unittest.TestCase):
 
         def plan(*targets: str) -> list:
             home = tempfile.mkdtemp(prefix="consilium-r016-")
+            self.addCleanup(shutil.rmtree, home, True)
             env = dict(os.environ)
             env.pop("CLAUDE_CONFIG_DIR", None)
             out = subprocess.run(
@@ -114,6 +116,7 @@ class R016RegressionsTests(unittest.TestCase):
 
         for original in ('model = "x"\n', 'model = "x"\n\n', 'model = "x"'):
             home = tempfile.mkdtemp(prefix="consilium-r016-rt-")
+            self.addCleanup(shutil.rmtree, home, True)
             os.makedirs(os.path.join(home, ".codex"))
             cfg = os.path.join(home, ".codex", "config.toml")
             with open(cfg, "w", encoding="utf-8") as handle:

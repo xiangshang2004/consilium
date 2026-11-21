@@ -34,7 +34,7 @@ class WakeupAndColdFallbackTests(unittest.TestCase):
         shutil.rmtree(self.tmp_rv, ignore_errors=True)
 
     def test_long_home_path_shortens_unix_socket_inside_private_subdir(self) -> None:
-        long_rv = "/tmp/" + ("nested_directory_segment_" * 5) + "consilium"
+        long_rv = os.path.join(self.tmp_rv, ("nested_directory_segment_" * 5) + "consilium")
         fallback_dir = os.path.join(self.tmp_rv, "sk")
         prev_fb = os.environ.get("CONSILIUM_SOCKET_FALLBACK_DIR")
         os.environ["CONSILIUM_SOCKET_FALLBACK_DIR"] = fallback_dir
@@ -48,7 +48,7 @@ class WakeupAndColdFallbackTests(unittest.TestCase):
                 os.environ.pop("CONSILIUM_SOCKET_FALLBACK_DIR", None)
             else:
                 os.environ["CONSILIUM_SOCKET_FALLBACK_DIR"] = prev_fb
-            shutil.rmtree("/tmp/nested_directory_segment_nested_directory_segment_nested_directory_segment_nested_directory_segment_nested_directory_segment_consilium", ignore_errors=True)
+            shutil.rmtree(long_rv, ignore_errors=True)
 
     def test_db_free_kqueue_hot_wakeup_and_lease_cleanup(self) -> None:
         wait_result = {}
@@ -188,32 +188,34 @@ class WakeupAndColdFallbackTests(unittest.TestCase):
         self.assertEqual(len(picked["claimed_tasks"]), 1)
 
     def test_deeplink_utf8_pre_encode_truncation_and_codex_prompt_param(self) -> None:
+        sample_ws = "/tmp/consilium-demo-workspace"
+        enc_ws = urllib.parse.quote(sample_ws, safe="")
         chinese_prompt = "/请立即审查中文长提示词" * 30
         claude_url = ColdDoorbell.build_deeplink(
             "claude",
             chinese_prompt,
-            workspace_path="/Users/up/code/github/consilium",
+            workspace_path=sample_ws,
             max_url_len=295,
         )
         self.assertLessEqual(len(claude_url), 295)
         self.assertTrue(claude_url.startswith("claude://code/new?q="))
-        self.assertIn("&folder=%2FUsers%2Fup%2Fcode%2Fgithub%2Fconsilium", claude_url)
+        self.assertIn(f"&folder={enc_ws}", claude_url)
         parsed = urllib.parse.urlparse(claude_url)
         params = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
         # Leading '/' must be stripped, and UTF-8 must decode cleanly without split %XX!
         self.assertFalse(params["q"][0].startswith("/"))
-        self.assertEqual(params["folder"][0], "/Users/up/code/github/consilium")
+        self.assertEqual(params["folder"][0], sample_ws)
 
         codex_url = ColdDoorbell.build_deeplink(
             "chatgpt",
             "/Claim task T-999 from consilium",
-            workspace_path="/Users/up/code/github/consilium",
+            workspace_path=sample_ws,
         )
         self.assertTrue(codex_url.startswith("codex://new?prompt="))
         self.assertNotIn("&folder=", codex_url)
-        self.assertIn("&path=%2FUsers%2Fup%2Fcode%2Fgithub%2Fconsilium", codex_url)
+        self.assertIn(f"&path={enc_ws}", codex_url)
         codex_params = urllib.parse.parse_qs(urllib.parse.urlparse(codex_url).query)
-        self.assertEqual(codex_params["path"][0], "/Users/up/code/github/consilium")
+        self.assertEqual(codex_params["path"][0], sample_ws)
         self.assertNotIn("[cwd:", codex_params["prompt"][0])
         self.assertFalse(codex_params["prompt"][0].startswith("/"))
 
@@ -229,7 +231,7 @@ class WakeupAndColdFallbackTests(unittest.TestCase):
             title='Check "quotes" & newlines\nhere',
             body="Task T-123 ready",
             pickup_prompt='Use consilium_pickup_inbox("claude") for "T-123"',
-            workspace_path="/Users/up/code/github/consilium",
+            workspace_path="/tmp/consilium-demo-workspace",
             open_deeplink=True,
             dry_run=True,
         )

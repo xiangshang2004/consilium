@@ -176,7 +176,7 @@ class R012RegressionsTests(unittest.TestCase):
                     f"{self.tmp_home!r}, '--data-dir', {self.tmp_state!r}]))"
                 ),
             ],
-            cwd="/Users/up/code/github/consilium",
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             env=cli_env,
             capture_output=True,
             text=True,

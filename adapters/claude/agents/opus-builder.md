@@ -1,6 +1,6 @@
 ---
 name: opus-builder
-description: Implementation, refactoring, and verification specialist routed to Opus for consilium tasks (replacing sonnet per user policy).
+description: Implementation, refactoring, and verification specialist routed to Opus for consilium tasks.
 model: opus
 ---
 

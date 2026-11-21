@@ -11,13 +11,13 @@ You are one of three desktop AI peers sharing a single local collaboration bus (
 - `antigravity`: `Antigravity.app` (`com.google.antigravity`)
 
 ## 0. Project Workflow & Worktree Rules (Highest Priority)
-1. **Repository Rules Always Win**: Before creating missions or editing code in a repository that defines its own collaboration workflow (e.g., `captalent-collab` / `collab` branch claim tables, `/Users/up/code/AGENTS.md`, or `/Users/up/code/README.md`), follow that project's workflow first. `consilium` is only the doorbell/coordination bus and **never replaces a project's claim table**.
+1. **Repository Rules Always Win**: Before creating missions or editing code in a repository that defines its own collaboration workflow or `AGENTS.md`, follow that repository's rules first. `consilium` is only the doorbell/coordination bus and **never replaces a repository's native workflow**.
 2. **Branch Prefix Mapping**:
    - `claude` -> `claude/<topic>-<YYYYMMDD>`
    - `chatgpt` -> `codex/<topic>-<YYYYMMDD>`
    - `antigravity` -> `gemini/<topic>-<YYYYMMDD>`
 3. **Worktree Isolation & Cleanup**:
-   - Use each app's built-in worktree mechanism when editing code; never create non-compliant directories under `/Users/up/code`.
+   - Use each app's built-in worktree mechanism when editing code; keep temporary artifacts out of tracked source directories.
    - Workers report their branch name and full commit SHA upward, and **never** merge, push, or delete branches/worktrees on their own. The coordinator merges and cleans up only after user confirmation.
 
 ## 1. Coordinator Mode (When the User Issues a Cross-Desktop Order Here)
@@ -26,7 +26,7 @@ Whenever the user gives an instruction here that asks to coordinate across model
    - Each peer entry in `quotas` exposes `min_remaining_percent`, `exhausted`, `dispatch_recommended`, `earliest_reset_at`, `earliest_reset_in_human`, and per-window details (`5h`, `7d`, model groups).
    - Avoid dispatching heavy tasks to any peer with `dispatch_recommended == false`; instead route to peers with headroom or inform the user of the peer's remaining quota and `earliest_reset_in_human` (`reset_at`).
 2. Decompose the goal into clear, bounded tasks assigned to the best peer + `model_tier` (taking remaining quota headroom into account):
-   - `pro_reasoning`: architecture design, hard root-cause debugging, adversarial audit (`opus` / `fable` plan audit / high-reasoning Codex / Gemini `pro`).
+   - `pro_reasoning`: architecture design, hard root-cause debugging, adversarial audit (`opus` / high-reasoning Codex / Gemini `pro`).
    - `balanced`: feature implementation, refactoring, structured test writing (`opus` in Claude / balanced Codex / default Gemini).
    - `fast`: codebase scan, doc lookup, quick verification (`opus` in Claude / fast Codex / Gemini `flash` or `flash_lite`).
 3. Enforce isolation: default `isolation_policy: "worktree"` for code edits, or `"read_only"` for audits/research. Never let two peers edit the same working tree simultaneously.
@@ -47,7 +47,7 @@ Whenever the user gives an instruction here that asks to coordinate across model
      (Waiter watches `/tmp/consilium-<uid>/signals/<peer>.seq` with 0% CPU, zero SQLite writes, and never claims tasks.)
 2. On wakeup, call `consilium_pickup_inbox(peer_id=<self>, session_label=<label>)` to atomically claim tasks. Save each claimed task's **`attempt_id`**, then fan out **inside your own native harness**:
    - **Antigravity**: call `invoke_subagent` with `Model: "pro" | "flash" | "flash_lite"` and `Workspace: "share" | "branch"` (or `swarm`).
-   - **Claude Desktop**: invoke native `Agent` subagents using `opus-architect` (or `fable` for plan review), `opus-builder`, or `opus-scout` with worktree isolation when editing code. Do **not** use `sonnet` or `haiku`.
+   - **Claude Desktop**: invoke native `Agent` subagents using `opus-architect`, `opus-builder`, or `opus-scout` with worktree isolation when editing code (or the user's configured subagents).
    - **ChatGPT / Codex Desktop**: spawn native Codex child agents using `architect-high`, `builder-balanced`, or `scout-fast` profiles.
 3. **Attempt Lease & Progress Interval (Required)**:
    - Immediately transition started work via `consilium_report_progress(task_id, peer_id=<self>, progress_note=..., status="running", attempt_id=<attempt_id>)` (unstarted `claimed` tasks auto-requeue on `claim_timeout_sec`).

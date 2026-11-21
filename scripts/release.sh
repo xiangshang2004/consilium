@@ -30,6 +30,18 @@ git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null && fail "tag ${TAG} alre
 grep -q "^## \[${VERSION}\]" CHANGELOG.md || fail "CHANGELOG.md has no '## [${VERSION}]' section"
 
 mkdir -p "${DIST}"
+VERIFY_DIR=""
+VERSION_DIRTY=0
+cleanup() {
+  if [[ -n "${VERIFY_DIR}" && -d "${VERIFY_DIR}" ]]; then
+    rm -rf "${VERIFY_DIR}"
+  fi
+  if [[ "${VERSION_DIRTY}" == "1" ]]; then
+    git checkout -- pyproject.toml consilium/__init__.py app/macos/Info.plist >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
 # Release notes = this version's section of the changelog.
 awk -v v="${VERSION}" '
   $0 ~ "^## \\[" v "\\]" { on = 1; next }
@@ -39,6 +51,7 @@ awk -v v="${VERSION}" '
 [[ -s "${NOTES}" ]] || fail "the ${VERSION} section of CHANGELOG.md is empty"
 
 echo "release: setting version ${VERSION}"
+VERSION_DIRTY=1
 BUILD_NUMBER="$(( $(git rev-list --count HEAD) + 1 ))"
 /usr/bin/python3 -B - "${VERSION}" "${BUILD_NUMBER}" <<'PY'
 import re, sys
@@ -67,11 +80,10 @@ echo "release: building and smoke-testing the app"
 ./scripts/smoke_test_app.sh
 
 echo "release: packaging ${ZIP}"
-rm -f "${ZIP}" "${ZIP}.sha256"
+rm -f "${ZIP}" "${ZIP}.sha256" "${DMG}" "${DMG}.sha256"
 # No resource forks or extended attributes: they only add ._ files to the archive.
 /usr/bin/ditto -c -k --norsrc --noextattr --noqtn --keepParent build/Consilium.app "${ZIP}"
 VERIFY_DIR="$(mktemp -d /tmp/consilium-release-verify.XXXXXX)"
-trap 'rm -rf "${VERIFY_DIR}"' EXIT
 /usr/bin/ditto -x -k "${ZIP}" "${VERIFY_DIR}"
 /usr/bin/codesign --verify --deep --strict "${VERIFY_DIR}/Consilium.app" || fail "the packaged app does not pass codesign verification"
 ln -s /Applications "${VERIFY_DIR}/Applications"
@@ -84,6 +96,7 @@ done
 
 if [[ "${DRY_RUN}" == "1" ]]; then
   git checkout -- pyproject.toml consilium/__init__.py app/macos/Info.plist
+  VERSION_DIRTY=0
   echo "release: dry run finished; package is at ${ZIP}, nothing committed or pushed"
   exit 0
 fi
@@ -92,6 +105,7 @@ if [[ -n "$(git status --porcelain)" ]]; then
   git add pyproject.toml consilium/__init__.py app/macos/Info.plist
   git commit -q -m "release: ${TAG}"
 fi
+VERSION_DIRTY=0
 git tag -a "${TAG}" -m "Consilium ${VERSION}"
 git push origin main
 git push origin "${TAG}"

@@ -327,7 +327,7 @@ def _plan_codex_toml(
     else:
         block = _render_codex_block(port, token)
         if CODEX_BLOCK_RE.search(original):
-            updated = CODEX_BLOCK_RE.sub(block, original)
+            updated = CODEX_BLOCK_RE.sub(lambda _: block, original)
         else:
             sep = "" if (not original or original.endswith("\n")) else "\n"
             gap = "\n" if original else ""
@@ -572,6 +572,8 @@ def run_installer(
     claude_runner: Any = subprocess.run,
 ) -> Dict[str, Any]:
     """Two-phase atomic installer: validate all selected targets before writing a single byte."""
+    if not (1 <= int(port) <= 65535):
+        raise ValueError(f"port must be between 1 and 65535 (got {port})")
     selected_targets = _normalize_install_targets(
         targets, skip_claude_desktop=skip_claude_desktop
     )
@@ -635,7 +637,7 @@ def run_installer(
     plist_rendered = ""
     if "launchd" in selected_set:
         plist_tmpl = _read_text(
-            os.path.join(resolved_repo, "adapters", "launchd", "com.up.consilium.plist.tmpl")
+            os.path.join(resolved_repo, "adapters", "launchd", "com.consilium.daemon.plist.tmpl")
         )
         plist_rendered = (
             plist_tmpl.replace("__PORT__", str(port))
@@ -684,6 +686,19 @@ def run_installer(
     secrets_to_redact: List[str] = [
         s for s in (pending_new_token, effective_token) if s and s != "<generated-on-apply>"
     ]
+    for cfg_path in (claude_code_path, antigravity_path):
+        if os.path.isfile(cfg_path):
+            try:
+                cfg_data = _load_json_dict(cfg_path)
+                c_entry = (cfg_data.get("mcpServers") or {}).get("consilium")
+                if isinstance(c_entry, dict) and isinstance(c_entry.get("headers"), dict):
+                    auth_val = str(c_entry["headers"].get("Authorization") or "").strip()
+                    if auth_val:
+                        secrets_to_redact.append(auth_val)
+                        if auth_val.startswith("Bearer "):
+                            secrets_to_redact.append(auth_val[7:].strip())
+            except Exception:
+                pass
     operations: List[Dict[str, str]] = []
     write_tasks: List[Tuple[str, str, str, Callable[[], Optional[str]]]] = []
 
@@ -816,23 +831,29 @@ def run_installer(
             (f"codex_agent:{fname}", os.path.join(home_dir, ".codex", "agents", fname), content, 0o644)
         )
     if "launchd" in selected_set:
-        text_targets.append(
-            (
-                "launchd_plist",
-                os.path.join(home_dir, "Library", "LaunchAgents", "com.up.consilium.plist"),
-                plist_rendered,
-                0o644,
-            )
-        )
+        plist_dest = os.path.join(home_dir, "Library", "LaunchAgents", "com.consilium.daemon.plist")
+        text_targets.append(("launchd_plist", plist_dest, plist_rendered, 0o644))
 
+    real_home = os.path.abspath(os.path.expanduser("~"))
     for label, dest, content, file_mode in text_targets:
         def _plan_txt(lbl: str = label, dst: str = dest, cnt: str = content, fm: int = file_mode) -> None:
             action, detail = _plan_text_file(dst, cnt, remove=remove)
             _record(lbl, dst, action, detail)
             if apply_changes:
                 if action == "remove":
-                    def _do_rm(p: str = dst) -> Optional[str]:
+                    def _do_rm(p: str = dst, l_name: str = lbl) -> Optional[str]:
                         bak = _backup_file(p, home_dir, backup_root)
+                        if l_name == "launchd_plist" and home_dir == real_home:
+                            try:
+                                subprocess.run(
+                                    ["launchctl", "bootout", f"gui/{os.getuid()}", p],
+                                    capture_output=True,
+                                    text=True,
+                                    check=False,
+                                    timeout=5.0,
+                                )
+                            except (OSError, subprocess.TimeoutExpired):
+                                pass
                         os.remove(p)
                         parent = os.path.dirname(p)
                         if os.path.basename(parent) == "consilium-collab":
@@ -985,6 +1006,8 @@ def rotate_token(
     claude_runner: Any = subprocess.run,
 ) -> Dict[str, Any]:
     """Rotate consilium Bearer token: update all configured clients first, swap auth.token last."""
+    if not (1 <= int(port) <= 65535):
+        raise ValueError(f"port must be between 1 and 65535 (got {port})")
     home_dir = os.path.abspath(os.path.expanduser(target_home))
     resolved_state = (
         os.path.abspath(os.path.expanduser(state_dir))
@@ -1241,7 +1264,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     except InstallApplyError as exc:
         print(json.dumps(exc.report, ensure_ascii=False, indent=2), file=sys.stderr)
         return 1
-    except (ValueError, json.JSONDecodeError, RuntimeError, FileNotFoundError) as exc:
+    except (ValueError, json.JSONDecodeError, RuntimeError, FileNotFoundError, OSError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
         return 1
 

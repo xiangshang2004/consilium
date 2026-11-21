@@ -32,11 +32,41 @@ class R006RegressionsTests(unittest.TestCase):
         self.tmp_home = tempfile.mkdtemp(prefix="dbell-r6h-", dir="/tmp")
         self._prev_dry = os.environ.get("CONSILIUM_DRY_RUN")
         self._prev_user_home = os.environ.get("CONSILIUM_USER_HOME")
+        self._prev_path = os.environ.get("PATH")
+        stub_dir = os.path.join(self.tmp_home, "bin")
+        os.makedirs(stub_dir, exist_ok=True)
+        claude_stub = os.path.join(stub_dir, "claude")
+        with open(claude_stub, "w", encoding="utf-8") as handle:
+            handle.write(
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys\n"
+                "p = os.path.join(os.environ['HOME'], '.claude.json')\n"
+                "args = sys.argv[1:]\n"
+                "data = json.load(open(p)) if os.path.exists(p) else {}\n"
+                "sv = data.setdefault('mcpServers', {})\n"
+                "if args[:2] == ['mcp', 'get']:\n"
+                "    sys.exit(0 if args[2] in sv else 1)\n"
+                "if args[:4] == ['mcp', 'remove', '-s', 'user']:\n"
+                "    sv.pop(args[4], None)\n"
+                "    json.dump(data, open(p, 'w'), indent=2)\n"
+                "    sys.exit(0)\n"
+                "if args[:4] == ['mcp', 'add-json', '-s', 'user']:\n"
+                "    sv[args[4]] = json.loads(args[5])\n"
+                "    json.dump(data, open(p, 'w'), indent=2)\n"
+                "    sys.exit(0)\n"
+                "sys.exit(0)\n"
+            )
+        os.chmod(claude_stub, 0o755)
+        os.environ["PATH"] = stub_dir + os.pathsep + (self._prev_path or "")
         os.environ["CONSILIUM_DRY_RUN"] = "1"
         os.environ["CONSILIUM_USER_HOME"] = self.tmp_home
         self.repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     def tearDown(self) -> None:
+        if self._prev_path is None:
+            os.environ.pop("PATH", None)
+        else:
+            os.environ["PATH"] = self._prev_path
         if self._prev_dry is None:
             os.environ.pop("CONSILIUM_DRY_RUN", None)
         else:
