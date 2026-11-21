@@ -10,6 +10,7 @@ import json
 import os
 import secrets
 import select
+import selectors
 import socket
 import subprocess
 import tempfile
@@ -422,52 +423,66 @@ class WakeBrokerServer:
         self.sock_path = resolve_socket_path(self.rendezvous_dir)
         self._lock = threading.Lock()
         self._waiters: Dict[str, List[_WaiterEntry]] = {p: [] for p in VALID_PEERS}
+        self._client_threads: set = set()
         self._server_sock: Optional[socket.socket] = None
         self._accept_thread: Optional[threading.Thread] = None
         self._running = False
 
     def start(self) -> str:
         """Bind the AF_UNIX socket and start the accept loop thread."""
-        if self._running:
-            return self.sock_path
-        if os.path.exists(self.sock_path):
+        with self._lock:
+            if self._running:
+                return self.sock_path
+            if os.path.exists(self.sock_path):
+                try:
+                    os.unlink(self.sock_path)
+                except OSError:
+                    pass
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
-                os.unlink(self.sock_path)
-            except OSError:
-                pass
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.bind(self.sock_path)
-        try:
-            os.chmod(self.sock_path, 0o600)
-        except OSError:
-            pass
-        sock.listen(64)
-        sock.settimeout(0.5)
-        self._server_sock = sock
-        self._running = True
-        self._accept_thread = threading.Thread(
-            target=self._accept_loop, name="consilium-wake-accept", daemon=True
-        )
-        self._accept_thread.start()
-        return self.sock_path
+                sock.bind(self.sock_path)
+                try:
+                    os.chmod(self.sock_path, 0o600)
+                except OSError:
+                    pass
+                sock.listen(64)
+                sock.settimeout(0.5)
+            except BaseException:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+                raise
+            self._server_sock = sock
+            self._running = True
+            self._accept_thread = threading.Thread(
+                target=self._accept_loop, name="consilium-wake-accept", daemon=True
+            )
+            self._accept_thread.start()
+            return self.sock_path
 
     def stop(self) -> None:
         """Stop the broker, wake any pending waiters, and remove the socket."""
-        self._running = False
         with self._lock:
+            self._running = False
             for entries in self._waiters.values():
                 for entry in list(entries):
                     entry.signal(reason="shutdown")
             self._waiters = {p: [] for p in VALID_PEERS}
-        if self._server_sock is not None:
+            srv_sock = self._server_sock
+            self._server_sock = None
+            accept_thread = self._accept_thread
+            self._accept_thread = None
+            clients = list(self._client_threads)
+        if srv_sock is not None:
             try:
-                self._server_sock.close()
+                srv_sock.close()
             except OSError:
                 pass
-            self._server_sock = None
-        if self._accept_thread is not None:
-            self._accept_thread.join(timeout=2.0)
-            self._accept_thread = None
+        if accept_thread is not None:
+            accept_thread.join(timeout=2.0)
+        for worker in clients:
+            worker.join(timeout=0.5)
         if os.path.exists(self.sock_path):
             try:
                 os.unlink(self.sock_path)
@@ -505,9 +520,14 @@ class WakeBrokerServer:
         return len(to_wake)
 
     def _accept_loop(self) -> None:
-        while self._running and self._server_sock is not None:
+        while True:
+            with self._lock:
+                running = self._running
+                srv_sock = self._server_sock
+            if not running or srv_sock is None:
+                break
             try:
-                conn, _ = self._server_sock.accept()
+                conn, _ = srv_sock.accept()
             except socket.timeout:
                 continue
             except OSError:
@@ -518,47 +538,65 @@ class WakeBrokerServer:
                 name="consilium-wake-client",
                 daemon=True,
             )
+            with self._lock:
+                if not self._running:
+                    try:
+                        conn.close()
+                    except OSError:
+                        pass
+                    break
+                self._client_threads.add(worker)
             worker.start()
 
     def _handle_client(self, conn: socket.socket) -> None:
         entry: Optional[_WaiterEntry] = None
+        cur_thread = threading.current_thread()
         try:
             conn.settimeout(5.0)
-            reader = conn.makefile("rb")
-            req = _read_json_line(reader)
-            if not isinstance(req, dict):
-                _send_json_line(conn, {"ok": False, "error": "invalid request"})
-                return
-            op = req.get("op")
-            if op == "status":
-                _send_json_line(
-                    conn, {"ok": True, "active_waiters": self.active_counts()}
-                )
-                return
-            if op == "notify":
-                count = self.notify(str(req.get("peer", "")))
-                _send_json_line(conn, {"ok": True, "woken_count": count})
-                return
-            if op == "wait":
-                peer = validate_peer(str(req.get("peer", "")))
-                timeout_sec = max(0.1, float(req.get("timeout_sec", 300.0)))
-                entry = _WaiterEntry(peer)
-                with self._lock:
-                    self._waiters[peer].append(entry)
-                conn.settimeout(None)
-                _send_json_line(conn, {"ok": True, "state": "registered"})
+            with conn.makefile("rb") as reader:
+                req = _read_json_line(reader)
+                if not isinstance(req, dict):
+                    _send_json_line(conn, {"ok": False, "error": "invalid request"})
+                    return
+                op = req.get("op")
+                if op == "status":
+                    _send_json_line(
+                        conn, {"ok": True, "active_waiters": self.active_counts()}
+                    )
+                    return
+                if op == "notify":
+                    count = self.notify(str(req.get("peer", "")))
+                    _send_json_line(conn, {"ok": True, "woken_count": count})
+                    return
+                if op == "wait":
+                    peer = validate_peer(str(req.get("peer", "")))
+                    timeout_sec = max(0.1, float(req.get("timeout_sec", 300.0)))
+                    candidate = _WaiterEntry(peer)
+                    with self._lock:
+                        if not self._running:
+                            candidate.close()
+                            _send_json_line(conn, {"ok": True, "woke": False, "reason": "shutdown"})
+                            return
+                        entry = candidate
+                        self._waiters[peer].append(entry)
+                    conn.settimeout(None)
+                    _send_json_line(conn, {"ok": True, "state": "registered"})
 
-                readable, _, _ = select.select([conn, entry.read_fd], [], [], timeout_sec)
-                if entry.read_fd in readable:
-                    payload = {"ok": True, "woke": entry.woke, "reason": entry.reason}
-                    _send_json_line(conn, payload)
-                elif conn in readable:
-                    pass
-                else:
-                    _send_json_line(conn, {"ok": True, "woke": False, "reason": "timeout"})
-                return
+                    with selectors.DefaultSelector() as sel:
+                        sel.register(conn, selectors.EVENT_READ, data="conn")
+                        sel.register(entry.read_fd, selectors.EVENT_READ, data="pipe")
+                        events = sel.select(timeout=timeout_sec)
+                    triggered = {key.data for key, _ in events}
+                    if "pipe" in triggered:
+                        payload = {"ok": True, "woke": entry.woke, "reason": entry.reason}
+                        _send_json_line(conn, payload)
+                    elif "conn" in triggered:
+                        pass
+                    else:
+                        _send_json_line(conn, {"ok": True, "woke": False, "reason": "timeout"})
+                    return
 
-            _send_json_line(conn, {"ok": False, "error": f"unknown op: {op!r}"})
+                _send_json_line(conn, {"ok": False, "error": f"unknown op: {op!r}"})
         except (OSError, ValueError, json.JSONDecodeError):
             pass
         finally:
@@ -568,6 +606,8 @@ class WakeBrokerServer:
                     if entry in entries:
                         entries.remove(entry)
                 entry.close()
+            with self._lock:
+                self._client_threads.discard(cur_thread)
             try:
                 conn.close()
             except OSError:
@@ -587,8 +627,8 @@ def _broker_rpc(
     try:
         sock.connect(sock_path)
         _send_json_line(sock, request)
-        reader = sock.makefile("rb")
-        return _read_json_line(reader)
+        with sock.makefile("rb") as reader:
+            return _read_json_line(reader)
     except OSError:
         return None
     finally:
@@ -615,12 +655,17 @@ def notify_peer(
         else:
             with _seq_lock(resolved_rv, p):
                 cur = _read_peer_seq_unlocked(resolved_rv, p)
+                seq_next = int(cur["seq"]) + 1
                 payload = json.dumps(
                     {
-                        "seq": int(cur["seq"]) + 1,
+                        "seq": seq_next,
                         "unacked": int(cur["unacked"]),
                         "queued_tasks": int(cur["queued_tasks"]),
                         "updated_at": time.time(),
+                        "ui_seq": int(cur.get("ui_seq", cur["seq"])) + 1,
+                        "ui_unacked": int(cur.get("ui_unacked", cur["unacked"])),
+                        "ui_queued": int(cur.get("ui_queued", cur["queued_tasks"])),
+                        "other_seq": int(cur.get("other_seq", cur["seq"])) + 1,
                     }
                 )
                 _write_seq_payload_locked(resolved_rv, p, payload, pulse=True)
@@ -741,27 +786,33 @@ def _wait_via_kqueue(
                 return False, "timeout"
             triggered_flags = events[0].fflags
             if triggered_flags & delete_or_rename:
-                try:
-                    kq.close()
-                except OSError:
-                    pass
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
+                old_kq, old_fd = kq, fd
+                kq, fd = None, -1
+                if old_kq is not None:
+                    try:
+                        old_kq.close()
+                    except OSError:
+                        pass
+                if old_fd >= 0:
+                    try:
+                        os.close(old_fd)
+                    except OSError:
+                        pass
                 fd, kq = _open_kqueue_watch(rendezvous_dir, peer)
             cur = read_peer_seq(rendezvous_dir, peer)
             if _seq_has_work(cur, initial_seq, scope):
                 return True, "kqueue"
     finally:
-        try:
-            kq.close()
-        except OSError:
-            pass
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+        if kq is not None:
+            try:
+                kq.close()
+            except OSError:
+                pass
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def _wait_via_unix_or_poll(
@@ -786,23 +837,23 @@ def _wait_via_unix_or_poll(
             _send_json_line(
                 sock, {"op": "wait", "peer": peer, "timeout_sec": timeout_sec}
             )
-            reader = sock.makefile("rb")
-            reg = _read_json_line(reader)
-            if reg and reg.get("state") == "registered":
-                cur = read_peer_seq(rendezvous_dir, peer)
-                if _seq_has_work(cur, initial_seq, scope):
-                    woke = True
-                    source = "immediate_after_register"
-                else:
-                    sock.settimeout(timeout_sec + 2.0)
-                    msg = _read_json_line(reader)
-                    if msg and msg.get("woke"):
+            with sock.makefile("rb") as reader:
+                reg = _read_json_line(reader)
+                if reg and reg.get("state") == "registered":
+                    cur = read_peer_seq(rendezvous_dir, peer)
+                    if _seq_has_work(cur, initial_seq, scope):
                         woke = True
-                        source = "socket"
-                    elif msg:
-                        source = str(msg.get("reason", "timeout"))
-            else:
-                sock_failed = True
+                        source = "immediate_after_register"
+                    else:
+                        sock.settimeout(timeout_sec + 2.0)
+                        msg = _read_json_line(reader)
+                        if msg and msg.get("woke"):
+                            woke = True
+                            source = "socket"
+                        elif msg:
+                            source = str(msg.get("reason", "timeout"))
+                else:
+                    sock_failed = True
         except OSError:
             sock_failed = True
         finally:
@@ -1023,15 +1074,29 @@ class ColdDoorbell:
                 title[:100],
                 subtitle,
             ]
-            res = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            notified = res.returncode == 0
-            command_returncode: Optional[int] = int(res.returncode)
-            command_status = "ok" if notified else "failed"
-            if open_deeplink:
-                open_res = subprocess.run(
-                    ["open", deeplink], capture_output=True, text=True, check=False
+            try:
+                res = subprocess.run(
+                    cmd, capture_output=True, text=True, check=False, timeout=10.0
                 )
-                opened = open_res.returncode == 0
+                notified = res.returncode == 0
+                command_returncode: Optional[int] = int(res.returncode)
+                command_status = "ok" if notified else "failed"
+            except (OSError, subprocess.TimeoutExpired):
+                notified = False
+                command_returncode = None
+                command_status = "failed"
+            if open_deeplink:
+                try:
+                    open_res = subprocess.run(
+                        ["open", deeplink],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=10.0,
+                    )
+                    opened = open_res.returncode == 0
+                except (OSError, subprocess.TimeoutExpired):
+                    opened = False
         else:
             command_returncode = None
             command_status = "dry_run"

@@ -57,10 +57,12 @@ def _attempt_models(path: Path, modified_ns: int, size: int) -> Dict[Attempt, Tu
             model = row.get("model")
             if not isinstance(model, str) or not model.strip():
                 continue
-            for call in row.get("tool_calls") or []:
-                key = _report_attempt(call) if isinstance(call, dict) else None
-                if key is not None:
-                    reports.setdefault(key, []).append(len(timeline))
+            calls = row.get("tool_calls")
+            if isinstance(calls, list):
+                for call in calls:
+                    key = _report_attempt(call) if isinstance(call, dict) else None
+                    if key is not None:
+                        reports.setdefault(key, []).append(len(timeline))
             timeline.append(model)
 
     spans = {
@@ -70,6 +72,18 @@ def _attempt_models(path: Path, modified_ns: int, size: int) -> Dict[Attempt, Tu
     result = {}
     for key, indexes in reports.items():
         start, end = indexes[0], indexes[-1]
+        if start == end:
+            other_ranges = [
+                (first, last) for other, (first, last) in spans.items()
+                if other != key
+            ]
+            while start > 0:
+                prev = start - 1
+                if any(first <= prev <= last for first, last in other_ranges):
+                    break
+                if timeline[prev] not in _PLANNERS:
+                    break
+                start = prev
         own_steps = set(indexes)
         other_spans = [
             (first, last) for other, (first, last) in spans.items()
@@ -103,10 +117,11 @@ def models_for_tasks(
     for task in tasks:
         if task.get("assignee_peer") != "antigravity" or not task.get("attempt_id"):
             continue
-        claimed_at = task.get("claimed_at") or ""
+        raw_claimed = task.get("claimed_at")
+        claimed_at = raw_claimed if isinstance(raw_claimed, str) else ""
         try:
-            claimed = datetime.fromisoformat(claimed_at.replace("Z", "+00:00")).timestamp()
-        except ValueError:
+            claimed = datetime.fromisoformat(claimed_at.replace("Z", "+00:00")).timestamp() if claimed_at else 0
+        except (ValueError, TypeError, OverflowError):
             claimed = 0
         attempts[(task["task_id"], task["attempt_id"])] = claimed
     if not attempts:

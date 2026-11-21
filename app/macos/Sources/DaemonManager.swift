@@ -3,6 +3,7 @@ import Foundation
 
 enum DaemonStartupError: LocalizedError {
     case bundledPythonNotFound(String)
+    case pythonInterpreterNotFound
     case portBusyNotConsilium(Int, String)
     case processExitedEarly(Int32, String)
     case startupTimeout(Int, String)
@@ -11,6 +12,8 @@ enum DaemonStartupError: LocalizedError {
         switch self {
         case let .bundledPythonNotFound(path):
             return "App 包内缺少 bundled consilium Python 模块：\(path)"
+        case .pythonInterpreterNotFound:
+            return "未找到可用的 Python 3（/usr/bin/python3、Homebrew 或 PATH 中）。请先安装 Command Line Tools：xcode-select --install"
         case let .portBusyNotConsilium(port, detail):
             return "端口 127.0.0.1:\(port) 已被其他进程占用且无法使用当前令牌健康检查（\(detail)），未重复启动 daemon。"
         case let .processExitedEarly(code, log):
@@ -23,13 +26,34 @@ enum DaemonStartupError: LocalizedError {
 
 final class DaemonManager {
     private let config: AppConfig
+    private let stateLock = NSLock()
     private var process: Process?
+    private var stdoutPipe: Pipe?
+    private var stderrPipe: Pipe?
     private var stderrBuffer = Data()
     private let bufferLock = NSLock()
 
-    private(set) var ownsDaemon: Bool = false
-    private(set) var managedPID: Int32?
-    private(set) var lastHealthStatus: Int = 0
+    private var _ownsDaemon: Bool = false
+    private var _managedPID: Int32?
+    private var _lastHealthStatus: Int = 0
+
+    var ownsDaemon: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return _ownsDaemon
+    }
+
+    var managedPID: Int32? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return _managedPID
+    }
+
+    var lastHealthStatus: Int {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return _lastHealthStatus
+    }
 
     init(config: AppConfig) {
         self.config = config
@@ -43,13 +67,33 @@ final class DaemonManager {
         return nil
     }
 
+    private func resolvePythonExecutable() -> String? {
+        let fm = FileManager.default
+        var candidates = [
+            "/usr/bin/python3",
+            "/opt/homebrew/bin/python3",
+            "/usr/local/bin/python3",
+        ]
+        if let pathEnv = ProcessInfo.processInfo.environment["PATH"] {
+            for dir in pathEnv.split(separator: ":") where !dir.isEmpty {
+                candidates.append(String(dir) + "/python3")
+            }
+        }
+        for path in candidates where fm.isExecutableFile(atPath: path) {
+            return path
+        }
+        return nil
+    }
+
     func ensureRunning() throws -> Int {
         if isLoopbackPortOpen(port: config.port) {
             let probe = probeHealthSync()
             if probe.status == 200 {
-                ownsDaemon = false
-                managedPID = nil
-                lastHealthStatus = 200
+                stateLock.lock()
+                _ownsDaemon = false
+                _managedPID = nil
+                _lastHealthStatus = 200
+                stateLock.unlock()
                 return 200
             }
             throw DaemonStartupError.portBusyNotConsilium(config.port, probe.detail)
@@ -59,11 +103,14 @@ final class DaemonManager {
             let expected = Bundle.main.resourceURL?.appendingPathComponent("python/consilium/cli.py").path ?? "<unknown>"
             throw DaemonStartupError.bundledPythonNotFound(expected)
         }
+        guard let pythonExe = resolvePythonExecutable() else {
+            throw DaemonStartupError.pythonInterpreterNotFound
+        }
 
         try ensurePrivateDirs()
 
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        proc.executableURL = URL(fileURLWithPath: pythonExe)
         proc.arguments = [
             "-B",
             "-m",
@@ -91,10 +138,10 @@ final class DaemonManager {
         proc.environment = env
         proc.currentDirectoryURL = URL(fileURLWithPath: "/tmp")
 
-        let stderrPipe = Pipe()
-        let stdoutPipe = Pipe()
-        proc.standardError = stderrPipe
-        proc.standardOutput = stdoutPipe
+        let errPipe = Pipe()
+        let outPipe = Pipe()
+        proc.standardError = errPipe
+        proc.standardOutput = outPipe
 
         let appendLog: (Data) -> Void = { [weak self] chunk in
             guard let self = self, !chunk.isEmpty else { return }
@@ -105,7 +152,7 @@ final class DaemonManager {
             }
             self.bufferLock.unlock()
         }
-        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
@@ -113,7 +160,7 @@ final class DaemonManager {
                 appendLog(data)
             }
         }
-        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
@@ -123,9 +170,13 @@ final class DaemonManager {
         }
 
         try proc.run()
+        stateLock.lock()
         self.process = proc
-        self.ownsDaemon = true
-        self.managedPID = proc.processIdentifier
+        self.stderrPipe = errPipe
+        self.stdoutPipe = outPipe
+        self._ownsDaemon = true
+        self._managedPID = proc.processIdentifier
+        stateLock.unlock()
 
         let deadline = Date().addingTimeInterval(12.0)
         var lastProbe = (status: 0, detail: "pending")
@@ -133,14 +184,14 @@ final class DaemonManager {
             if !proc.isRunning {
                 let code = proc.terminationStatus
                 let logText = readCapturedLog()
-                self.process = nil
-                self.ownsDaemon = false
-                self.managedPID = nil
+                clearProcessStateLocked(terminateProc: false)
                 throw DaemonStartupError.processExitedEarly(code, logText)
             }
             lastProbe = probeHealthSync()
             if lastProbe.status == 200 {
-                self.lastHealthStatus = 200
+                stateLock.lock()
+                self._lastHealthStatus = 200
+                stateLock.unlock()
                 return 200
             }
             Thread.sleep(forTimeInterval: 0.12)
@@ -151,10 +202,23 @@ final class DaemonManager {
         throw DaemonStartupError.startupTimeout(config.port, "\(lastProbe.detail); \(logText)")
     }
 
-    func stopIfOwned() {
-        guard ownsDaemon, let proc = process else { return }
-        ownsDaemon = false
-        if proc.isRunning {
+    private func clearProcessStateLocked(terminateProc: Bool) {
+        stateLock.lock()
+        let proc = process
+        let wasOwned = _ownsDaemon
+        let errP = stderrPipe
+        let outP = stdoutPipe
+        _ownsDaemon = false
+        _managedPID = nil
+        process = nil
+        stderrPipe = nil
+        stdoutPipe = nil
+        stateLock.unlock()
+
+        errP?.fileHandleForReading.readabilityHandler = nil
+        outP?.fileHandleForReading.readabilityHandler = nil
+
+        if terminateProc, wasOwned, let proc = proc, proc.isRunning {
             let pid = proc.processIdentifier
             proc.terminate()
             let waitUntil = Date().addingTimeInterval(3.0)
@@ -166,14 +230,27 @@ final class DaemonManager {
                 proc.waitUntilExit()
             }
         }
-        process = nil
+    }
+
+    func stopIfOwned() {
+        clearProcessStateLocked(terminateProc: true)
     }
 
     private func ensurePrivateDirs() throws {
         let fm = FileManager.default
         let attrs: [FileAttributeKey: Any] = [.posixPermissions: NSNumber(value: 0o700)]
         for dir in [config.stateDir, config.rendezvousDir] {
-            if !fm.fileExists(atPath: dir) {
+            if fm.fileExists(atPath: dir) {
+                let itemAttrs = try fm.attributesOfItem(atPath: dir)
+                if (itemAttrs[.type] as? FileAttributeType) == .typeSymbolicLink {
+                    throw NSError(
+                        domain: "ConsiliumDaemon",
+                        code: 20,
+                        userInfo: [NSLocalizedDescriptionKey: "安全检查失败：目录不能为符号链接（\(dir)）"]
+                    )
+                }
+                try? fm.setAttributes(attrs, ofItemAtPath: dir)
+            } else {
                 try fm.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: attrs)
             }
         }

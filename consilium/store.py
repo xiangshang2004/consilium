@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 import sqlite3
 import time
@@ -249,11 +250,10 @@ class BusStore:
             isolation_level=None,
             check_same_thread=False,
         )
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA busy_timeout=5000;")
-        conn.execute("PRAGMA foreign_keys=ON;")
         try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=5000;")
+            conn.execute("PRAGMA foreign_keys=ON;")
             yield conn
         finally:
             conn.close()
@@ -271,6 +271,7 @@ class BusStore:
 
     def _init_schema(self) -> None:
         with self._connect() as conn:
+            conn.execute("PRAGMA journal_mode=WAL;")
             # executescript manages its own implicit transaction in Python sqlite3.
             conn.executescript(SCHEMA_SQL)
             migrations = (
@@ -312,8 +313,9 @@ class BusStore:
             for stmt in migrations:
                 try:
                     conn.execute(stmt)
-                except sqlite3.OperationalError:
-                    pass
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column name" not in str(exc).lower():
+                        raise
             conn.execute(
                 "UPDATE tasks SET last_progress_at = updated_at WHERE status = 'running' "
                 "AND stale_at = '' AND last_progress_at = '' AND progress_note != ''"
@@ -325,7 +327,9 @@ class BusStore:
             try:
                 conn.execute("ALTER TABLE missions ADD COLUMN source TEXT NOT NULL DEFAULT 'peer'")
                 source_added = True
-            except sqlite3.OperationalError:
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
                 source_added = False
             if source_added:
                 with self._tx(conn):
@@ -1080,6 +1084,11 @@ class BusStore:
                 self._touch_peer_locked(
                     conn, mission["coordinator_peer"], status="active", now=now
                 )
+                msg_id = (
+                    self._insert_user_message_locked(conn, mission_id, user_message, now)
+                    if user_message
+                    else None
+                )
                 task_obj, event_obj = self._insert_task_locked(
                     conn,
                     mission_id=mission_id,
@@ -1094,9 +1103,8 @@ class BusStore:
                     now_ms=now_ms,
                     origin=origin,
                     new_session=new_session,
+                    user_message_id=msg_id,
                 )
-                if user_message:
-                    self._insert_user_message_locked(conn, mission_id, user_message, now)
                 next_status = (
                     "active" if mission["status"] == "ready_to_report" else mission["status"]
                 )
@@ -1569,7 +1577,12 @@ class BusStore:
                                 claimed_at_ms = 0.0,
                                 claim_latency_ms = NULL,
                                 stale_at = '',
+                                last_progress_at = '',
                                 progress_note = '',
+                                model_used = '',
+                                effort_used = '',
+                                tier_used = '',
+                                tier_reason = '',
                                 result_summary = '',
                                 artifacts_json = '[]',
                                 attempt_history_json = ?,
@@ -1591,23 +1604,39 @@ class BusStore:
                                 "UPDATE missions SET status = 'active', updated_at = ? WHERE mission_id = ?",
                                 (now, row["mission_id"]),
                             )
-                        evt = self._insert_event(
+                        requeue_payload = {
+                            "task_id": row["task_id"],
+                            "previous_status": "claimed",
+                            "previous_attempt_id": row["attempt_id"],
+                            "assignee_peer": row["assignee_peer"],
+                            "dispatched_at_ms": now_ms,
+                            "reason": f"claimed timeout exceeded ({int(age)}s > {limit}s)",
+                        }
+                        requeue_events: List[Dict[str, Any]] = []
+                        evt_assign = self._insert_event(
                             conn,
                             mission_id=row["mission_id"],
                             task_id=row["task_id"],
-                            from_peer=row["assignee_peer"],
-                            to_peer=coord,
+                            from_peer=coord,
+                            to_peer=row["assignee_peer"],
                             kind="task_requeued",
-                            payload={
-                                "task_id": row["task_id"],
-                                "previous_status": "claimed",
-                                "previous_attempt_id": row["attempt_id"],
-                                "assignee_peer": row["assignee_peer"],
-                                "dispatched_at_ms": now_ms,
-                                "reason": f"claimed timeout exceeded ({int(age)}s > {limit}s)",
-                            },
+                            payload=requeue_payload,
                             created_at=now,
                         )
+                        requeue_events.append(evt_assign)
+                        evt_coord = evt_assign
+                        if coord != USER_PEER and coord != row["assignee_peer"]:
+                            evt_coord = self._insert_event(
+                                conn,
+                                mission_id=row["mission_id"],
+                                task_id=row["task_id"],
+                                from_peer=row["assignee_peer"],
+                                to_peer=coord,
+                                kind="task_requeued",
+                                payload=requeue_payload,
+                                created_at=now,
+                            )
+                            requeue_events.append(evt_coord)
                         updated = conn.execute(
                             "SELECT * FROM tasks WHERE task_id = ?", (row["task_id"],)
                         ).fetchone()
@@ -1615,8 +1644,8 @@ class BusStore:
                             decoded = self._decode_task(updated, now_dt=now_dt)
                             decoded["reaper_action"] = "requeued"
                             decoded["coordinator_peer"] = coord
-                            decoded["requeue_event"] = evt
-                            decoded["events"] = [evt]
+                            decoded["requeue_event"] = evt_coord
+                            decoded["events"] = requeue_events
                             released.append(decoded)
                             touched_peers.extend([row["assignee_peer"], coord])
                             pulse_peers.extend([row["assignee_peer"], coord])
@@ -1855,7 +1884,12 @@ class BusStore:
                         claimed_at_ms = 0.0,
                         claim_latency_ms = NULL,
                         stale_at = '',
+                        last_progress_at = '',
                         progress_note = '',
+                        model_used = '',
+                        effort_used = '',
+                        tier_used = '',
+                        tier_reason = '',
                         result_summary = '',
                         artifacts_json = '[]',
                         attempt_history_json = ?,
@@ -2917,8 +2951,9 @@ class BusStore:
                     UPDATE tasks
                     SET assignee_peer = ?, status = 'queued', attempt_id = '', claimed_by_session = '',
                         claimed_at = '', claimed_at_ms = 0.0, claim_latency_ms = NULL, stale_at = '',
-                        progress_note = '', prompt = ?, attempt_history_json = ?, dispatched_at_ms = ?,
-                        updated_at = ?
+                        last_progress_at = '', progress_note = '', model_used = '', effort_used = '',
+                        tier_used = '', tier_reason = '', prompt = ?, attempt_history_json = ?,
+                        dispatched_at_ms = ?, updated_at = ?
                     WHERE task_id = ?
                     """,
                     (target, new_prompt, json.dumps(history, ensure_ascii=False), now_ms, now, task_id),
@@ -3105,7 +3140,8 @@ class BusStore:
     ) -> Dict[str, Any]:
         data = _row_to_dict(row)
         now = now_dt or datetime.now(timezone.utc)
-        remaining = round(max(0.0, min(100.0, float(data["remaining_percent"]))), 2)
+        raw_rem = float(data["remaining_percent"])
+        remaining = round(max(0.0, min(100.0, raw_rem)), 2) if math.isfinite(raw_rem) else 0.0
         data["remaining_percent"] = remaining
         reset_dt = _parse_iso(data.get("reset_at", ""))
         reset_sec: Optional[int] = None
@@ -3155,7 +3191,10 @@ class BusStore:
                     if not window_key:
                         raise ValueError("window_key must not be empty")
                     label = str(item.get("label") or window_key).strip()
-                    remaining = max(0.0, min(100.0, float(item["remaining_percent"])))
+                    raw_rem = float(item["remaining_percent"])
+                    if not math.isfinite(raw_rem):
+                        raise ValueError("remaining_percent must be finite")
+                    remaining = max(0.0, min(100.0, raw_rem))
                     reset_at = str(item.get("reset_at") or "").strip()
                     source = str(item.get("source") or "manual").strip()
                     observed_at = str(item.get("observed_at") or now).strip()

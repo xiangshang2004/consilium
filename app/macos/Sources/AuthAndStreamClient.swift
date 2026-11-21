@@ -24,8 +24,9 @@ enum AuthStreamError: LocalizedError {
 final class AuthAndStreamClient: NSObject, URLSessionDataDelegate {
     private let config: AppConfig
     private let lock = NSLock()
+    private let decodeQueue = DispatchQueue(label: "com.consilium.sse.decode")
 
-    private(set) var sessionCookie: HTTPCookie?
+    private var _sessionCookie: HTTPCookie?
     private(set) var lastLoginStatus: Int = 0
     private(set) var lastStateStatus: Int = 0
     private(set) var sseConnected: Bool = false
@@ -103,26 +104,31 @@ final class AuthAndStreamClient: NSObject, URLSessionDataDelegate {
             throw AuthStreamError.missingSessionCookie
         }
 
-        guard let cleanCookie = HTTPCookie(properties: [
-            .name: "consilium_session",
-            .value: rawCookie.value,
-            .domain: config.host,
-            .path: "/",
-            .originURL: config.baseURL,
-            .version: "0",
-        ]) else {
-            throw AuthStreamError.missingSessionCookie
-        }
+        var props = rawCookie.properties ?? [:]
+        props[.name] = "consilium_session"
+        props[.value] = rawCookie.value
+        props[.domain] = config.host
+        props[.path] = "/"
+        props[.originURL] = config.baseURL
+        props[HTTPCookiePropertyKey("HttpOnly")] = "TRUE"
+        props[.sameSitePolicy] = HTTPCookieStringPolicy.sameSiteStrict
+        let preservedCookie = HTTPCookie(properties: props) ?? rawCookie
 
         lock.lock()
-        sessionCookie = cleanCookie
+        _sessionCookie = preservedCookie
         lock.unlock()
-        return (cleanCookie, http.statusCode)
+        return (preservedCookie, http.statusCode)
+    }
+
+    var sessionCookie: HTTPCookie? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _sessionCookie
     }
 
     func fetchStateWithCookie() throws -> (state: DashboardState, status: Int) {
         lock.lock()
-        let cookie = sessionCookie
+        let cookie = _sessionCookie
         lock.unlock()
         guard let cookie = cookie else {
             throw AuthStreamError.missingSessionCookie
@@ -176,7 +182,7 @@ final class AuthAndStreamClient: NSObject, URLSessionDataDelegate {
         lock.lock()
         stopped = false
         reconnectScheduled = false
-        let cookie = sessionCookie
+        let cookie = _sessionCookie
         lock.unlock()
 
         stopSSEConnectionOnly()
@@ -276,10 +282,17 @@ final class AuthAndStreamClient: NSObject, URLSessionDataDelegate {
     ) {
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         lock.lock()
-        sseHttpStatus = code
-        let live = (code == 200)
-        sseConnected = live
+        let isCurrent = (dataTask === streamTask) && !stopped
+        if isCurrent {
+            sseHttpStatus = code
+            sseConnected = (code == 200)
+        }
         lock.unlock()
+
+        guard isCurrent else {
+            completionHandler(.cancel)
+            return
+        }
 
         if code == 200 {
             DispatchQueue.main.async { [weak self] in
@@ -294,7 +307,7 @@ final class AuthAndStreamClient: NSObject, URLSessionDataDelegate {
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         lock.lock()
-        if stopped {
+        if stopped || dataTask !== streamTask {
             lock.unlock()
             return
         }
@@ -314,11 +327,14 @@ final class AuthAndStreamClient: NSObject, URLSessionDataDelegate {
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         lock.lock()
+        let isCurrent = (task === streamTask)
         let isStopped = stopped
         let lastCode = sseHttpStatus
-        sseConnected = false
+        if isCurrent {
+            sseConnected = false
+        }
         lock.unlock()
-        if isStopped { return }
+        if !isCurrent || isStopped { return }
         if let urlErr = error as? URLError, urlErr.code == .cancelled {
             return
         }
@@ -332,7 +348,7 @@ final class AuthAndStreamClient: NSObject, URLSessionDataDelegate {
                 let evName = currentEventName
                 currentEventName = "message"
                 currentDataLines.removeAll(keepingCapacity: true)
-                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                decodeQueue.async { [weak self] in
                     self?.dispatchSSEFrame(event: evName, jsonText: rawJson)
                 }
             } else {

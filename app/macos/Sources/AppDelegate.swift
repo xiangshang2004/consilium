@@ -36,6 +36,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         mainWindowController = MainWindowController(config: config)
+        mainWindowController?.onReauthenticate = { [weak self] completion in
+            guard let self = self else {
+                completion(nil)
+                return
+            }
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self = self else {
+                    DispatchQueue.main.async { completion(nil) }
+                    return
+                }
+                let cookie = try? self.client.loginWithStateToken().cookie
+                if cookie != nil {
+                    self.client.startSSE()
+                }
+                DispatchQueue.main.async {
+                    completion(cookie)
+                }
+            }
+        }
         notifier.onFocusConsilium = { [weak self] in
             self?.mainWindowController?.showWindowAndActivate()
         }

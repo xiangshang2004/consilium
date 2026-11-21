@@ -27,6 +27,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
     private var initialLoadWaiters: [() -> Void] = []
     private var initialLoadCompleted = false
 
+    var onReauthenticate: ((@escaping (HTTPCookie?) -> Void) -> Void)?
+
     init(config: AppConfig) {
         self.config = config
         self.dataStore = WKWebsiteDataStore.nonPersistent()
@@ -298,10 +300,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
         let scheme = (url.scheme ?? "").lowercased()
         if scheme == "claude" || scheme == "codex" {
             // Only the deep links verified in R003: claude://code/new and codex://new (new session with a pre-filled prompt).
+            let currentURL = webView.url
+            let fromLocalDashboard = currentURL?.scheme == "http" && currentURL?.host == "127.0.0.1" && currentURL?.port == config.port
+            let userInitiatedOrRedirect = navigationAction.navigationType == .linkActivated || navigationAction.navigationType == .other
             let host = (url.host ?? "").lowercased()
             let path = url.path
-            let allowed = (scheme == "claude" && host == "code" && path == "/new")
+            let allowed = fromLocalDashboard && userInitiatedOrRedirect && (
+                (scheme == "claude" && host == "code" && path == "/new")
                 || (scheme == "codex" && host == "new" && (path.isEmpty || path == "/"))
+            )
             if allowed {
                 NSWorkspace.shared.open(url)
             } else {
@@ -334,6 +341,21 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
         }
     }
 
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        completeInitialLoadOnFailure()
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        completeInitialLoadOnFailure()
+    }
+
+    private func completeInitialLoadOnFailure() {
+        initialLoadCompleted = true
+        let waiters = initialLoadWaiters
+        initialLoadWaiters.removeAll()
+        waiters.forEach { $0() }
+    }
+
     func webView(
         _ webView: WKWebView,
         runOpenPanelWith parameters: WKOpenPanelParameters,
@@ -364,21 +386,36 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == "consilium",
+              message.frameInfo.isMainFrame,
+              let currentURL = webView.url,
+              currentURL.scheme == "http",
+              currentURL.host == "127.0.0.1",
+              currentURL.port == config.port,
               let body = message.body as? [String: Any],
               let action = body["action"] as? String else { return }
-        // Only answer the dashboard served by our own daemon.
-        guard let host = webView.url?.host, host == "127.0.0.1" else { return }
         if action == "pickFolder" {
             presentFolderPicker()
         } else if action == "revealPath" {
             revealInFinder(body["path"] as? String ?? "")
-        } else if action == "reauthenticate", message.frameInfo.isMainFrame,
-                  webView.url?.port == config.port {
+        } else if action == "reauthenticate" {
             refreshSession()
         }
     }
 
     private func refreshSession() {
+        if let onReauthenticate = onReauthenticate {
+            onReauthenticate { [weak self] cookie in
+                guard let self = self else { return }
+                if let cookie = cookie {
+                    self.setSessionCookie(cookie) {
+                        self.webView.evaluateJavaScript("window.__consiliumReauthenticated?.(true)", completionHandler: nil)
+                    }
+                } else {
+                    self.webView.evaluateJavaScript("window.__consiliumReauthenticated?.(false)", completionHandler: nil)
+                }
+            }
+            return
+        }
         let configuration = config
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let cookie = try? AuthAndStreamClient(config: configuration).loginWithStateToken().cookie

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,7 +20,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from consilium import __version__
-from consilium.attachments import ImageAttachments
+from consilium.attachments import ImageAttachments, MAX_IMAGE_BYTES
 from consilium.dashboard import (
     SSE_MAX_SUBSCRIBERS,
     SESSION_COOKIE_NAME,
@@ -193,17 +194,22 @@ def _deliver_reaper_notifications(
             warnings.extend(str(w) for w in item["post_commit_warnings"] if w)
 
         if action == "requeued":
+            notified_peers = set()
             for evt in events:
                 eid = int(evt["event_id"])
+                target = str(evt.get("to_peer") or "")
+                if not target or target == USER_PEER:
+                    continue
+                notified_peers.add(target)
                 ring_ms = time.time() * 1000.0
                 receipt = _safe_ring_peer(
                     store=store,
                     home_dir=rendezvous_dir,
-                    peer_id=evt["to_peer"],
+                    peer_id=target,
                     title="Consilium Task Requeued",
                     body=f"Task {task_id} claim timed out and returned to queued",
                     pickup_prompt=(
-                        f"Use consilium_pickup_inbox(peer_id={evt['to_peer']!r}) "
+                        f"Use consilium_pickup_inbox(peer_id={target!r}) "
                         f"to handle requeued task {task_id}."
                     ),
                     event_ids=[eid],
@@ -211,7 +217,7 @@ def _deliver_reaper_notifications(
                 w = _safe_record_event_delivery(store, [eid], receipt, ring_sent_at_ms=ring_ms)
                 if w:
                     warnings.append(w)
-            if assignee and assignee != coord:
+            if assignee and assignee != USER_PEER and assignee not in notified_peers:
                 # Also wake the assignee whose .seq queued_tasks increased on requeue.
                 _safe_ring_peer(
                     store=store,
@@ -228,7 +234,7 @@ def _deliver_reaper_notifications(
             for evt in events:
                 eid = int(evt["event_id"])
                 target = str(evt.get("to_peer") or "")
-                if not target:
+                if not target or target == USER_PEER:
                     continue
                 ring_ms = time.time() * 1000.0
                 receipt = _safe_ring_peer(
@@ -1420,20 +1426,29 @@ def run_stdio_server(
 
 def _extract_host_and_port(host_header: str) -> Tuple[str, Optional[int]]:
     raw = (host_header or "").strip().lower()
-    if not raw:
+    if not raw or any(ch.isspace() for ch in raw) or "/" in raw or "@" in raw:
         return "", None
     if raw.startswith("["):
         end = raw.find("]")
         if end == -1:
-            return raw, None
+            return "", None
         host = raw[1:end]
         rest = raw[end + 1 :]
-        if rest.startswith(":") and rest[1:].isdigit():
-            return host, int(rest[1:])
-        return host, None
+        if not rest:
+            return host, None
+        if rest.startswith(":") and rest[1:].isascii() and rest[1:].isdigit():
+            port_num = int(rest[1:])
+            if 1 <= port_num <= 65535:
+                return host, port_num
+        return "", None
     if ":" in raw:
         host, port_s = raw.split(":", 1)
-        return host, int(port_s) if port_s.isdigit() else None
+        if not port_s.isascii() or not port_s.isdigit():
+            return "", None
+        port_num = int(port_s)
+        if not (1 <= port_num <= 65535):
+            return "", None
+        return host, port_num
     return raw, None
 
 
@@ -1531,6 +1546,9 @@ class ConsiliumDaemon:
         self.ticket_store = LoginTicketStore()
         self._state_cache_lock = threading.Lock()
         self._cached_state: Optional[Tuple[float, Dict[str, Any]]] = None
+        self._state_cache_epoch = 0
+        self._sse_ext_lock = threading.Lock()
+        self._sse_ext_cache: Optional[Tuple[float, str, int, Dict[str, Any]]] = None
         self.dispatcher = ConsiliumMCPDispatcher(
             home_dir=self.home_dir,
             rendezvous_dir=self.rendezvous_dir,
@@ -1543,6 +1561,7 @@ class ConsiliumDaemon:
         self._httpd: Optional[ThreadingHTTPServer] = None
         self._http_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._stop_lock = threading.Lock()
         self._reaper_thread: Optional[threading.Thread] = None
 
     def get_dashboard_state(self, *, sync_quotas: bool = True) -> Dict[str, Any]:
@@ -1561,21 +1580,45 @@ class ConsiliumDaemon:
         return state
 
     def get_cached_dashboard_state(self, max_age_sec: float = 0.35) -> Dict[str, Any]:
-        """Share a brief snapshot cache across idle SSE pollers to avoid duplicate DB rebuilds."""
+        """Share a brief snapshot cache across idle SSE pollers without holding locks over DB I/O."""
         now = time.monotonic()
         with self._state_cache_lock:
             if self._cached_state is not None:
                 ts, snap = self._cached_state
                 if (now - ts) <= max_age_sec:
                     return snap
-            snap = self.get_dashboard_state(sync_quotas=False)
-            self._cached_state = (now, snap)
-            return snap
+            epoch = self._state_cache_epoch
+        snap = self.get_dashboard_state(sync_quotas=False)
+        done_at = time.monotonic()
+        with self._state_cache_lock:
+            if self._state_cache_epoch == epoch:
+                self._cached_state = (done_at, snap)
+        return snap
+
+    def _get_or_build_external_sse_snapshot(self, observed_fp: str) -> Tuple[int, Dict[str, Any], str, Dict[str, Any]]:
+        """Coalesce idle SSE external-change snapshot rebuilds across concurrent subscribers."""
+        now = time.monotonic()
+        with self._sse_ext_lock:
+            cached = self._sse_ext_cache
+            if cached is not None:
+                c_ts, c_fp, c_ver, c_snap = cached
+                if (now - c_ts) <= 0.35 and c_fp == observed_fp:
+                    return c_ver, c_snap, c_fp, dict(c_snap.get("active_waiters") or {})
+            ver_ext, stamped = self.event_hub.snapshot_with_version(
+                lambda: self.get_dashboard_state(sync_quotas=False)
+            )
+            stamped_fp = compute_state_fingerprint(stamped)
+            stamped_waiters = dict(stamped.get("active_waiters") or {})
+            self._sse_ext_cache = (time.monotonic(), stamped_fp, ver_ext, stamped)
+            return ver_ext, stamped, stamped_fp, stamped_waiters
 
     def publish_state_update(self, reason: str = "mutation") -> int:
         """Broadcast a monotonically versioned state update to all connected SSE dashboard clients."""
         with self._state_cache_lock:
             self._cached_state = None
+            self._state_cache_epoch += 1
+        with self._sse_ext_lock:
+            self._sse_ext_cache = None
         if self.event_hub.subscriber_count() == 0:
             return self.event_hub.next_version()
         return self.event_hub.publish_state(
@@ -1883,12 +1926,12 @@ class ConsiliumDaemon:
                 return
 
             def _check_host_origin(self) -> bool:
-                host_hdr = self.headers.get("Host", "")
-                if not _is_valid_host(host_hdr):
+                host_hdrs = self.headers.get_all("Host") or []
+                if len(host_hdrs) != 1 or not _is_valid_host(host_hdrs[0]):
                     self._send_json(403, {"error": "Forbidden Host header"})
                     return False
-                origin_hdr = self.headers.get("Origin", "")
-                if not _is_valid_origin(origin_hdr):
+                origin_hdrs = self.headers.get_all("Origin") or []
+                if len(origin_hdrs) > 1 or (origin_hdrs and not _is_valid_origin(origin_hdrs[0])):
                     self._send_json(403, {"error": "Forbidden cross-origin request"})
                     return False
                 return True
@@ -1988,6 +2031,8 @@ class ConsiliumDaemon:
                 status: int,
                 body: Any,
                 extra_headers: Optional[Dict[str, str]] = None,
+                *,
+                head_only: bool = False,
             ) -> None:
                 has_unconsumed_body = (
                     not getattr(self, "_body_consumed", False)
@@ -2012,7 +2057,33 @@ class ConsiliumDaemon:
                 if self.close_connection:
                     self.send_header("Connection", "close")
                 self.end_headers()
-                self.wfile.write(encoded)
+                if not head_only:
+                    self.wfile.write(encoded)
+
+            def _handle_unsupported_method(self, *, head_only: bool = False) -> None:
+                self._body_consumed = False
+                self.close_connection = True
+                self._send_json(
+                    405,
+                    {"error": "Method Not Allowed"},
+                    extra_headers={"Allow": "GET, POST"},
+                    head_only=head_only,
+                )
+
+            def do_HEAD(self) -> None:
+                self._handle_unsupported_method(head_only=True)
+
+            def do_OPTIONS(self) -> None:
+                self._handle_unsupported_method()
+
+            def do_PUT(self) -> None:
+                self._handle_unsupported_method()
+
+            def do_DELETE(self) -> None:
+                self._handle_unsupported_method()
+
+            def do_PATCH(self) -> None:
+                self._handle_unsupported_method()
 
             def _send_html(self, status: int, html: str) -> None:
                 has_unconsumed_body = (
@@ -2173,14 +2244,12 @@ class ConsiliumDaemon:
                             cur_state = daemon.get_cached_dashboard_state(max_age_sec=0.35)
                             cur_fp = compute_state_fingerprint(cur_state)
                             if cur_fp != last_fp:
-                                # Re-read state under _publish_lock so a newer version cannot carry an older snapshot (R012 P2).
-                                ver_ext, stamped = daemon.event_hub.snapshot_with_version(
-                                    lambda: daemon.get_dashboard_state(sync_quotas=False)
+                                # Re-read state under _publish_lock (coalesced by cur_fp) so newer versions cannot carry older snapshots.
+                                ver_ext, stamped, stamped_fp, stamped_waiters = (
+                                    daemon._get_or_build_external_sse_snapshot(cur_fp)
                                 )
                                 if not _stream_still_authorized():
                                     break
-                                stamped_fp = compute_state_fingerprint(stamped)
-                                stamped_waiters = dict(stamped.get("active_waiters") or {})
                                 reason = (
                                     "waiter_change"
                                     if stamped_waiters != last_waiters
@@ -2270,18 +2339,23 @@ class ConsiliumDaemon:
                             return
                         path, media_type = image
                         with path.open("rb") as source:
+                            size = os.fstat(source.fileno()).st_size
                             self.send_response(200)
                             self.send_header("Content-Type", media_type)
-                            self.send_header("Content-Length", str(os.fstat(source.fileno()).st_size))
+                            self.send_header("Content-Length", str(size))
                             self.send_header("Cache-Control", "private, no-store")
                             self.send_header("X-Content-Type-Options", "nosniff")
                             self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+                            if self.close_connection:
+                                self.send_header("Connection", "close")
                             self.end_headers()
                             shutil.copyfileobj(source, self.wfile)
                     except ValueError as exc:
                         self._send_json(400, {"error": str(exc)})
                     except FileNotFoundError:
                         self._send_json(404, {"error": "图片不存在"})
+                    except OSError:
+                        self._send_json(500, {"error": "图片读取失败"})
                     return
 
                 if route == "/api/state":
@@ -2426,8 +2500,8 @@ class ConsiliumDaemon:
                             daemon.images.discard(attachment_id)
                     except ValueError as exc:
                         self._send_json(400, {"error": str(exc)})
-                    except OSError as exc:
-                        self._send_json(507, {"error": f"草稿文件未移除：{exc}"})
+                    except OSError:
+                        self._send_json(500, {"error": "草稿图片移除失败"})
                     else:
                         self._send_json(200, {"ok": True})
                     return
@@ -2442,14 +2516,21 @@ class ConsiliumDaemon:
                     if not ok_len or length is None:
                         self._send_json(status if not ok_len else 400, {"error": error or "缺少图片大小"})
                         return
+                    if length > MAX_IMAGE_BYTES:
+                        self._send_json(413, {"error": "单张图片不能超过 20 MB"})
+                        return
                     try:
-                        uploaded = daemon.images.upload(route.removeprefix("/api/attachments/"), self.rfile, length)
+                        attachment_id = route.removeprefix("/api/attachments/")
+                        with daemon._ui_send_lock:
+                            uploaded = daemon.images.upload(attachment_id, self.rfile, length)
                         self._body_consumed = True
                         self._send_json(200, {"ok": True, "attachment": uploaded})
                     except ValueError as exc:
                         self._send_json(400, {"error": str(exc)})
                     except OSError as exc:
-                        self._send_json(507, {"error": f"图片无法保存：{exc}"})
+                        err_status = 507 if exc.errno == errno.ENOSPC else 500
+                        err_msg = "本机存储空间不足" if err_status == 507 else "图片保存失败"
+                        self._send_json(err_status, {"error": err_msg})
                     return
 
                 if route == "/api/conversations" or (
@@ -2852,6 +2933,10 @@ class ConsiliumDaemon:
         """Start AF_UNIX wake broker, .seq rebuild, reaper thread, and HTTP server."""
         rebuild_all_peer_seqs(self.dispatcher.store)
         try:
+            self.images.cleanup_stale_uploads()
+        except OSError:
+            pass
+        try:
             sync_local_quotas(self.dispatcher.store)
         except Exception:
             pass
@@ -2882,22 +2967,23 @@ class ConsiliumDaemon:
 
     def stop(self) -> None:
         """Shut down reaper thread, SSE streams, HTTP server, and AF_UNIX wake broker cleanly."""
-        self._stop_event.set()
-        self.event_hub.close_all()
-        if self._reaper_thread is not None:
-            self._reaper_thread.join(timeout=2.0)
-            self._reaper_thread = None
-        if self._httpd is not None:
-            try:
-                self._httpd.shutdown()
-                self._httpd.server_close()
-            except OSError:
-                pass
-            self._httpd = None
-        if self._http_thread is not None:
-            self._http_thread.join(timeout=2.0)
-            self._http_thread = None
-        self.wake_broker.stop()
+        with self._stop_lock:
+            self._stop_event.set()
+            self.event_hub.close_all()
+            if self._reaper_thread is not None:
+                self._reaper_thread.join(timeout=2.0)
+                self._reaper_thread = None
+            if self._httpd is not None:
+                try:
+                    self._httpd.shutdown()
+                    self._httpd.server_close()
+                except OSError:
+                    pass
+                self._httpd = None
+            if self._http_thread is not None:
+                self._http_thread.join(timeout=2.0)
+                self._http_thread = None
+            self.wake_broker.stop()
 
     def serve_forever(self) -> None:
         """Start daemon and block until KeyboardInterrupt."""

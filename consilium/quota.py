@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
+import re
 import time
 import sqlite3
 import urllib.parse
@@ -25,12 +28,15 @@ PLATFORM_TO_PEER = {
 }
 
 
+_HASHED_ACCOUNT_RE = re.compile(r"acct-[0-9a-f]{10}")
+
+
 def _hash_account_ref(raw_id: Any, *, always_hash: bool = False) -> str:
     """Anonymize account identifiers (always for Cockpit IDs/emails, or any email) into acct-<hash>."""
     clean = str(raw_id or "").strip()
     if not clean:
         return "default"
-    if clean in ("default", "demo") or (clean.startswith("acct-") and len(clean) == 15):
+    if clean in ("default", "demo") or _HASHED_ACCOUNT_RE.fullmatch(clean):
         return clean
     if always_hash or "@" in clean:
         digest = hashlib.sha256(clean.lower().encode("utf-8")).hexdigest()[:10]
@@ -283,11 +289,14 @@ def normalize_ts_to_iso(value: Any) -> str:
         return ""
     if isinstance(value, (int, float)):
         ts = float(value)
-        if ts <= 0:
+        if not math.isfinite(ts) or ts <= 0:
             return ""
         if ts > 1e11:
             ts /= 1000.0
-        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except (OverflowError, OSError, ValueError):
+            return ""
 
     text = str(value).strip()
     if not text:
@@ -322,8 +331,12 @@ def normalize_remaining_pct(
             val = float(remaining)
         except (TypeError, ValueError):
             return None
+        if not math.isfinite(val):
+            return None
         if is_fraction:
             val *= 100.0
+        if not math.isfinite(val):
+            return None
         return round(max(0.0, min(100.0, val)), 2)
 
     if used is not None and not isinstance(used, bool):
@@ -331,8 +344,12 @@ def normalize_remaining_pct(
             val = float(used)
         except (TypeError, ValueError):
             return None
+        if not math.isfinite(val):
+            return None
         if is_fraction:
             val *= 100.0
+        if not math.isfinite(val):
+            return None
         return round(max(0.0, min(100.0, 100.0 - val)), 2)
 
     return None
@@ -349,8 +366,12 @@ def _connect_sqlite_ro(db_path: str) -> sqlite3.Connection:
         return conn
     try:
         conn = sqlite3.connect(f"file:{quoted}?mode=ro", uri=True, timeout=1.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA query_only = ON;")
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA query_only = ON;")
+        except sqlite3.OperationalError:
+            conn.close()
+            raise
         return conn
     except sqlite3.OperationalError:
         conn = sqlite3.connect(f"file:{quoted}?mode=ro&immutable=1", uri=True, timeout=1.0)
@@ -388,7 +409,7 @@ def _collect_cockpit_sqlite(
     platform_db = os.path.join(cockpit_dir, "platform-quota-history-v1.sqlite")
     if os.path.isfile(platform_db):
         try:
-            with _connect_sqlite_ro(platform_db) as conn:
+            with contextlib.closing(_connect_sqlite_ro(platform_db)) as conn:
                 rows = conn.execute(
                     """
                     SELECT platform, account_id, metric, label, observed_at, remaining, reset_at
@@ -442,7 +463,7 @@ def _collect_cockpit_sqlite(
     codex_db = os.path.join(cockpit_dir, "codex-quota-history-v1.sqlite")
     if os.path.isfile(codex_db):
         try:
-            with _connect_sqlite_ro(codex_db) as conn:
+            with contextlib.closing(_connect_sqlite_ro(codex_db)) as conn:
                 rows = conn.execute(
                     """
                     SELECT account_id, identity, observed_at, short_remaining, weekly_remaining
@@ -558,8 +579,11 @@ def _format_window_minutes(minutes: Any, fallback_key: str, fallback_label: str)
     if minutes is None or isinstance(minutes, bool):
         return fallback_key, fallback_label
     try:
-        mins = int(float(minutes))
-    except (TypeError, ValueError):
+        fmins = float(minutes)
+        if not math.isfinite(fmins):
+            return fallback_key, fallback_label
+        mins = int(fmins)
+    except (TypeError, ValueError, OverflowError):
         return fallback_key, fallback_label
     if mins <= 0:
         return fallback_key, fallback_label

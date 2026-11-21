@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import urllib.error
 import urllib.request
 from typing import List, Optional
@@ -123,9 +124,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             running_timeout_sec=args.running_timeout,
         )
 
+        stopping = threading.Event()
+
         def _handle_sigterm(signum: int, frame: object) -> None:
-            daemon.stop()
-            sys.exit(0)
+            if not stopping.is_set():
+                stopping.set()
+                threading.Thread(
+                    target=daemon.stop,
+                    name="consilium-sigterm-stop",
+                    daemon=True,
+                ).start()
 
         signal.signal(signal.SIGTERM, _handle_sigterm)
         daemon.serve_forever()
@@ -188,7 +196,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     if args.command == "rotate-token":
-        from scripts.install import TokenRotationError, rotate_token
+        try:
+            from scripts.install import TokenRotationError, rotate_token
+        except ModuleNotFoundError:
+            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+            install_script = os.path.join(repo_root, "scripts", "install.py")
+            if not os.path.isfile(install_script):
+                sys.stderr.write(
+                    json.dumps(
+                        {"error": "rotate-token requires scripts/install.py from a source checkout"},
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+                return 1
+            if repo_root not in sys.path:
+                sys.path.insert(0, repo_root)
+            from scripts.install import TokenRotationError, rotate_token
 
         try:
             report = rotate_token(
@@ -222,7 +246,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         except urllib.error.URLError as exc:
             sys.stderr.write(
                 f"Cannot reach consilium daemon at http://{args.host}:{args.port} ({exc.reason}).\n"
-                f"Start it first: /usr/bin/python3 -m consilium.cli serve --port {args.port}\n"
+                f"Start it first: {sys.executable} -m consilium.cli serve --port {args.port}\n"
             )
             return 1
         auth_url = str(data.get("url") or f"http://{args.host}:{args.port}/ui")

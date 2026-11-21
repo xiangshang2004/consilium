@@ -150,8 +150,15 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
             comps.scheme = "claude"
             comps.host = "code"
             comps.path = "/new"
+            var items: [URLQueryItem] = []
             if !clipPrompt.isEmpty {
-                comps.queryItems = [URLQueryItem(name: "q", value: clipPrompt)]
+                items.append(URLQueryItem(name: "q", value: clipPrompt))
+            }
+            if !workspacePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                items.append(URLQueryItem(name: "folder", value: workspacePath))
+            }
+            if !items.isEmpty {
+                comps.queryItems = items
             }
             guard let url = comps.url, url.scheme == "claude" else { return nil }
             return url

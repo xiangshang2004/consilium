@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import base64
 import hashlib
+import html
 import os
 import json
 import queue
@@ -295,6 +296,9 @@ def compute_state_fingerprint(state: Dict[str, Any]) -> str:
         "active_waiters": state.get("active_waiters") or {},
         "quotas": _strip_volatile_fields(state.get("quotas") or []),
         "missions": _strip_volatile_fields(state.get("missions") or []),
+        "preferences": _strip_volatile_fields(state.get("preferences") or []),
+        "peer_models": state.get("peer_models") or {},
+        "peer_efforts": state.get("peer_efforts") or {},
         "latest_event_id": int(state.get("latest_event_id", 0)),
     }
     encoded = json.dumps(relevant, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -1919,7 +1923,6 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
   }
   let panelWidth = Math.max(280, Math.min(640, Number(storedPref("consilium.panelWidth", 372)) || 372));
   let openPopoverPeer = null;
-  let handoffTarget = "claude";
   let composingNew = false;
   let newDraftKey = "draft-0";
   let folderMenuOpen = false;
@@ -3768,6 +3771,38 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 220) + "px";
   });
+  async function saveRenamedTitle(mid, rawTitle) {
+    if (!mid) {
+      renamingMission = null;
+      if (appState) renderTopBar(appState);
+      return false;
+    }
+    const title = String(rawTitle || "").trim();
+    const cur = getActiveMission(appState);
+    if (!title || (cur && cur.mission_id === mid && cur.title === title)) {
+      renamingMission = null;
+      if (appState) renderTopBar(appState);
+      return false;
+    }
+    try {
+      const res = await fetch("/api/missions/" + encodeURIComponent(mid) + "/title", {
+        method: "POST", credentials: "same-origin", headers: writeHeaders(), body: JSON.stringify({ title: title })
+      });
+      if (res.status === 401) {
+        renamingMission = null;
+        stopStreams(); csrfToken = ""; lastStateVersion = 0; setConn("", "待登录"); showLogin(true);
+        return false;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { showToast(data.error || "改名失败"); return false; }
+      renamingMission = null;
+      await fetchState();
+      return true;
+    } catch (err) {
+      showToast("改名失败：" + err);
+      return false;
+    }
+  }
   document.addEventListener("keydown", async ev => {
     if (!ev.target || ev.target.id !== "title-input") return;
     if (ev.key === "Escape") {
@@ -3780,22 +3815,15 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     if (ev.key !== "Enter") return;
     ev.preventDefault();
     const mid = renamingMission;
-    const title = (ev.target.value || "").trim();
-    if (!title) return;
-    try {
-      const res = await fetch("/api/missions/" + encodeURIComponent(mid) + "/title", {
-        method: "POST", credentials: "same-origin", headers: writeHeaders(), body: JSON.stringify({ title: title })
-      });
-      if (res.status === 401) { showLogin(true); return; }
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) { showToast(data.error || "改名失败"); return; }
-      renamingMission = null;
-      await fetchState();
+    if (await saveRenamedTitle(mid, ev.target.value)) {
       const rb = document.getElementById("rename-title-btn");
       if (rb) rb.focus();
-    } catch (err) {
-      showToast("改名失败：" + err);
     }
+  });
+  document.addEventListener("focusout", ev => {
+    if (!ev.target || ev.target.id !== "title-input" || !renamingMission) return;
+    const mid = renamingMission;
+    saveRenamedTitle(mid, ev.target.value);
   });
 
   document.addEventListener("keydown", ev => {
@@ -3823,9 +3851,17 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       const undo = archiveBtn.getAttribute("data-archive-undo") === "1";
       fetch("/api/missions/" + encodeURIComponent(amid) + (undo ? "/unarchive" : "/archive"), {
         method: "POST", credentials: "same-origin", headers: writeHeaders(), body: "{}"
-      }).then(r => { if (r.status === 401) showLogin(true); if (!undo && selectedMissionId === amid) { composingNew = true; selectedMissionId = null; } return fetchState(); })
-        .then(() => showToast(undo ? "已取消归档" : "已归档，只是在 Consilium 里收起"))
-        .catch(() => showToast("操作失败"));
+      }).then(async r => {
+        if (r.status === 401) {
+          stopStreams(); csrfToken = ""; lastStateVersion = 0; setConn("", "待登录"); showLogin(true);
+          return;
+        }
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(body.error || ("HTTP " + r.status));
+        if (!undo && selectedMissionId === amid) { composingNew = true; selectedMissionId = null; }
+        await fetchState();
+        showToast(undo ? "已取消归档" : "已归档，只是在 Consilium 里收起");
+      }).catch(err => showToast(err.message || "操作失败"));
       return;
     }
 
@@ -4070,20 +4106,25 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       const pidPref = delPrefBtn.getAttribute("data-del-pref");
       fetch("/api/preferences/" + encodeURIComponent(pidPref) + "/delete", {
         method: "POST", credentials: "same-origin", headers: writeHeaders(), body: "{}"
-      }).then(r => { if (r.status === 401) showLogin(true); return fetchState(); }).catch(() => showToast("删除失败"));
-      return;
-    }
-
-    const handoffPeerBtn = ev.target.closest("[data-handoff-peer]");
-    if (handoffPeerBtn) {
-      handoffTarget = handoffPeerBtn.getAttribute("data-handoff-peer");
-      renderComposerBar(appState);
+      }).then(async r => {
+        if (r.status === 401) {
+          stopStreams(); csrfToken = ""; lastStateVersion = 0; setConn("", "待登录"); showLogin(true);
+          return;
+        }
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(body.error || "删除失败");
+        await fetchState();
+        showToast("已删除这条偏好");
+      }).catch(err => showToast(err.message || "删除失败"));
       return;
     }
 
     const focusHandoff = ev.target.closest("[data-focus-handoff]");
     if (focusHandoff) {
-      handoffTarget = focusHandoff.getAttribute("data-focus-handoff");
+      const target = focusHandoff.getAttribute("data-focus-handoff");
+      if (target && PEER_META[target]) {
+        activeDraft().targets = [target];
+      }
       openPopoverPeer = null;
       if (appState) renderAll(appState);
       document.getElementById("composer-input").focus();
@@ -4164,6 +4205,10 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
       fetch("/api/tasks/" + encodeURIComponent(id) + "/notify", {
         method:"POST", credentials:"same-origin", headers:writeHeaders(), body:"{}"
       }).then(async response => {
+        if (response.status === 401) {
+          stopStreams(); csrfToken = ""; lastStateVersion = 0; setConn("", "待登录"); showLogin(true);
+          return;
+        }
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || "通知失败");
         const delivery = data.delivery || {};
@@ -4178,7 +4223,9 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     const settleButton = ev.target.closest("[data-settle-task]");
     if (settleButton) {
       const mission = getActiveMission(appState);
+      if (!mission) return;
       const task = (mission.tasks || []).find(t => t.task_id === settleButton.getAttribute("data-settle-task"));
+      if (!task) return;
       const completed = (mission.tasks || []).filter(t => t.status === "done");
       const options = completed.map(t => '<option value="' + esc(t.task_id) + '">' +
         esc(peerLabel(t.assignee_peer) + " · " + taskTitle(t) + "（" + t.task_id + "）") + '</option>').join("");
@@ -4191,6 +4238,9 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
             method:"POST", credentials:"same-origin", headers:writeHeaders(),
             body:JSON.stringify({attempt_id:task.attempt_id, delivered_task_id:chosen})
           });
+          if (response.status === 401) {
+            closeConfirm(); stopStreams(); csrfToken = ""; lastStateVersion = 0; setConn("", "待登录"); showLogin(true); return;
+          }
           const result = await response.json().catch(() => ({}));
           if (!response.ok) throw new Error(result.error || "收尾失败");
           await fetchState();
@@ -4318,6 +4368,14 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     document.getElementById("uptime-val").textContent = formatDuration(elapsed);
   }, 1000);
 
+  window.addEventListener("pagehide", () => {
+    messageDrafts.forEach(draft => {
+      (draft.images || []).forEach(img => {
+        if (img && img.preview) URL.revokeObjectURL(img.preview);
+      });
+    });
+  });
+
   fetchState().then(ok => {
     if (ok) connectSSE();
   }).catch(() => {
@@ -4363,4 +4421,5 @@ def _peer_icon_css() -> str:
 
 def render_dashboard_html(version: Optional[str] = None) -> str:
     """Return the self-contained Consilium dashboard HTML with daemon version stamped."""
-    return DASHBOARD_HTML.replace("__VERSION__", version or __version__).replace("__PEER_ICON_CSS__", _peer_icon_css())
+    safe_ver = html.escape(str(version or __version__), quote=True)
+    return DASHBOARD_HTML.replace("__VERSION__", safe_ver).replace("__PEER_ICON_CSS__", _peer_icon_css())
