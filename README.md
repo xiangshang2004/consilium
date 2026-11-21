@@ -77,7 +77,7 @@ Consilium 是一个本地的 macOS 应用。你在它的窗口里说一句话，
 
 ## 安装
 
-**1. 拿到应用。** 从 [Releases](../../releases) 下载 `Consilium-<版本>-arm64.zip`，解压后拖进“应用程序”。应用没有做公证，第一次打开要在“系统设置 → 隐私与安全性”里点“仍要打开”。
+**1. 拿到应用。** 从 [Releases](../../releases) 下载 Apple 芯片版 `.dmg`，双击打开，将 Consilium 拖入 Applications。也可以下载 `.zip`，解压后把应用拖入“应用程序”。应用没有做公证，第一次打开要在“系统设置 → 隐私与安全性”里点“仍要打开”。
 
 也可以自己构建：
 
@@ -164,11 +164,11 @@ python3 -m consilium.cli status
 
 ## 版本与发布
 
-用 GitHub Releases 迭代，版本号按 `主.次.修` 三段：改了使用方式或数据格式升“次”，只修问题升“修”。每个版本的变化写在 [CHANGELOG.md](CHANGELOG.md)。
+用 GitHub Releases 迭代，版本号按 `主.次.修` 三段：0.7 系列从 `0.7.1` 开始，后续小更新依次为 `0.7.2`、`0.7.3`。每个版本的变化写在 [CHANGELOG.md](CHANGELOG.md)。
 
 发一个新版本：
 
 1. 在 `CHANGELOG.md` 顶部写好这个版本的条目。
-2. 运行 `./scripts/release.sh 0.2.0`。它会改三处版本号、跑全部测试、构建并冒烟测试应用、打包、提交、打标签 `v0.2.0`、推送，并用这一版的更新说明创建 Release，附上应用压缩包和校验值。
+2. 运行 `./scripts/release.sh 0.7.1`。它会改三处版本号、跑全部测试、构建并冒烟测试应用、打包、提交、打标签 `v0.7.1`、推送，并用这一版的更新说明创建 Release，附上 DMG、ZIP 和各自的 SHA-256 校验文件。
 
 加 `--dry-run` 只做检查和打包，不提交、不推送、不建 Release。

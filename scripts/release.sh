@@ -18,6 +18,7 @@ TAG="v${VERSION}"
 ARCH="$(uname -m)"
 DIST="${REPO_ROOT}/dist"
 ZIP="${DIST}/Consilium-${VERSION}-${ARCH}.zip"
+DMG="${DIST}/Consilium-${VERSION}-${ARCH}.dmg"
 NOTES="${DIST}/release-notes-${VERSION}.md"
 
 fail() { echo "release: $*" >&2; exit 1; }
@@ -70,10 +71,16 @@ rm -f "${ZIP}" "${ZIP}.sha256"
 # No resource forks or extended attributes: they only add ._ files to the archive.
 /usr/bin/ditto -c -k --norsrc --noextattr --noqtn --keepParent build/Consilium.app "${ZIP}"
 VERIFY_DIR="$(mktemp -d /tmp/consilium-release-verify.XXXXXX)"
+trap 'rm -rf "${VERIFY_DIR}"' EXIT
 /usr/bin/ditto -x -k "${ZIP}" "${VERIFY_DIR}"
 /usr/bin/codesign --verify --deep --strict "${VERIFY_DIR}/Consilium.app" || fail "the packaged app does not pass codesign verification"
-rm -rf "${VERIFY_DIR}"
-( cd "${DIST}" && /usr/bin/shasum -a 256 "$(basename "${ZIP}")" > "$(basename "${ZIP}").sha256" )
+ln -s /Applications "${VERIFY_DIR}/Applications"
+/usr/bin/hdiutil create -quiet -ov -format UDZO -volname "Consilium ${VERSION}" -srcfolder "${VERIFY_DIR}" "${DMG}"
+/usr/bin/hdiutil verify "${DMG}"
+for package in "${ZIP}" "${DMG}"; do
+  name="$(basename "${package}")"
+  ( cd "${DIST}" && /usr/bin/shasum -a 256 "${name}" > "${name}.sha256" )
+done
 
 if [[ "${DRY_RUN}" == "1" ]]; then
   git checkout -- pyproject.toml consilium/__init__.py app/macos/Info.plist
@@ -88,6 +95,6 @@ fi
 git tag -a "${TAG}" -m "Consilium ${VERSION}"
 git push origin main
 git push origin "${TAG}"
-gh release create "${TAG}" "${ZIP}" "${ZIP}.sha256" \
+gh release create "${TAG}" "${ZIP}" "${ZIP}.sha256" "${DMG}" "${DMG}.sha256" \
   --title "Consilium ${VERSION}" --notes-file "${NOTES}" --verify-tag
 echo "release: published ${TAG}"
