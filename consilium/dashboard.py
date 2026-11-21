@@ -702,7 +702,7 @@ code.inline {
 .quota-overview:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .quota-entry { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
 .quota-value { font-weight: 650; color: var(--text-primary); }
-.quota-value.quota-pending { color: var(--status-stale); }
+.quota-value.quota-low, .quota-value.quota-pending { color: var(--status-stale); }
 .quota-value.quota-empty { color: var(--status-danger); }
 .quota-value.quota-unavailable { color: var(--text-muted); font-weight: 400; }
 .btn-link, .btn-link-danger { border: none; background: transparent; padding: 2px 4px; font-size: 12.5px; cursor: pointer; color: var(--text-muted); }
@@ -2282,7 +2282,11 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     }
     const percent = Math.max(0, Math.min(100, Number(amount)));
     const stale = quota.quota_stale && quota.sample_age_seconds != null;
-    return {value:Math.round(percent) + "%", tone:percent === 0 ? "quota-empty" : stale ? "quota-pending" : "",
+    let tone = "";
+    if (percent === 0) tone = "quota-empty";
+    else if (stale) tone = "quota-pending";
+    else if (percent < 20) tone = "quota-low";
+    return {value:Math.round(percent) + "%", tone,
       percent, detail:stale ? "最近额度样本 " + agoText(quota.sample_age_seconds) : ""};
   }
 
