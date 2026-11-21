@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,8 @@ name = "consilium"
 version = "0.7.2"
 description = "Local MCP collaboration bus and zero-CLI doorbell wakeup bridge for desktop AI apps on macOS"
 readme = "README.md"
+license = "CC-BY-NC-SA-4.0 AND LicenseRef-ThirdParty-App-Icons"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.9"
 dependencies = []
 

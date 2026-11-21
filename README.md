@@ -121,6 +121,12 @@ python3 scripts/install.py --uninstall --targets claude_code codex antigravity
 
 发送后若连接中断，保留相同内容重试可取回同一条消息的回执。恢复连接后，窗口会重新获取完整状态。接入方可查阅[重试与断线恢复](docs/architecture.md#重试与断线恢复)。
 
+### 用 Cockpit Tools 查看额度
+
+1. 在同一个 macOS 用户下打开 Cockpit Tools，选择平常使用的 Codex 或 Antigravity 账号，并刷新一次额度。Consilium 会自动读取 `~/.antigravity_cockpit/` 中的额度历史和账号指针，无需在 Consilium 里填写 API 密钥。 [Cockpit Tools 下载](https://github.com/jlcodes99/cockpit-tools/releases)
+2. 打开 Consilium，点击会诊顶部的“额度”，或在输入框输入 `/accounts` 打开账号与余量设置。点左下角对应端的卡片，可看当前账号余量，以及样本提供的重置时间。
+3. 如果显示“待同步”“账号未知”或“暂无样本”，先在 Cockpit Tools 确认当前账号并刷新，再回 Consilium 查看。旧记录会显示采样时间。Cockpit Tools 的 Claude 账号记录没有额度，Consilium 可从可用的 Claude 本地用量缓存读取；缺少可用样本时显示未知。
+
 ## 安全与隐私
 
 - 服务只监听 `127.0.0.1`。MCP 请求要带本机的访问令牌（`auth.token`，权限 0600）；浏览器端用随机会话，写操作要同源、JSON 和 CSRF 令牌三样齐全。
@@ -134,7 +140,6 @@ python3 scripts/install.py --uninstall --targets claude_code codex antigravity
 - 只支持 macOS 的桌面使用，不做手机适配。
 - Consilium 自己不能替三个应用切换模型。档位靠各应用里的会话自己执行（例如把难的任务交给更高推理强度的子代理），做没做到以它上报的模型、effort 和档位为准。
 - Claude 桌面应用不允许被自动事件叫醒的那一轮自己开新会话，所以默认由待命会话直接处理；需要专属会话时由你点一下来开。
-- Cockpit Tools 目前不记录 Claude 的余量，所以 Claude 的余量圆环是空的，不会猜一个数字。
 - 待命会话可能被别的项目的门铃叫醒一次，它取不到东西就会回去继续等。
 
 ## 开发
@@ -175,3 +180,9 @@ python3 -m consilium.cli status
 2. 运行 `./scripts/release.sh 0.7.1`。它会改三处版本号、跑全部测试、构建并冒烟测试应用、打包、提交、打标签 `v0.7.1`、推送，并用这一版的更新说明创建 Release，附上 DMG、ZIP 和各自的 SHA-256 校验文件。
 
 加 `--dry-run` 只做检查和打包，不提交、不推送、不建 Release。
+
+## 许可
+
+Consilium 原创代码、文档和美术采用与 Cockpit Tools 相同的 **CC BY-NC-SA 4.0**。非商业使用可以复制、修改和分享；分享时须保留署名、附上许可链接并标明修改，分享改编作品时须按相同方式授权。商业使用须另获相应权利人的书面许可。[许可全文](LICENSE) · [Cockpit Tools 的许可声明](https://github.com/jlcodes99/cockpit-tools/blob/v1.4.2/README.md#许可证)
+
+仓库内 OpenSpec 技能保留各自的 MIT 声明，三个桌面应用的图标和商标归各自权利人。分发包随附许可和权属说明。[权属说明](NOTICE)

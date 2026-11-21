@@ -1,0 +1,14 @@
+Consilium
+https://github.com/xiangshang2004/consilium
+
+Consilium contributors license their original code, documentation and artwork
+under CC BY-NC-SA 4.0. See LICENSE and
+https://creativecommons.org/licenses/by-nc-sa/4.0/.
+
+LicenseRef-ThirdParty-App-Icons
+The Claude, ChatGPT/Codex and Antigravity icons in consilium/assets/peer_icons/
+and the corresponding third-party names and trademarks belong to their
+respective rights holders. Consilium's license grants no rights to them.
+
+The OpenSpec skills under .agents/skills/openspec-*/ in the source repository
+retain the MIT terms identified in their respective SKILL.md files.

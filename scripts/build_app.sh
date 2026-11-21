@@ -23,6 +23,7 @@ fi
 rm -rf "${APP_BUNDLE}"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${PY_DEST}"
 
+cp "${REPO_ROOT}/LICENSE" "${REPO_ROOT}/NOTICE" "${RESOURCES_DIR}/"
 cp "${APP_SRC}/Info.plist" "${CONTENTS_DIR}/Info.plist"
 cp "${APP_SRC}/Resources/StatusIconTemplate.png" "${RESOURCES_DIR}/StatusIconTemplate.png"
 cp "${APP_SRC}/Resources/StatusIconTemplate@2x.png" "${RESOURCES_DIR}/StatusIconTemplate@2x.png"
