@@ -371,6 +371,12 @@ def build_auto_coordinator_prompt(
     )
 
 
+CLIENT_REQUEST_ID_SCHEMA = {
+    "type": "string",
+    "description": "Reuse this ID only when retrying the same operation with identical arguments.",
+}
+
+
 TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "name": "consilium_status",
@@ -396,7 +402,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "isolation_policy": {"type": "string", "enum": list(VALID_ISOLATION), "default": "worktree"},
                 "max_rounds": {"type": "integer", "minimum": 1, "default": 3},
                 "open_deeplink": {"type": "boolean", "default": False},
-                "client_request_id": {"type": "string"},
+                "client_request_id": CLIENT_REQUEST_ID_SCHEMA,
                 "tasks": {
                     "type": "array",
                     "items": {
@@ -430,7 +436,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "parallel_fanout": {"type": "integer", "minimum": 1, "default": 1},
                 "worktree_branch": {"type": "string"},
                 "open_deeplink": {"type": "boolean", "default": False},
-                "client_request_id": {"type": "string"},
+                "client_request_id": CLIENT_REQUEST_ID_SCHEMA,
             },
         },
     },
@@ -478,7 +484,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "tier_reason": {"type": "string", "maxLength": 160, "description": "One short sentence, in the user's language, on why this tier."},
                 "worktree_branch": {"type": "string"},
                 "notify_coordinator": {"type": "boolean", "default": False},
-                "client_request_id": {"type": "string"},
+                "client_request_id": CLIENT_REQUEST_ID_SCHEMA,
             },
         },
     },
@@ -499,7 +505,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "effort_used": {"type": "string", "maxLength": 40},
                 "tier_used": {"type": "string", "enum": ["fast", "balanced", "deep"]},
                 "tier_reason": {"type": "string", "maxLength": 160},
-                "client_request_id": {"type": "string"},
+                "client_request_id": CLIENT_REQUEST_ID_SCHEMA,
             },
         },
     },
@@ -513,7 +519,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "task_id": {"type": "string"},
                 "peer_id": {"type": "string", "enum": list(VALID_PEERS)},
                 "reason": {"type": "string"},
-                "client_request_id": {"type": "string"},
+                "client_request_id": CLIENT_REQUEST_ID_SCHEMA,
             },
         },
     },
@@ -601,7 +607,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "summary": {"type": "string"},
                 "question": {"type": "string"},
                 "task_id": {"type": "string"},
-                "client_request_id": {"type": "string"},
+                "client_request_id": CLIENT_REQUEST_ID_SCHEMA,
             },
         },
     },
@@ -664,7 +670,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "default": "completed",
                 },
                 "force": {"type": "boolean", "default": False},
-                "client_request_id": {"type": "string"},
+                "client_request_id": CLIENT_REQUEST_ID_SCHEMA,
             },
         },
     },
@@ -2282,9 +2288,14 @@ class ConsiliumDaemon:
                     ok_sec, _, session_rec, _ = self._check_security(allow_cookie=True)
                     if not ok_sec:
                         return
-                    ver_before = daemon.event_hub.current_version()
-                    snap = daemon.get_dashboard_state(sync_quotas=True)
-                    snap["state_version"] = ver_before
+                    # Import external samples before taking the shared snapshot lock.
+                    try:
+                        sync_local_quotas(daemon.dispatcher.store)
+                    except Exception:
+                        pass
+                    _, snap = daemon.event_hub.snapshot_with_version(
+                        lambda: daemon.get_dashboard_state(sync_quotas=False)
+                    )
                     if session_rec is not None:
                         snap["csrf_token"] = session_rec.csrf_token
                     self._send_json(200, snap)

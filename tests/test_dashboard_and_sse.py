@@ -217,6 +217,21 @@ class DashboardAndSSETests(unittest.TestCase):
         self.assertTrue(cls_body["committed"])
         self.assertEqual(cls_body["result"]["status"], "completed")
 
+    def test_reconnect_snapshot_order_across_http_and_sse(self) -> None:
+        headers = {"Authorization": f"Bearer {self.daemon.auth_token}"}
+        snapshots = []
+        for path in ("/api/state", "/api/stream?max_events=1", "/api/state", "/api/stream?max_events=1"):
+            status, _, body = _raw_http_roundtrip(self.daemon, "GET", path, headers)
+            self.assertEqual(status, 200)
+            if path.startswith("/api/stream"):
+                frame = body.decode().splitlines()
+                self.assertIn("event: state", frame)
+                body = next(line[6:] for line in frame if line.startswith("data: "))
+            snapshots.append(json.loads(body))
+        self.assertEqual({s["state_instance_id"] for s in snapshots}, {self.daemon.state_instance_id})
+        versions = [s["state_version"] for s in snapshots]
+        self.assertEqual(versions, sorted(set(versions)))
+
     def test_sse_stream_pushes_ordered_updates(self) -> None:
         srv_sock, cli_sock = socket.socketpair()
         srv_thread = threading.Thread(

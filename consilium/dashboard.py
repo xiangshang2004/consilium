@@ -200,10 +200,6 @@ class EventHub:
             self._version += 1
             return self._version
 
-    def current_version(self) -> int:
-        with self._lock:
-            return self._version
-
     @staticmethod
     def _enqueue(sub: _SSESubscriber, item: Tuple[int, str, Dict[str, Any]]) -> None:
         try:

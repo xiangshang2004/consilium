@@ -30,6 +30,10 @@ The dashboard MUST accept a fresh state snapshot after a service restart, indepe
 - **WHEN** the client reconnects to a new service instance with a lower state version
 - **THEN** the client MUST reset the version baseline from the first full snapshot, ignore late frames from the previous connection, and preserve draft text and the selected conversation.
 
+#### Scenario: Polling and the SSE connection overlap
+- **WHEN** the browser polls for state and reconnects its event stream
+- **THEN** snapshots from both transports MUST carry a version from the same ordered sequence within one daemon instance, and a reconnected stream MUST begin with a complete snapshot.
+
 ### Requirement: Attach images to a conversation message
 The composer MUST support selecting, dragging, and pasting image files and MUST show previews and removal actions before sending. Uploaded images MUST be linked to the committed message and made available to its intended tasks.
 

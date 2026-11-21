@@ -45,18 +45,17 @@ All persistent state lives in `<state_dir>/bus.db` (`SQLite` WAL mode, `busy_tim
 
 ## 4. MCP Tools (`consilium/mcp_server.py`)
 
-Exposed identically over `consilium mcp-stdio` and `POST /mcp` (`127.0.0.1:18920`, `Authorization: Bearer <token>` authentication enabled by default—`?token=` query auth rejected with `401`—and `405 Allow: POST` on `GET /mcp`), totaling **11** tools (7 write, 4 read/wait/quota):
-1. `consilium_status`
-2. `consilium_create_mission`
-3. `consilium_dispatch_task`
-4. `consilium_pickup_inbox`
-5. `consilium_report_progress`
-6. `consilium_complete_task`
-7. `consilium_requeue_task`
-8. `consilium_request_review`
-9. `consilium_wait`
-10. `consilium_quota`
-11. `consilium_close_mission`
+Use MCP `initialize` to negotiate the protocol version, then `tools/list` to discover the tools and their input schemas. The same dispatcher serves stdio and authenticated HTTP POST requests to `/mcp`.
+
+### 重试与断线恢复
+
+| 字段 | 使用位置 | 客户端处理 |
+|---|---|---|
+| `client_request_id` | 支持去重的 MCP 写操作和界面发送 | 发送后丢失响应时，原样重发并沿用 ID。编辑正文、更换目标或发起新的操作时生成新 ID。参数冲突会返回错误。 |
+| `attempt_id` | 取件、进度、交付 | 使用取件返回的执行轮次。任务重新入队并被再次认领后，旧轮次迟到的上报不能更改当前任务。 |
+| `state_instance_id`、`state_version` | `GET /api/state` 和 `/api/stream` | 两种读法共用同一服务实例内的快照版本序列。按版本应用快照；服务重启后在新实例上重新计数。 |
+
+例如，第一次发送已经创建任务，但响应在网络上丢失，客户端可凭原请求 ID 取回已提交的结果。若旧执行端在新轮次接单后才交付，应重新读取任务状态。界面重新连接事件流时，先接收一帧完整的 `state`，之后的 `update` 携带完整状态；中间跳过的版本无需逐条补取。
 
 ## 5. Multi-Source Quota Extraction & Active-Account Isolation (`consilium/quota.py`, `consilium/store.py`)
 
