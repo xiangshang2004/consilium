@@ -170,17 +170,6 @@ python3 -m consilium.cli status
 | `reviews/` | 每一轮的评审和交接记录（R001 起） |
 | `docs/` | 架构说明、标志、截图 |
 
-## 版本与发布
-
-用 GitHub Releases 迭代，版本号按 `主.次.修` 三段：0.7 系列从 `0.7.1` 开始，后续小更新依次为 `0.7.2`、`0.7.3`。每个版本的变化写在 [CHANGELOG.md](CHANGELOG.md)。
-
-发一个新版本：
-
-1. 在 `CHANGELOG.md` 顶部写好这个版本的条目。
-2. 运行 `./scripts/release.sh 0.7.1`。它会改三处版本号、跑全部测试、构建并冒烟测试应用、打包、提交、打标签 `v0.7.1`、推送，并用这一版的更新说明创建 Release，附上 DMG、ZIP 和各自的 SHA-256 校验文件。
-
-加 `--dry-run` 只做检查和打包，不提交、不推送、不建 Release。
-
 ## 许可
 
 非商业使用可以复制、修改和分享；分享时须保留署名、附上许可链接并标明修改，分享改编作品时须按相同方式授权。商业使用须另获相应权利人的书面许可。[CC BY-NC-SA 4.0 许可全文](LICENSE) · [Cockpit Tools 的许可声明](https://github.com/jlcodes99/cockpit-tools/blob/v1.4.2/README.md#许可证)

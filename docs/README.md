@@ -1,6 +1,6 @@
 # `consilium` Documentation Index
 
-- [Project README](../README.md) — 中文说明：能做什么、怎么装、怎么用、安全与限制、版本与发布
+- [Project README](../README.md) — 中文说明：能做什么、怎么装、怎么用、安全与限制
 - [Cockpit Tools 额度接入](../README.md#用-cockpit-tools-查看额度) — 本机设置、查看入口及缺少样本时的处理
 - [许可全文](../LICENSE) · [权属说明](../NOTICE) — Consilium 原创内容与第三方材料的授权范围
 - [CHANGELOG](../CHANGELOG.md) — 每个版本的变化；发布用 `scripts/release.sh <版本>`，产物在 GitHub Releases
