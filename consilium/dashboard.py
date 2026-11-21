@@ -1550,6 +1550,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 .dock-wrap .peer-popover { top: auto; bottom: calc(100% + 8px); left: 0; right: auto; transform: none; width: 320px; max-height: 60vh; overflow: auto; }
 
 /* top bar */
+.top-task-summary { display: none; }
 .topbar { background: transparent; border-bottom: none; padding: 12px 18px 6px; min-height: 0; }
 .topbar-left { flex: 1 1 auto; min-width: 0; gap: 8px; }
 .top-title { font-family: var(--font-serif); font-size: 17px; font-weight: 600; letter-spacing: 0.01em; min-width: 0; flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46vw; cursor: text; }
@@ -1651,7 +1652,12 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 .chat-column.is-new .composer-inner { max-width: 680px; }
 .chat-column:not(.is-new) .folder-menu, .chat-column:not(.is-new) .tier-menu { top: auto; bottom: calc(100% + 8px); }
 @media (max-width: 860px) {
-  .topbar { padding: 8px 10px 6px; }
+  .topbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding: 8px 10px 6px; }
+  .top-task-summary:not([hidden]) { display: block; grid-column: 1 / -1; justify-self: start;
+    max-width: 100%; text-align: left; overflow-wrap: anywhere; border: 0; background: transparent;
+    color: var(--text-secondary); padding: 3px 0; font-size: 12px; cursor: pointer; }
+  .top-task-summary:focus-visible { outline: 2px solid var(--accent); }
+  .topbar:has(.top-task-summary:not([hidden])) .panel-tool[data-open-tab="tasks"] { display: none; }
   .topbar-left { gap: 6px; }
   .top-title { max-width: none; font-size: 15.5px; }
   .top-rename-btn { height: 24px; padding: 0 7px; font-size: 11.5px; }
@@ -1689,7 +1695,6 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
         <button id="sidebar-toggle-btn" type="button" class="icon-btn" title="展开/收起会诊列表" aria-label="展开或收起侧栏">☰</button>
         <span id="top-title-wrap" style="display:contents;"><span id="active-mission-title" class="top-title plain">新会诊</span></span>
         <span id="top-folder" class="top-folder" style="display:none;"></span>
-        <span id="active-mission-badge" class="chip" style="display:none;">空闲</span>
       </div>
 
       <!-- Right: Connection + Theme + Collapsible Right Drawer Tabs + Logout -->
@@ -1711,6 +1716,7 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
           <button id="logout-btn" type="button" class="btn-quiet">退出</button>
         </div>
       </div>
+      <button id="top-task-summary" class="top-task-summary" hidden type="button" data-open-tab="tasks" title="查看任务详情"></button>
     </header>
 
     <div class="quota-strip">
@@ -2239,7 +2245,10 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     } else {
       folderEl.style.display = "none";
     }
-    document.getElementById("active-mission-badge").textContent = missionStatusText(cur);
+    const summary = document.getElementById("top-task-summary");
+    const status = compactTaskStatus(cur);
+    summary.hidden = !status;
+    summary.textContent = status;
     const actEl = document.getElementById("conv-actions");
     if (cur) {
       const sessions = cur.native_sessions || {};
@@ -2428,6 +2437,31 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
         (extraChips.length ? '<div style="display:flex;flex-wrap:wrap;gap:6px;padding-top:2px;">' + extraChips.join("") + '</div>' : "") +
       '</div>' +
     '</article>';
+  }
+
+  function compactTaskStatus(mission) {
+    const tasks = (mission && mission.tasks) || [];
+    if (!tasks.length) return "";
+    if (!missionIsOpen(mission)) return mission.status === "failed" ? "会诊失败" : missionStatusText(mission);
+    const messages = mission.user_messages || [];
+    const lastMessage = messages[messages.length - 1];
+    const current = tasks.filter(t => ["queued", "claimed", "running"].includes(t.status) ||
+      (lastMessage && t.user_message_id === lastMessage.message_id));
+    // Older records have no message link. Use their most recent task when nothing is active.
+    if (!current.length) {
+      const latest = tasks.reduce((a, b) => (a.updated_at || a.created_at || "") >
+        (b.updated_at || b.created_at || "") ? a : b);
+      if (lastMessage && latest.user_message_id != null) return "";
+      current.push(latest);
+    }
+    const counts = new Map();
+    current.forEach(t => {
+      const label = t.stale_at && t.status === "running" ? "进度过期"
+        : t.status === "queued" ? "待认领" : (TASK_STATUS_TEXT[t.status] || t.status);
+      const key = peerLabel(t.assignee_peer) + " " + label;
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return Array.from(counts, ([key, count]) => key + (count > 1 ? " ×" + count : "")).join(" · ");
   }
 
   function missionStatusText(m) {
