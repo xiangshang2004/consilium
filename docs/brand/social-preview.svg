@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-label="Consilium Social Preview">
+  <title>Consilium — One window for Claude, Codex &amp; Antigravity</title>
+  <defs>
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B0F1A"/>
+      <stop offset="55%" stop-color="#111726"/>
+      <stop offset="100%" stop-color="#161D2F"/>
+    </linearGradient>
+    <radialGradient id="glow-terracotta" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#EB8A63" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#EB8A63" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow-emerald" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#34D3A3" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#34D3A3" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow-periwinkle" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#7C96FF" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#7C96FF" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="window-shadow" x="-12%" y="-12%" width="124%" height="130%">
+      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+    <clipPath id="window-clip">
+      <rect x="600" y="116" width="608" height="408" rx="14" ry="14"/>
+    </clipPath>
+    <clipPath id="screen-clip">
+      <rect x="600" y="144" width="608" height="380"/>
+    </clipPath>
+  </defs>
+
+  <!-- Canvas Background -->
+  <rect width="1280" height="640" fill="url(#bg-grad)"/>
+
+  <!-- Ambient Brand Glows -->
+  <circle cx="960" cy="140" r="280" fill="url(#glow-terracotta)"/>
+  <circle cx="1160" cy="480" r="260" fill="url(#glow-periwinkle)"/>
+  <circle cx="720" cy="520" r="240" fill="url(#glow-emerald)"/>
+
+  <!-- Subtle Hairline Grid Accent -->
+  <rect x="0.5" y="0.5" width="1279" height="639" fill="none" stroke="#FFFFFF" stroke-opacity="0.06"/>
+
+  <!-- Left Column: Brand Mark & Wordmark -->
+  <g transform="translate(64, 72) scale(0.84)">
+    <path d="M82.42 77.40A34 34 0 0 1 42.35 87.14" stroke="#7C96FF" stroke-width="12.92" stroke-linecap="round" fill="none"/>
+    <path d="M28.97 76.62A34 34 0 0 1 28.97 35.38" stroke="#34D3A3" stroke-width="12.92" stroke-linecap="round" fill="none"/>
+    <path d="M42.35 24.86A34 34 0 0 1 82.42 34.60" stroke="#EB8A63" stroke-width="12.92" stroke-linecap="round" fill="none"/>
+    <circle cx="58.72" cy="56.00" r="7.99" fill="#F3F4F6"/>
+    <text x="116" y="72" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', 'PingFang SC', sans-serif" font-size="46" font-weight="700" letter-spacing="-0.8" fill="#F3F4F6">Consilium</text>
+  </g>
+
+  <!-- Headline -->
+  <text x="76" y="218" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', 'PingFang SC', sans-serif" font-size="36" font-weight="700" letter-spacing="-0.6" fill="#F8FAFC">One window for Claude,</text>
+  <text x="76" y="266" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', 'PingFang SC', sans-serif" font-size="36" font-weight="700" letter-spacing="-0.6" fill="#F8FAFC">Codex &amp; Antigravity</text>
+
+  <!-- Subtitle -->
+  <text x="76" y="318" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', 'PingFang SC', sans-serif" font-size="18.5" font-weight="400" fill="#9CA3AF">100% local-first macOS menu bar app &amp; MCP</text>
+  <text x="76" y="346" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', 'PingFang SC', sans-serif" font-size="18.5" font-weight="400" fill="#9CA3AF">collaboration bus — zero cloud relay, zero API proxy.</text>
+
+  <!-- 2x2 Feature Pills -->
+  <g font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif" font-size="14" font-weight="600" fill="#E5E7EB">
+    <!-- Row 1 -->
+    <rect x="76" y="394" width="184" height="36" rx="18" fill="#1A2234" stroke="#EB8A63" stroke-opacity="0.45" stroke-width="1"/>
+    <circle cx="98" cy="412" r="4.5" fill="#EB8A63"/>
+    <text x="112" y="417">Zero Cloud Relay</text>
+
+    <rect x="274" y="394" width="184" height="36" rx="18" fill="#1A2234" stroke="#34D3A3" stroke-opacity="0.45" stroke-width="1"/>
+    <circle cx="296" cy="412" r="4.5" fill="#34D3A3"/>
+    <text x="310" y="417">kqueue 0% CPU</text>
+
+    <!-- Row 2 -->
+    <rect x="76" y="444" width="234" height="36" rx="18" fill="#1A2234" stroke="#7C96FF" stroke-opacity="0.45" stroke-width="1"/>
+    <circle cx="98" cy="462" r="4.5" fill="#7C96FF"/>
+    <text x="112" y="467">Pure Python Stdlib + Swift</text>
+
+    <rect x="324" y="444" width="174" height="36" rx="18" fill="#1A2234" stroke="#94A3B8" stroke-opacity="0.35" stroke-width="1"/>
+    <circle cx="346" cy="462" r="4.5" fill="#94A3B8"/>
+    <text x="360" y="467">macOS 13+ · arm64</text>
+  </g>
+
+  <!-- Repo Footer -->
+  <line x1="76" y1="524" x2="540" y2="524" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="1"/>
+  <text x="76" y="558" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, monospace" font-size="15.5" font-weight="500" fill="#94A3B8">github.com/xiangshang2004/consilium</text>
+
+  <!-- Right Column: Framed macOS Screenshot -->
+  <g filter="url(#window-shadow)">
+    <g clip-path="url(#window-clip)">
+      <!-- Titlebar -->
+      <rect x="600" y="116" width="608" height="28" fill="#1D2230"/>
+      <circle cx="618" cy="130" r="5" fill="#FF5F56"/>
+      <circle cx="634" cy="130" r="5" fill="#FFBD2E"/>
+      <circle cx="650" cy="130" r="5" fill="#27C93F"/>
+      <text x="904" y="134" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="11.5" font-weight="500" fill="#8B949E">Consilium — Local MCP Collaboration</text>
+      <line x1="600" y1="144" x2="1208" y2="144" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="1"/>
+
+      <!-- Embedded Dark Mode Screenshot -->
+      <rect x="600" y="144" width="608" height="380" fill="#141413"/>
+      <image x="600" y="144" width="608" height="380" preserveAspectRatio="xMidYMid slice" href="../screenshots/chat-dark.png" xlink:href="../screenshots/chat-dark.png" clip-path="url(#screen-clip)"/>
+    </g>
+    <rect x="600.5" y="116.5" width="607" height="407" rx="14" ry="14" fill="none" stroke="#FFFFFF" stroke-opacity="0.14" stroke-width="1"/>
+  </g>
+</svg>

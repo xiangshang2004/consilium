@@ -25,6 +25,7 @@
   <a href="#screenshots">Screenshots</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#installation">Quickstart</a> ·
+  <a href="docs/troubleshooting.md">Troubleshooting</a> ·
   <a href="PRIVACY.md">Privacy Policy</a> ·
   <a href="SECURITY.md">Security</a>
 </p>
@@ -80,6 +81,8 @@
 ---
 
 ## Screenshots
+
+![Consilium Quick Walkthrough](docs/screenshots/consilium-demo.gif)
 
 <table>
   <tr>
@@ -183,6 +186,8 @@ rm -rf /Applications/Consilium.app \
        "$HOME/Library/Logs/consilium" \
        "/tmp/consilium-$(id -u)"
 ```
+
+Hit Gatekeeper prompts, missing MCP tools, port `18920` conflicts, or quota questions? See the **[Troubleshooting Guide (docs/troubleshooting.md)](docs/troubleshooting.md)**.
 
 ---
 

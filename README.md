@@ -26,6 +26,7 @@
   <a href="#工作原理">工作原理</a> ·
   <a href="#安装与接入">快速开始</a> ·
   <a href="#使用指南">使用指南</a> ·
+  <a href="docs/troubleshooting.md">快速排障</a> ·
   <a href="PRIVACY.md">隐私协议</a> ·
   <a href="SECURITY.md">安全说明</a>
 </p>
@@ -81,6 +82,8 @@
 ---
 
 ## 界面预览
+
+![Consilium 快速演示](docs/screenshots/consilium-demo.gif)
 
 <table>
   <tr>
@@ -191,6 +194,8 @@ rm -rf /Applications/Consilium.app \
        "$HOME/Library/Logs/consilium" \
        "/tmp/consilium-$(id -u)"
 ```
+
+遇到 Gatekeeper 拦截、找不到工具、端口冲突或额度状态异常，请参阅 **[快速排障指南（docs/troubleshooting.md）](docs/troubleshooting.md)**。
 
 ---
 
