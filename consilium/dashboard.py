@@ -1585,14 +1585,15 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 .chat-note { display: flex; align-items: center; gap: 10px; margin: 6px 0 6px 38px; font-size: 12px; }
 .chat-note::before { content: ""; width: 14px; height: 1px; background: var(--border-strong); flex-shrink: 0; }
 .chat-pending { margin: 10px 0 0; gap: 12px; font-size: 13px; color: var(--text-secondary); }
-.chat-pending > .peer-icon { width: 26px; height: 26px; border-radius: 7px; }
+.chat-pending > .peer-icon { width: 26px; height: 26px; border-radius: 7px; flex-shrink: 0; }
+.chat-pending-text { min-width: 0; overflow-wrap: anywhere; }
 .task-receipt { align-items:flex-start; padding:9px 11px; border:1px solid var(--border); border-radius:8px; background:var(--bg-subtle); }
 .task-receipt > div { min-width:0; }
 .task-receipt > .peer-icon { flex-shrink:0; }
 .task-receipt strong { color:var(--text-primary); }
 .receipt-detail { margin-top:3px; font-size:12px; color:var(--text-secondary); overflow-wrap:anywhere; }
 .chat-pending.quota-exhausted { border-inline-start:3px solid var(--status-stale); }
-.pend-dots { display: inline-flex; gap: 3px; }
+.pend-dots { display: inline-flex; gap: 3px; flex-shrink: 0; }
 .pend-dots i { width: 4px; height: 4px; border-radius: 999px; background: var(--text-muted); animation: pulseDot 1.2s ease-in-out infinite; }
 .pend-dots i:nth-child(2) { animation-delay: 0.2s; }
 .pend-dots i:nth-child(3) { animation-delay: 0.4s; }
@@ -2671,6 +2672,23 @@ body { font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
     const label = peerLabel(pid);
     const facts = taskPresentation(t, mission);
     const exhausted = exhaustedQuota(state, pid);
+    if ((t.status === "claimed" || t.status === "running") && !exhausted && !t.stale_at) {
+      let txt = label + " 正在处理" + (t.progress_note ? "：" + t.progress_note : "");
+      const extras = [
+        facts.delegation,
+        t.status === "running" && (t.runtime_model_used || t.model_used) ? reportedTaskModel(pid, t) : "",
+      ].filter(Boolean);
+      if (extras.length) txt += " · " + extras.join(" · ");
+      const tipParts = [
+        facts.since ? (t.status === "claimed" ? "认领于 " : "最后上报于 ") + formatClock(facts.since) : "",
+        t.updated_at ? relativeAge(t.updated_at) : "",
+      ].filter(Boolean);
+      return '<div class="chat-pending" data-task-pending="' + esc(t.task_id) + '"' +
+        (tipParts.length ? ' title="' + esc(tipParts.join(" · ")) + '"' : '') + '>' +
+        '<span class="peer-icon ' + esc(pid) + '" aria-hidden="true"></span>' +
+        '<span class="chat-pending-text">' + esc(txt) + '</span>' +
+        '<span class="pend-dots" aria-hidden="true"><i></i><i></i><i></i></span></div>';
+    }
     const detail = [facts.since ? formatClock(facts.since) : "", facts.detail, facts.delegation,
                     t.status === "running" && (t.runtime_model_used || t.model_used) ? reportedTaskModel(pid, t) : ""]
       .filter(Boolean).join(" · ");
