@@ -12,6 +12,7 @@ import re
 import queue
 import shutil
 import socket
+import socketserver
 import sys
 import threading
 import time
@@ -2947,6 +2948,14 @@ class ConsiliumDaemon:
         class _ReusableHTTPServer(ThreadingHTTPServer):
             allow_reuse_address = True
             daemon_threads = True
+
+            def server_bind(self) -> None:
+                # Skip HTTPServer.server_bind()'s socket.getfqdn() reverse-DNS lookup,
+                # which can stall ~30s on macOS .local mDNS and is unnecessary on 127.0.0.1.
+                socketserver.TCPServer.server_bind(self)
+                host, port = self.server_address[:2]
+                self.server_name = str(host)
+                self.server_port = int(port)
 
         self._httpd = _ReusableHTTPServer((self.host, self.port), handler_cls)
         bound_host, bound_port = self._httpd.server_address[:2]

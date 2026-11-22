@@ -399,7 +399,7 @@ class R010RegressionsTests(unittest.TestCase):
             attempt_id=attempts[t_run],
         )
 
-        with sqlite3.connect(os.path.join(self.tmp_state, "bus.db")) as conn:
+        with contextlib.closing(sqlite3.connect(os.path.join(self.tmp_state, "bus.db"))) as conn:
             conn.execute(
                 "UPDATE tasks SET claimed_at = '2020-01-01T00:00:00Z' WHERE task_id = ?",
                 (t_claim,),
@@ -409,6 +409,17 @@ class R010RegressionsTests(unittest.TestCase):
                 (t_run,),
             )
             conn.commit()
+
+        daemon = ConsiliumDaemon(
+            home_dir=self.tmp_state,
+            rendezvous_dir=self.tmp_rv,
+            host="127.0.0.1",
+            port=0,
+            reaper_interval_sec=0.05,
+            claim_timeout_sec=1,
+            running_timeout_sec=1,
+        )
+        self.addCleanup(daemon.stop)
 
         wait_out: Dict[str, Any] = {}
 
@@ -425,24 +436,16 @@ class R010RegressionsTests(unittest.TestCase):
 
         wt = threading.Thread(target=_standby, daemon=True)
         wt.start()
+        sig_path = os.path.join(self.tmp_rv, "signals", "chatgpt.sig")
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline:
-            if query_active_waiters(self.tmp_rv).get("chatgpt", 0) == 1:
+            if query_active_waiters(self.tmp_rv).get("chatgpt", 0) == 1 and os.path.exists(sig_path):
                 break
             time.sleep(0.01)
         self.assertEqual(query_active_waiters(self.tmp_rv).get("chatgpt"), 1)
+        self.assertTrue(os.path.exists(sig_path))
 
-        daemon = ConsiliumDaemon(
-            home_dir=self.tmp_state,
-            rendezvous_dir=self.tmp_rv,
-            host="127.0.0.1",
-            port=0,
-            reaper_interval_sec=0.05,
-            claim_timeout_sec=1,
-            running_timeout_sec=1,
-        )
         daemon.start()
-        self.addCleanup(daemon.stop)
 
         snap: Dict[str, Any] = {}
         poll_end = time.monotonic() + 3.0
@@ -474,6 +477,27 @@ class R010RegressionsTests(unittest.TestCase):
         self.assertFalse(wt.is_alive())
         self.assertTrue(wait_out.get("woke"))
         self.assertIn(wait_out.get("source"), ("kqueue", "socket"))
+
+    def test_r010_02b_daemon_start_skips_reverse_dns_getfqdn(self) -> None:
+        with mock.patch(
+            "socket.getfqdn",
+            side_effect=AssertionError("ConsiliumDaemon.start() must not call socket.getfqdn()"),
+        ):
+            daemon = ConsiliumDaemon(
+                home_dir=self.tmp_state,
+                rendezvous_dir=self.tmp_rv,
+                host="127.0.0.1",
+                port=0,
+            )
+            self.addCleanup(daemon.stop)
+            host, port = daemon.start()
+
+        self.assertEqual(host, "127.0.0.1")
+        self.assertGreater(port, 0)
+        self.assertIsNotNone(daemon._httpd)
+        assert daemon._httpd is not None
+        self.assertEqual(daemon._httpd.server_name, "127.0.0.1")
+        self.assertEqual(daemon._httpd.server_port, port)
 
     # ------------------------------------------------------------------
     # Item 3: Post-commit fault injection across 7 MCP tools + 2 dashboard routes
