@@ -142,6 +142,14 @@ For full protocol invariants, see [docs/architecture.md](docs/architecture.md).
 
 ## Installation
 
+### Optional: Install via Agent Skill (`skills.sh`)
+
+If you use Claude Code, Codex, Antigravity, or Cursor, install the `consilium` Agent Skill so your agent can guide installation, MCP setup, troubleshooting, and tri-desktop collaboration:
+
+```bash
+npx skills add xiangshang2004/consilium
+```
+
 ### 1. Get Consilium.app
 
 Download `Consilium-<version>-arm64.dmg` (or `.zip`) from [Releases](https://github.com/xiangshang2004/consilium/releases/latest) and drag **Consilium.app** into `/Applications`.  
@@ -216,6 +224,7 @@ env -u CLAUDE_CONFIG_DIR CONSILIUM_DRY_RUN=1 CONSILIUM_DISABLE_LOCAL_QUOTA_SYNC=
 |---|---|
 | `consilium/` | Bus dispatcher, SQLite WAL store, `kqueue` wakeup, quota/model sync, offline UI |
 | `app/macos/` | Native macOS menu bar & `WKWebView` Swift source and icons |
+| `skills/consilium/` | `skills.sh`-compatible Agent Skill for guided setup, troubleshooting, and collaboration |
 | `adapters/` | `consilium-collab` skill, Claude/Codex agent templates, `com.consilium.daemon.plist.tmpl` |
 | `scripts/` | App builder, smoke test, atomic installer, GitHub release script |
 | `tests/` | Unit and security/concurrency/UI regression tests |

@@ -1,6 +1,7 @@
 # `consilium` Documentation Index
 
 - [项目说明 (中文)](../README.md) · [English README](../README.en.md) — 功能介绍、工作原理、安装接入、卸载与开发命令
+- [Agent Skill (skills/consilium)](../skills/consilium/SKILL.md) — `skills.sh` / Agent Skills 标准技能包，含安装引导、三端协作协议与独立排障参考
 - [新用户快速排障指南](./troubleshooting.md) — Gatekeeper 放行、工具未加载、待命不醒、端口冲突、额度与图片限制及日志排查
 - [隐私协议（PRIVACY.md）](../PRIVACY.md) — 本机零遥测原则、只读数据白名单、账户哈希隔离与第三方桌面端边界
 - [安全政策（SECURITY.md）](../SECURITY.md) — 威胁模型（`127.0.0.1` / CSP / CSRF / 附件安全）与漏洞报告方式

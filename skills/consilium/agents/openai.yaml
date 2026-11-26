@@ -1,0 +1,3 @@
+interface:
+  display_name: "Consilium"
+  short_description: "Install, connect, and orchestrate Claude, Codex, and Antigravity on macOS"

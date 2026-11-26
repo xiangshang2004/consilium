@@ -144,6 +144,14 @@ flowchart TB
 
 ## 安装与接入
 
+### 可选：通过 Agent Skill 一键引导安装与协作
+
+如果你正在使用 Claude Code、Codex、Antigravity 或 Cursor 等支持 Agent Skills 的工具，可以先安装 `consilium` 技能包，让 Agent 全程引导安装、MCP 接入、排障与三端协作：
+
+```bash
+npx skills add xiangshang2004/consilium
+```
+
 ### 第 1 步：获取 Consilium.app
 
 - **推荐**：前往 [Releases](https://github.com/xiangshang2004/consilium/releases/latest) 下载最新的 `Consilium-<版本>-arm64.dmg`（或 `.zip`）及对应 `.sha256` 校验文件，将 `Consilium.app` 拖入「应用程序」。
@@ -254,6 +262,7 @@ python3 -m consilium.cli status
 |---|---|
 | `consilium/` | 协作总线、SQLite 存储、kqueue 门铃、额度与模型提取、离线 UI |
 | `app/macos/` | `Consilium.app` 原生菜单栏与窗口 Swift 源码及图标资源 |
+| `skills/consilium/` | 符合 Agent Skills / `skills.sh` 规范的完整安装、排障与协作技能包 |
 | `adapters/` | 三端协作技能 `consilium-collab`、Claude/Codex 子代理与 `launchd` 模板 |
 | `scripts/` | App 构建、冒烟测试、双阶段安装器与版本发布脚本 |
 | `tests/` | 单元测试与安全性/并发/UI 回归测试 |
